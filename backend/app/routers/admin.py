@@ -104,9 +104,13 @@ class ToggleIn(BaseModel):
 
 @router.post("/betting/toggle")
 def toggle_betting(
+    body: ToggleIn,
+    session: Session = Depends(get_session),
     _: Scouter = Depends(require_admin),
 ) -> dict:
-    raise HTTPException(status_code=400, detail="Manual betting toggles are disabled. Admins may only reset betting or delete bad bets.")
+    set_setting(session, "betting_enabled", "1" if body.enabled else "0")
+    emit("settings_changed", {"betting_enabled": body.enabled})
+    return {"ok": True, "betting_enabled": body.enabled}
 
 
 @router.post("/betting/reset")

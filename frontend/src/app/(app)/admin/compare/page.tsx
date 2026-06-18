@@ -52,7 +52,7 @@ export default function ComparePage() {
       <div className="page-title"><h1>⚖️ Compare Robots</h1></div>
       <p className="page-sub">Add 2–6 robots for a side-by-side breakdown. Best value in each row is highlighted.</p>
 
-      <div className="card" style={{ marginBottom: 16 }}>
+      <div className="card team-name-white" style={{ marginBottom: 16 }}>
         <div className="row" style={{ gap: 8, marginBottom: 10 }}>
           <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Add team #" style={{ maxWidth: 150 }}
             onKeyDown={(e) => { if (e.key === "Enter") { const n = parseInt(input.replace(/[^0-9]/g, ""), 10); if (n) { toggle(n); setInput(""); } } }} />
@@ -71,7 +71,7 @@ export default function ComparePage() {
         <Empty icon="⚖️" title="Pick at least 2 robots" sub="Select teams above to compare them." />
       ) : loading || !data ? <Loading /> : (
         <>
-          <div className="card" style={{ marginBottom: 16 }}>
+          <div className="card team-name-white" style={{ marginBottom: 16 }}>
             <div className="table-wrap">
               <table className="data">
                 <thead>

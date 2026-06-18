@@ -41,7 +41,7 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     load();
-    return onBus((e) => { if (["scout_submitted", "bet_placed", "match_advanced"].includes(e)) load(); });
+    return onBus((e) => { if (["scout_submitted", "bet_placed", "match_advanced", "settings_changed"].includes(e)) load(); });
   }, [load]);
 
   async function saveEvent() {
@@ -66,6 +66,15 @@ export default function AdminDashboard() {
     toast("All balances reset to 100 PB", "ok");
     load();
   }
+  async function toggleBetting(enabled: boolean) {
+    setBusy("betting-toggle");
+    try {
+      const r = await api<{ betting_enabled: boolean }>("/api/admin/betting/toggle", { method: "POST", body: { enabled } });
+      setS((cur) => cur ? { ...cur, betting_enabled: r.betting_enabled } : cur);
+      toast(`Betting turned ${r.betting_enabled ? "on" : "off"}`, "ok");
+      await load();
+    } catch (e: any) { toast(e.message || "Failed", "err"); } finally { setBusy(""); }
+  }
   async function deleteBet(bet: AdminBet) {
     if (!confirm(`Delete bet #${bet.id} from ${bet.scout_name || bet.scout_id}?`)) return;
     await api(`/api/admin/bets/${bet.id}`, { method: "DELETE" });
@@ -88,7 +97,7 @@ export default function AdminDashboard() {
         <Stat label="Event" value={s.current_event || "—"} />
         <Stat label="Current Match" value={s.current_match || "—"} accent />
         <Stat label="Open Bets" value={bets.filter((b) => b.status === "open").length} />
-        <Stat label="Scouts" value={scouters.length} />
+        <Stat label="Betting" value={s.betting_enabled ? "ON" : "OFF"} />
       </div>
 
       <div className="grid cols-2">
@@ -104,6 +113,22 @@ export default function AdminDashboard() {
         <div className="card">
           <h3>🎲 Betting Recovery</h3>
           <p className="muted">Bets lock when scouting starts. Winners settle from TBA results; payouts use Statbotics odds captured when the bet was placed.</p>
+          <div className="seg" style={{ marginBottom: 12 }}>
+            <button
+              className={s.betting_enabled ? "on" : ""}
+              onClick={() => toggleBetting(true)}
+              disabled={busy === "betting-toggle" || s.betting_enabled}
+            >
+              Turn On
+            </button>
+            <button
+              className={!s.betting_enabled ? "on red" : ""}
+              onClick={() => toggleBetting(false)}
+              disabled={busy === "betting-toggle" || !s.betting_enabled}
+            >
+              Turn Off
+            </button>
+          </div>
           <button className="btn danger block" onClick={resetBetting}>♻️ Reset everyone to 100 Purple Bucks</button>
           <p className="faint" style={{ fontSize: "0.75rem", marginTop: 8 }}>Use reset only for event setup/testing mistakes. Individual bad bets can be deleted below.</p>
         </div>

@@ -6,7 +6,8 @@ import { useToast } from "@/lib/toast";
 import { onBus } from "@/lib/bus";
 import { timeAgo } from "@/lib/format";
 import type { Picklist, PicklistItem, Team } from "@/lib/types";
-import { Loading, Empty, TeamIdentity } from "@/components/ui";
+import { Loading, Empty } from "@/components/ui";
+import { ClickableTeam } from "@/components/TeamDetailModal";
 
 const PICKLIST_PASSWORD = "PickListSTRAT";
 const toSlots = (items: PicklistItem[]) => {
@@ -169,7 +170,7 @@ function Editor({ list, canEdit, onSend, onDelete }: { list: Picklist; canEdit: 
           return (
             <div key={i} className="card tight pick-slot">
               <span className="rank-chip">{i + 1}</span>
-              {n ? <TeamIdentity team={teams[n] || { team_number: n, nickname: "" }} /> : <span className="faint">Blank team slot</span>}
+              {n ? <ClickableTeam team={teams[n] || { team_number: n, nickname: "" }} /> : <span className="faint">Blank team slot</span>}
               {canEdit && (
                 <input
                   value={slot}

@@ -79,7 +79,7 @@ export default function TeamSearchPage() {
       <div className="page-title"><h1>🔎 Team Search</h1></div>
       <p className="page-sub">Every match for a team, with a field heatmap of all their scoring positions.</p>
 
-      <div className="card" style={{ marginBottom: 16 }}>
+      <div className="card team-name-white" style={{ marginBottom: 16 }}>
         <div className="row" style={{ gap: 8, marginBottom: 10 }}>
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Team #" style={{ maxWidth: 160 }}
             onKeyDown={(e) => { if (e.key === "Enter") { const n = parseInt(query.replace(/[^0-9]/g, ""), 10); if (n) selectTeam(n); } }} />
@@ -101,7 +101,7 @@ export default function TeamSearchPage() {
         <Empty icon="📭" title={`No scouting data for ${team}`} />
       ) : (
         <>
-          <div className="card" style={{ marginBottom: 16 }}>
+          <div className="card team-name-white" style={{ marginBottom: 16 }}>
             <TeamIdentity team={summary} size="lg" />
           </div>
 

@@ -234,6 +234,10 @@ table.data td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .team-id-text { display: inline-grid; gap: 1px; min-width: 0; text-align: left; }
 .team-id-text b { line-height: 1.1; }
 .team-id-text span { color: var(--faint); font-size: 0.78rem; line-height: 1.1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
+.team-name-white .team-id-text span { color: #fff; }
+.team-click { border: 0; background: transparent; color: inherit; padding: 2px; margin: -2px; border-radius: 8px; cursor: pointer; text-align: left; max-width: 100%; }
+.team-click:hover { background: rgba(255,255,255,0.06); }
+.team-click:focus-visible { outline: 2px solid var(--haze-glow); outline-offset: 2px; }
 .alliance-team-list { display: grid; gap: 7px; margin-top: 10px; }
 .match-team-list { display: flex; flex-wrap: wrap; gap: 8px 12px; min-width: 170px; }
 .pick-slot { display: grid; grid-template-columns: auto minmax(120px, 1fr) minmax(140px, 220px) auto; gap: 10px; align-items: center; }
@@ -302,7 +306,10 @@ table.data td.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 /* modal */
 .modal-back { position: fixed; inset: 0; background: rgba(4, 2, 8, 0.7); backdrop-filter: blur(4px); z-index: 100; display: grid; place-items: center; padding: 16px; }
-.modal { background: var(--panel-solid); border: 1px solid var(--border-strong); border-radius: 8px; padding: 20px; max-width: 560px; width: 100%; max-height: 88vh; overflow: auto; box-shadow: var(--shadow); }
+.modal { background: var(--panel-solid); border: 1px solid var(--border-strong); border-radius: 8px; padding: 20px; max-width: 960px; width: 100%; max-height: 88vh; overflow: auto; box-shadow: var(--shadow); }
+.modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.modal-head h2 { margin: 0; font-size: 1.25rem; }
+.team-detail { display: grid; gap: 14px; }
 
 /* film review — video-grounded scouting (timestamped key events) */
 .film-events { display: grid; gap: 8px; }

@@ -50,13 +50,13 @@ export default function LoginPage() {
 
           <label className="field">
             <span>Scouter ID</span>
-            <input
-              value={scoutId}
-              onChange={(e) => setScoutId(e.target.value)}
-              placeholder="e.g. 1, 2, 3 or admin"
-              autoCapitalize="none"
-              autoComplete="username"
-            />
+              <input
+                value={scoutId}
+                onChange={(e) => setScoutId(e.target.value)}
+                placeholder="Write ID Here"
+                autoCapitalize="none"
+                autoComplete="username"
+              />
           </label>
           <label className="field">
             <span>Team Password</span>

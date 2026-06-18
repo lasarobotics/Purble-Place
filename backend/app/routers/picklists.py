@@ -42,10 +42,20 @@ class PicklistIn(BaseModel):
     is_master: bool = False
 
 
+class FinalPicklistIn(BaseModel):
+    source_id: Optional[int] = None
+    name: Optional[str] = None
+    event_key: Optional[str] = None
+    items: list[dict[str, Any]] = Field(default_factory=list)
+
+
 def _ensure_master(session: Session, event_key: str) -> Picklist:
     master = session.exec(
         select(Picklist).where(
-            Picklist.event_key == event_key, Picklist.is_master == True  # noqa: E712
+            Picklist.event_key == event_key,
+            Picklist.owner_id == "team",
+            Picklist.name == "Master Picklist",
+            Picklist.is_master == True,  # noqa: E712
         )
     ).first()
     if master is None:
@@ -97,6 +107,51 @@ def get_all(
     rows = [r for r in rows if not event_key or r.event_key == event_key]
     rows.sort(key=lambda r: (not r.is_master, r.updated_at), reverse=False)
     return [_dict(r, _owner_name(session, r.owner_id)) for r in rows]
+
+
+@router.post("/finals/{division}")
+def set_final(
+    division: str,
+    body: FinalPicklistIn,
+    session: Session = Depends(get_session),
+    scouter: Scouter = Depends(current_scouter),
+) -> dict:
+    if not scouter.is_admin:
+        raise HTTPException(status_code=403, detail="Admin only")
+    if division not in {"418", "436"}:
+        raise HTTPException(status_code=400, detail="Final picklist must be for 418 or 436")
+
+    event_key = (body.event_key or get_setting(session, "current_event")).strip()
+    items = body.items
+    source_name = ""
+    if body.source_id is not None:
+        source = session.get(Picklist, body.source_id)
+        if not source:
+            raise HTTPException(status_code=404, detail="Source picklist not found")
+        if event_key and source.event_key != event_key:
+            raise HTTPException(status_code=400, detail="Source picklist is for a different event")
+        items = source.items
+        source_name = source.name
+
+    owner_id = f"final-{division}"
+    final = session.exec(
+        select(Picklist).where(
+            Picklist.event_key == event_key,
+            Picklist.owner_id == owner_id,
+            Picklist.is_master == True,  # noqa: E712
+        )
+    ).first()
+    if final is None:
+        final = Picklist(event_key=event_key, owner_id=owner_id, is_master=True)
+
+    final.name = body.name or f"Final Picklist {division}"
+    final.items = items
+    final.updated_at = datetime.now(timezone.utc)
+    session.add(final)
+    session.commit()
+    session.refresh(final)
+    emit("picklist_changed", {"id": final.id, "master": True, "final": division, "source": source_name})
+    return _dict(final, f"Final {division}")
 
 
 @router.post("")
