@@ -8,32 +8,37 @@ import { timeAgo } from "@/lib/format";
 import type { Picklist, PicklistItem, Team } from "@/lib/types";
 import { Loading, Empty, TeamIdentity } from "@/components/ui";
 
-const TIERS: { value: PicklistItem["tier"]; label: string; cls: string }[] = [
-  { value: "first", label: "1st pick", cls: "green" },
-  { value: "second", label: "2nd pick", cls: "haze" },
-  { value: "third", label: "Bench", cls: "blue" },
-  { value: "dnp", label: "Do Not Pick", cls: "red" },
-];
+const PICKLIST_PASSWORD = "PickListSTRAT";
+const toSlots = (items: PicklistItem[]) => {
+  const slots = items.map((it) => String(it.team || ""));
+  while (slots.length < 4) slots.push("");
+  return slots;
+};
+const toItems = (slots: string[]): PicklistItem[] =>
+  slots
+    .map((slot) => parseInt(slot.replace(/[^0-9]/g, ""), 10))
+    .filter((team, index, all) => team && all.indexOf(team) === index)
+    .map((team) => ({ team, tier: "first" }));
 
 export default function PicklistsPage() {
   const { session } = useAuth();
   const toast = useToast();
-  const [tab, setTab] = useState<"master" | "mine">("master");
-  const [master, setMaster] = useState<Picklist | null>(null);
   const [mine, setMine] = useState<Picklist[]>([]);
   const [active, setActive] = useState<Picklist | null>(null);
   const [loading, setLoading] = useState(true);
+  const [unlocked, setUnlocked] = useState(false);
+  const [password, setPassword] = useState("");
 
   const load = useCallback(async () => {
     try {
-      const [m, list] = await Promise.all([
-        api<Picklist>("/api/picklists/master"),
-        api<Picklist[]>("/api/picklists/mine"),
-      ]);
-      setMaster(m);
+      const list = await api<Picklist[]>("/api/picklists/mine");
       setMine(list);
     } catch {}
     setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    setUnlocked(sessionStorage.getItem("hazehub.picklist.unlocked") === "1");
   }, []);
 
   useEffect(() => {
@@ -42,9 +47,8 @@ export default function PicklistsPage() {
   }, [load]);
 
   useEffect(() => {
-    if (tab === "master") setActive(master);
-    else setActive(mine[0] || null);
-  }, [tab, master, mine]);
+    setActive((cur) => cur || mine[0] || null);
+  }, [mine]);
 
   async function createList() {
     const name = prompt("Name your picklist:", "My Picklist");
@@ -52,18 +56,16 @@ export default function PicklistsPage() {
     const p = await api<Picklist>("/api/picklists", { method: "POST", body: { name, items: [] } });
     toast("Picklist created", "ok");
     setMine((x) => [...x, p]);
-    setTab("mine");
     setActive(p);
   }
 
-  async function save(p: Picklist) {
+  async function send(p: Picklist) {
     try {
       const updated = await api<Picklist>(`/api/picklists/${p.id}`, { method: "PUT", body: { name: p.name, items: p.items } });
-      toast("Saved", "ok");
-      if (updated.is_master) setMaster(updated);
-      else setMine((x) => x.map((m) => (m.id === updated.id ? updated : m)));
+      toast("Picklist sent", "ok");
+      setMine((x) => x.map((m) => (m.id === updated.id ? updated : m)));
       setActive(updated);
-    } catch (e: any) { toast(e.message || "Save failed", "err"); }
+    } catch (e: any) { toast(e.message || "Send failed", "err"); }
   }
 
   async function remove(p: Picklist) {
@@ -75,65 +77,78 @@ export default function PicklistsPage() {
   }
 
   if (loading) return <Loading />;
+  if (!unlocked) {
+    return (
+      <div>
+        <div className="page-title"><h1>📝 Picklists</h1></div>
+        <div className="card" style={{ maxWidth: 420 }}>
+          <h3>Picklist Password</h3>
+          <label className="field">
+            <span>Password</span>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && password === PICKLIST_PASSWORD) {
+                  sessionStorage.setItem("hazehub.picklist.unlocked", "1");
+                  setUnlocked(true);
+                }
+              }}
+            />
+          </label>
+          <button
+            className="btn primary block"
+            onClick={() => {
+              if (password !== PICKLIST_PASSWORD) return toast("Incorrect picklist password", "err");
+              sessionStorage.setItem("hazehub.picklist.unlocked", "1");
+              setUnlocked(true);
+            }}
+          >
+            Unlock Picklists
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>
       <div className="page-title"><h1>📝 Picklists</h1></div>
-      <p className="page-sub">Build the collaborative master list together, or draft your own — everyone can follow along.</p>
+      <p className="page-sub">Create a strategy list, fill the four default team slots, add more teams if needed, then send it to admin.</p>
 
-      <div className="seg" style={{ marginBottom: 16 }}>
-        <button className={tab === "master" ? "on" : ""} onClick={() => setTab("master")}>🤝 Master (collaborative)</button>
-        <button className={tab === "mine" ? "on" : ""} onClick={() => setTab("mine")}>👤 Mine ({mine.length})</button>
+      <div className="row" style={{ gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+        {mine.map((p) => (
+          <button key={p.id} className={"chip" + (active?.id === p.id ? " on" : "")} onClick={() => setActive(p)}>{p.name}</button>
+        ))}
+        <button className="btn sm primary" onClick={createList}>+ Create Picklist</button>
       </div>
 
-      {tab === "mine" && (
-        <div className="row" style={{ gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-          {mine.map((p) => (
-            <button key={p.id} className={"chip" + (active?.id === p.id ? " on" : "")} onClick={() => setActive(p)}>{p.name}</button>
-          ))}
-          <button className="btn sm" onClick={createList}>+ New list</button>
-        </div>
-      )}
-
       {active ? (
-        <Editor key={active.id} list={active} canEdit={active.is_master || active.owner_id === session?.scout_id || !!session?.is_admin} onSave={save} onDelete={!active.is_master ? remove : undefined} />
+        <Editor key={active.id} list={active} canEdit={active.owner_id === session?.scout_id || !!session?.is_admin} onSend={send} onDelete={!active.is_master ? remove : undefined} />
       ) : (
-        <Empty icon="📋" title={tab === "mine" ? "No personal lists yet" : "Master list unavailable"} sub={tab === "mine" ? "Create one to start ranking." : undefined} />
+        <Empty icon="📋" title="No picklists yet" sub="Create one to start ranking teams." />
       )}
     </div>
   );
 }
 
-function Editor({ list, canEdit, onSave, onDelete }: { list: Picklist; canEdit: boolean; onSave: (p: Picklist) => void; onDelete?: (p: Picklist) => void }) {
-  const [items, setItems] = useState<PicklistItem[]>(list.items || []);
+function Editor({ list, canEdit, onSend, onDelete }: { list: Picklist; canEdit: boolean; onSend: (p: Picklist) => void; onDelete?: (p: Picklist) => void }) {
+  const [slots, setSlots] = useState<string[]>(() => toSlots(list.items || []));
   const [teams, setTeams] = useState<Record<number, Team>>({});
-  const [team, setTeam] = useState("");
   const [dirty, setDirty] = useState(false);
 
-  useEffect(() => { setItems(list.items || []); setDirty(false); }, [list.id, list.updated_at]);
+  useEffect(() => { setSlots(toSlots(list.items || [])); setDirty(false); }, [list.id, list.updated_at]);
   useEffect(() => {
-    const nums = Array.from(new Set(items.map((it) => it.team))).filter((n) => n && !teams[n]);
+    const nums = Array.from(new Set(slots.map((slot) => parseInt(slot.replace(/[^0-9]/g, ""), 10)))).filter((n) => n && !teams[n]);
     if (!nums.length) return;
     api<Team[]>("/api/teams/batch", { method: "POST", body: { teams: nums } })
       .then((rows) => setTeams((cur) => ({ ...cur, ...Object.fromEntries(rows.map((t) => [t.team_number, t])) })))
       .catch(() => {});
-  }, [items, teams]);
+  }, [slots, teams]);
 
-  const upd = (next: PicklistItem[]) => { setItems(next); setDirty(true); };
-  const add = () => {
-    const n = parseInt(team.replace(/[^0-9]/g, ""), 10);
-    if (!n) return;
-    if (items.some((i) => i.team === n)) return;
-    upd([...items, { team: n, tier: "first", note: "" }]);
-    setTeam("");
-  };
-  const move = (i: number, d: number) => {
-    const j = i + d;
-    if (j < 0 || j >= items.length) return;
-    const next = [...items];
-    [next[i], next[j]] = [next[j], next[i]];
-    upd(next);
-  };
+  const upd = (next: string[]) => { setSlots(next); setDirty(true); };
+  const sentItems = toItems(slots);
 
   return (
     <div className="card">
@@ -144,45 +159,34 @@ function Editor({ list, canEdit, onSave, onDelete }: { list: Picklist; canEdit: 
         </div>
         <div className="btn-row">
           {onDelete && canEdit && <button className="btn sm danger" onClick={() => onDelete(list)}>Delete</button>}
-          {canEdit && <button className="btn sm primary" disabled={!dirty} onClick={() => onSave({ ...list, items })}>{dirty ? "Save" : "Saved"}</button>}
+          {canEdit && <button className="btn sm primary" onClick={() => onSend({ ...list, items: sentItems })}>{dirty ? "Send Picklist" : "Send Picklist Again"}</button>}
         </div>
       </div>
 
-      {canEdit && (
-        <div className="row" style={{ gap: 8, marginBottom: 14 }}>
-          <input value={team} onChange={(e) => setTeam(e.target.value)} placeholder="Add team #" style={{ maxWidth: 160 }} onKeyDown={(e) => e.key === "Enter" && add()} />
-          <button className="btn" onClick={add}>+ Add</button>
-        </div>
-      )}
-
-      {items.length === 0 ? <Empty icon="🤖" title="No teams ranked yet" /> : (
-        <div className="grid" style={{ gap: 8 }}>
-          {items.map((it, i) => (
-            <div key={it.team} className="card tight" style={{ display: "flex", gap: 10, alignItems: "center" }}>
+      <div className="grid" style={{ gap: 8 }}>
+        {slots.map((slot, i) => {
+          const n = parseInt(slot.replace(/[^0-9]/g, ""), 10);
+          return (
+            <div key={i} className="card tight pick-slot">
               <span className="rank-chip">{i + 1}</span>
-              <TeamIdentity team={teams[it.team] || { team_number: it.team, nickname: "" }} />
-              {canEdit ? (
-                <>
-                  <select value={it.tier} onChange={(e) => upd(items.map((x, k) => k === i ? { ...x, tier: e.target.value as any } : x))} style={{ width: "auto" }}>
-                    {TIERS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-                  </select>
-                  <input value={it.note || ""} onChange={(e) => upd(items.map((x, k) => k === i ? { ...x, note: e.target.value } : x))} placeholder="note…" style={{ flex: 1, minWidth: 100 }} />
-                  <div className="row" style={{ gap: 4 }}>
-                    <button className="btn sm ghost" onClick={() => move(i, -1)}>↑</button>
-                    <button className="btn sm ghost" onClick={() => move(i, 1)}>↓</button>
-                    <button className="btn sm ghost" onClick={() => upd(items.filter((_, k) => k !== i))}>✕</button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <span className={`badge ${TIERS.find((t) => t.value === it.tier)?.cls}`}>{TIERS.find((t) => t.value === it.tier)?.label}</span>
-                  {it.note && <span className="muted" style={{ fontSize: "0.85rem" }}>{it.note}</span>}
-                </>
+              {n ? <TeamIdentity team={teams[n] || { team_number: n, nickname: "" }} /> : <span className="faint">Blank team slot</span>}
+              {canEdit && (
+                <input
+                  value={slot}
+                  onChange={(e) => upd(slots.map((x, k) => k === i ? e.target.value : x))}
+                  placeholder="Team number"
+                  inputMode="numeric"
+                />
+              )}
+              {canEdit && slots.length > 4 && (
+                <button className="btn sm ghost" onClick={() => upd(slots.filter((_, k) => k !== i))}>Remove</button>
               )}
             </div>
-          ))}
-        </div>
-      )}
+          );
+        })}
+      </div>
+      {canEdit && <button className="btn" style={{ marginTop: 12 }} onClick={() => upd([...slots, ""])}>+ Add Team</button>}
+      <p className="faint" style={{ fontSize: "0.75rem" }}>{sentItems.length} teams will be sent. You can send this picklist again after edits.</p>
     </div>
   );
 }

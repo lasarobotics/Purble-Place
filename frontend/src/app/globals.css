@@ -236,6 +236,11 @@ table.data td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .team-id-text span { color: var(--faint); font-size: 0.78rem; line-height: 1.1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
 .alliance-team-list { display: grid; gap: 7px; margin-top: 10px; }
 .match-team-list { display: flex; flex-wrap: wrap; gap: 8px 12px; min-width: 170px; }
+.pick-slot { display: grid; grid-template-columns: auto minmax(120px, 1fr) minmax(140px, 220px) auto; gap: 10px; align-items: center; }
+@media (max-width: 760px) {
+  .pick-slot { grid-template-columns: auto 1fr; }
+  .pick-slot input, .pick-slot .btn { grid-column: 1 / -1; width: 100%; }
+}
 .report-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
 .report-grid > div { padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: rgba(15, 23, 42, 0.35); min-width: 0; }
 .report-grid p { margin: 4px 0 0; color: var(--text); font-size: 0.88rem; }

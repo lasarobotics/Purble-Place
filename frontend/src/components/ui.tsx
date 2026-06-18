@@ -1,9 +1,12 @@
 "use client";
-import React from "react";
+import React, { useEffect, useState } from "react";
+import { api } from "@/lib/api";
 import type { Team } from "@/lib/types";
 
 type AvatarTeam = Pick<Team, "team_number"> & Partial<Omit<Team, "team_number">>;
 type TeamLike = AvatarTeam | ({ team: number } & Partial<Team>);
+const teamProfileCache = new Map<number, AvatarTeam>();
+const pendingProfiles = new Map<number, Promise<AvatarTeam | null>>();
 
 export function Loading({ label = "Loading…" }: { label?: string }) {
   return (
@@ -44,8 +47,58 @@ function normalizeTeam(team: TeamLike): AvatarTeam {
   };
 }
 
-export function TeamAvatar({ team, size = "" }: { team: TeamLike; size?: "sm" | "lg" | "" }) {
+function fetchTeamProfile(teamNumber: number): Promise<AvatarTeam | null> {
+  if (teamProfileCache.has(teamNumber)) return Promise.resolve(teamProfileCache.get(teamNumber)!);
+  const pending = pendingProfiles.get(teamNumber);
+  if (pending) return pending;
+  const req = api<Team>(`/api/teams/${teamNumber}?refresh=true`)
+    .then((team) => {
+      const normalized = normalizeTeam(team);
+      teamProfileCache.set(teamNumber, normalized);
+      return normalized;
+    })
+    .catch(() => null)
+    .finally(() => pendingProfiles.delete(teamNumber));
+  pendingProfiles.set(teamNumber, req);
+  return req;
+}
+
+function useResolvedTeam(team: TeamLike): AvatarTeam {
   const normalized = normalizeTeam(team);
+  const teamNumber = normalized.team_number;
+  const avatar = normalized.avatar || "";
+  const nickname = normalized.nickname || "";
+  const [resolved, setResolved] = useState<AvatarTeam>(() => {
+    if (avatar) teamProfileCache.set(teamNumber, normalized);
+    return teamProfileCache.get(teamNumber) || normalized;
+  });
+
+  useEffect(() => {
+    const base = normalized;
+    if (!teamNumber) return;
+    if (avatar) {
+      teamProfileCache.set(teamNumber, base);
+      setResolved(base);
+      return;
+    }
+    const cached = teamProfileCache.get(teamNumber);
+    if (cached) {
+      setResolved({ ...base, ...cached });
+      return;
+    }
+    let alive = true;
+    setResolved(base);
+    fetchTeamProfile(teamNumber).then((profile) => {
+      if (alive && profile) setResolved({ ...base, ...profile });
+    });
+    return () => { alive = false; };
+  }, [teamNumber, avatar, nickname]);
+
+  return resolved;
+}
+
+export function TeamAvatar({ team, size = "" }: { team: TeamLike; size?: "sm" | "lg" | "" }) {
+  const normalized = useResolvedTeam(team);
   const cls = "avatar" + (size ? " " + size : "");
   if (normalized.avatar) {
     // eslint-disable-next-line @next/next/no-img-element
@@ -77,7 +130,7 @@ export function TeamIdentity({
   size?: "sm" | "lg" | "";
   showNickname?: boolean;
 }) {
-  const normalized = normalizeTeam(team);
+  const normalized = useResolvedTeam(team);
   return (
     <span className="team-id">
       <TeamAvatar team={normalized} size={size} />

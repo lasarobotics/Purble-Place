@@ -19,8 +19,8 @@ from ..analytics import (
 from ..auth import require_admin
 from ..config import settings
 from ..database import get_session
-from ..external import sync_event_matches, sync_team
-from ..models import Bet, MatchRecord, Scouter, TeamCache
+from ..external import sync_event_matches
+from ..models import Bet, MatchRecord, Scouter
 from ..realtime import emit
 from ..store import all_settings, get_setting, set_setting
 from .betting import resolve_match_bets
@@ -34,14 +34,6 @@ def _youtube_id(value: str) -> str:
         return value
     match = re.search(r"(?:v=|/embed/|youtu\.be/|/v/|/shorts/)([A-Za-z0-9_-]{11})", value)
     return match.group(1) if match else value
-
-
-async def _sync_missing_team_profiles(session: Session, event_key: str, teams: list[int] | None = None) -> None:
-    numbers = teams if teams is not None else event_teams(session, event_key)
-    for team in numbers:
-        tc = session.get(TeamCache, team)
-        if tc is None or not tc.avatar:
-            await sync_team(session, team)
 
 
 def _settle_finished_matches(session: Session, event_key: str) -> int:
@@ -247,7 +239,6 @@ async def rank(
     _: Scouter = Depends(require_admin),
 ) -> dict:
     event_key = (event or get_setting(session, "current_event")).strip()
-    await _sync_missing_team_profiles(session, event_key)
     return {"metric": metric, "teams": rank_teams(session, event_key, metric)}
 
 
@@ -258,7 +249,6 @@ async def get_data_picklist(
     _: Scouter = Depends(require_admin),
 ) -> dict:
     event_key = (event or get_setting(session, "current_event")).strip()
-    await _sync_missing_team_profiles(session, event_key)
     return data_picklist(session, event_key)
 
 
@@ -276,7 +266,6 @@ async def compare(
         if part.isdigit():
             nums.append(int(part))
     nums = nums[:6]
-    await _sync_missing_team_profiles(session, event_key, nums)
     return compare_teams(session, event_key, nums)
 
 
@@ -288,7 +277,6 @@ async def get_team_summary(
     _: Scouter = Depends(require_admin),
 ) -> dict:
     event_key = (event or get_setting(session, "current_event")).strip()
-    await _sync_missing_team_profiles(session, event_key, [team])
     return team_summary(session, event_key, team)
 
 

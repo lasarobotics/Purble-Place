@@ -8,7 +8,7 @@ from sqlmodel import Session, select
 
 from ..auth import current_scouter
 from ..database import get_session
-from ..external import sync_event_matches, sync_team
+from ..external import sync_event_matches
 from ..models import MatchRecord, Scouter, TeamCache
 from ..store import get_setting
 
@@ -92,17 +92,15 @@ async def _teams_payload(session: Session, numbers: list[int]) -> list[dict]:
     out = []
     for n in numbers:
         tc = session.get(TeamCache, n)
-        if tc is None or not tc.avatar:
-            tc = await sync_team(session, n)
         out.append(
             {
-                "team_number": tc.team_number,
-                "nickname": tc.nickname,
-                "avatar": tc.avatar,
-                "photos": tc.photos,
-                "epa": tc.epa,
-                "city": tc.city,
-                "state": tc.state,
+                "team_number": tc.team_number if tc else n,
+                "nickname": tc.nickname if tc else "",
+                "avatar": tc.avatar if tc else "",
+                "photos": tc.photos if tc else [],
+                "epa": tc.epa if tc else None,
+                "city": tc.city if tc else "",
+                "state": tc.state if tc else "",
             }
         )
     return out

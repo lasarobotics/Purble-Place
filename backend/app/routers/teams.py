@@ -12,11 +12,21 @@ from ..models import Scouter, TeamCache
 router = APIRouter(prefix="/api/teams", tags=["teams"])
 
 
-def _needs_profile_refresh(tc: TeamCache | None) -> bool:
-    return tc is None or not tc.avatar
-
-
-def _team_dict(tc: TeamCache) -> dict:
+def _team_dict(tc: TeamCache | None, team_number: int | None = None) -> dict:
+    if tc is None:
+        n = int(team_number or 0)
+        return {
+            "team_number": n,
+            "nickname": "",
+            "name": "",
+            "city": "",
+            "state": "",
+            "country": "",
+            "rookie_year": None,
+            "avatar": "",
+            "photos": [],
+            "epa": None,
+        }
     return {
         "team_number": tc.team_number,
         "nickname": tc.nickname,
@@ -39,7 +49,7 @@ async def get_team(
     _: Scouter = Depends(current_scouter),
 ) -> dict:
     tc = session.get(TeamCache, team_number)
-    if refresh or _needs_profile_refresh(tc):
+    if refresh or tc is None:
         tc = await sync_team(session, team_number)
     return _team_dict(tc)
 
@@ -47,6 +57,7 @@ async def get_team(
 @router.post("/batch")
 async def get_teams_batch(
     body: dict,
+    refresh: bool = False,
     session: Session = Depends(get_session),
     _: Scouter = Depends(current_scouter),
 ) -> list[dict]:
@@ -58,7 +69,7 @@ async def get_teams_batch(
         except (TypeError, ValueError):
             continue
         tc = session.get(TeamCache, n)
-        if _needs_profile_refresh(tc):
+        if refresh:
             tc = await sync_team(session, n)
-        out.append(_team_dict(tc))
+        out.append(_team_dict(tc, n))
     return out
