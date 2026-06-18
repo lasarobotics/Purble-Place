@@ -4,17 +4,19 @@ import { api } from "@/lib/api";
 import { useToast } from "@/lib/toast";
 import { onBus } from "@/lib/bus";
 import { matchLabel } from "@/lib/format";
-import type { MatchRec } from "@/lib/types";
-import { Loading, Stat, Stepper } from "@/components/ui";
+import type { Bet, MatchRec } from "@/lib/types";
+import { Loading, Stat, Stepper, TeamIdentity } from "@/components/ui";
 
 interface AdminSettings { current_event: string; current_match: number; betting_enabled: boolean; season: number; is_azure: boolean; }
 interface ScouterRow { scout_id: string; display_name: string; is_admin: boolean; bucks: number; matches_scouted: number; }
+interface AdminBet extends Bet { scout_name?: string; }
 
 export default function AdminDashboard() {
   const toast = useToast();
   const [s, setS] = useState<AdminSettings | null>(null);
   const [matches, setMatches] = useState<MatchRec[]>([]);
   const [scouters, setScouters] = useState<ScouterRow[]>([]);
+  const [bets, setBets] = useState<AdminBet[]>([]);
   const [event, setEvent] = useState("");
   const [curMatch, setCurMatch] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -27,8 +29,12 @@ export default function AdminDashboard() {
         api<ScouterRow[]>("/api/admin/scouters"),
       ]);
       setS(set); setEvent(set.current_event); setCurMatch(set.current_match); setScouters(sc);
-      const m = await api<{ matches: MatchRec[] }>("/api/matches").catch(() => ({ matches: [] }));
+      const [m, allBets] = await Promise.all([
+        api<{ matches: MatchRec[] }>("/api/matches?include_teams=true").catch(() => ({ matches: [] })),
+        api<AdminBet[]>("/api/admin/bets").catch(() => []),
+      ]);
       setMatches(m.matches);
+      setBets(allBets);
     } catch {}
     setLoading(false);
   }, []);
@@ -41,8 +47,9 @@ export default function AdminDashboard() {
   async function saveEvent() {
     setBusy("event");
     try {
-      const r = await api<{ matches: number }>("/api/admin/event", { method: "POST", body: { event_key: event.trim() } });
+      const r = await api<{ matches: number; bets_settled?: number }>("/api/admin/event", { method: "POST", body: { event_key: event.trim() } });
       toast(`Event set · ${r.matches} matches loaded`, "ok");
+      if (r.bets_settled) toast(`${r.bets_settled} bets settled from TBA results`, "ok");
       await load();
     } catch (e: any) { toast(e.message || "Failed", "err"); } finally { setBusy(""); }
   }
@@ -53,25 +60,17 @@ export default function AdminDashboard() {
       if (r.bets_settled) toast(`${r.bets_settled} bets settled`, "ok");
     } catch (e: any) { toast(e.message || "Failed", "err"); }
   }
-  async function toggleBetting(enabled: boolean) {
-    await api("/api/admin/betting/toggle", { method: "POST", body: { enabled } });
-    setS((x) => x ? { ...x, betting_enabled: enabled } : x);
-    toast(`Betting ${enabled ? "enabled" : "disabled"}`, "ok");
-  }
   async function resetBetting() {
     if (!confirm("Reset EVERYONE to 100 Purple Bucks and clear all bets?")) return;
     await api("/api/admin/betting/reset", { method: "POST" });
     toast("All balances reset to 100 PB", "ok");
     load();
   }
-  async function setResult(m: MatchRec, winner: string) {
-    await api("/api/admin/match/result", { method: "POST", body: { match_key: m.match_key, winner } });
-    toast(`${matchLabel(m.comp_level, m.match_number)} → ${winner} · bets settled`, "ok");
+  async function deleteBet(bet: AdminBet) {
+    if (!confirm(`Delete bet #${bet.id} from ${bet.scout_name || bet.scout_id}?`)) return;
+    await api(`/api/admin/bets/${bet.id}`, { method: "DELETE" });
+    toast("Bet deleted", "ok");
     load();
-  }
-  async function toggleLock(m: MatchRec) {
-    await api("/api/admin/match/lock", { method: "POST", body: { match_key: m.match_key, locked: !m.betting_locked } });
-    setMatches((ms) => ms.map((x) => x.match_key === m.match_key ? { ...x, betting_locked: !x.betting_locked } : x));
   }
 
   if (loading || !s) return <Loading />;
@@ -88,7 +87,7 @@ export default function AdminDashboard() {
       <div className="grid cols-4" style={{ marginBottom: 18 }}>
         <Stat label="Event" value={s.current_event || "—"} />
         <Stat label="Current Match" value={s.current_match || "—"} accent />
-        <Stat label="Betting" value={s.betting_enabled ? "ON" : "OFF"} />
+        <Stat label="Open Bets" value={bets.filter((b) => b.status === "open").length} />
         <Stat label="Scouts" value={scouters.length} />
       </div>
 
@@ -103,16 +102,10 @@ export default function AdminDashboard() {
         </div>
 
         <div className="card">
-          <h3>🎲 Betting Control</h3>
-          <div className="row" style={{ justifyContent: "space-between", marginBottom: 14 }}>
-            <span className="muted">Betting is currently <b>{s.betting_enabled ? "ON" : "OFF"}</b></span>
-            <div className="seg">
-              <button className={s.betting_enabled ? "on" : ""} onClick={() => toggleBetting(true)}>On</button>
-              <button className={!s.betting_enabled ? "on" : ""} onClick={() => toggleBetting(false)}>Off</button>
-            </div>
-          </div>
+          <h3>🎲 Betting Recovery</h3>
+          <p className="muted">Bets lock when scouting starts. Winners settle from TBA results; payouts use Statbotics odds captured when the bet was placed.</p>
           <button className="btn danger block" onClick={resetBetting}>♻️ Reset everyone to 100 Purple Bucks</button>
-          <p className="faint" style={{ fontSize: "0.75rem", marginTop: 8 }}>Clears all bets and resets every balance to the starting 100 PB.</p>
+          <p className="faint" style={{ fontSize: "0.75rem", marginTop: 8 }}>Use reset only for event setup/testing mistakes. Individual bad bets can be deleted below.</p>
         </div>
       </div>
 
@@ -123,31 +116,67 @@ export default function AdminDashboard() {
             <Stepper value={curMatch} onChange={saveCurrent} />
           </div>
         </div>
-        <p className="faint" style={{ fontSize: "0.78rem", marginTop: 0 }}>Advancing the current match locks betting on it and settles finished matches automatically.</p>
+        <p className="faint" style={{ fontSize: "0.78rem", marginTop: 0 }}>Advancing the field pointer syncs TBA results and settles finished matches. It does not manually lock bets or set winners.</p>
         <div className="table-wrap" style={{ maxHeight: 360, overflowY: "auto" }}>
           <table className="data">
-            <thead><tr><th>Match</th><th>Red</th><th>Blue</th><th>Result</th><th>Bets</th><th>Set winner</th></tr></thead>
+            <thead><tr><th>Match</th><th>Red</th><th>Blue</th><th>Result</th><th>Bet Status</th></tr></thead>
             <tbody>
               {qm.map((m) => (
                 <tr key={m.match_key} style={m.match_number === curMatch ? { background: "rgba(102,51,153,0.22)" } : {}}>
                   <td>{m.match_number}{m.match_number === curMatch ? " 🔴" : ""}</td>
-                  <td className="mono" style={{ color: "#fca5a5" }}>{m.red.join(" ")}</td>
-                  <td className="mono" style={{ color: "#93c5fd" }}>{m.blue.join(" ")}</td>
-                  <td>{m.winner ? <span className={`badge ${m.winner === "red" ? "red" : m.winner === "blue" ? "blue" : "muted"}`}>{m.winner}</span> : <span className="faint">—</span>}</td>
-                  <td><button className="btn sm ghost" onClick={() => toggleLock(m)}>{m.betting_locked ? "🔒" : "🔓"}</button></td>
                   <td>
-                    <div className="row" style={{ gap: 4 }}>
-                      <button className="btn sm red" onClick={() => setResult(m, "red")}>R</button>
-                      <button className="btn sm blue" onClick={() => setResult(m, "blue")}>B</button>
-                      <button className="btn sm ghost" onClick={() => setResult(m, "tie")}>T</button>
+                    <div className="match-team-list">
+                      {(m.red_teams?.length ? m.red_teams : m.red.map((team_number) => ({ team_number, nickname: "" }))).map((t) => (
+                        <TeamIdentity key={t.team_number} team={t} showNickname={false} />
+                      ))}
                     </div>
+                  </td>
+                  <td>
+                    <div className="match-team-list">
+                      {(m.blue_teams?.length ? m.blue_teams : m.blue.map((team_number) => ({ team_number, nickname: "" }))).map((t) => (
+                        <TeamIdentity key={t.team_number} team={t} showNickname={false} />
+                      ))}
+                    </div>
+                  </td>
+                  <td>{m.winner ? <span className={`badge ${m.winner === "red" ? "red" : m.winner === "blue" ? "blue" : "muted"}`}>{m.winner}</span> : <span className="faint">—</span>}</td>
+                  <td>
+                    <span className={`badge ${m.betting_locked || m.winner ? "amber" : "green"}`}>
+                      {m.winner ? "settled" : m.betting_locked ? "locked by scouting" : "open"}
+                    </span>
                   </td>
                 </tr>
               ))}
-              {qm.length === 0 && <tr><td colSpan={6} className="faint center">No schedule. Set an event above.</td></tr>}
+              {qm.length === 0 && <tr><td colSpan={5} className="faint center">No schedule. Set an event above.</td></tr>}
             </tbody>
           </table>
         </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 16 }}>
+        <div className="card-h"><h3>🎲 Bets</h3><span className="badge muted">{bets.length}</span></div>
+        {bets.length === 0 ? (
+          <p className="muted">No bets yet.</p>
+        ) : (
+          <div className="table-wrap" style={{ maxHeight: 320, overflowY: "auto" }}>
+            <table className="data">
+              <thead><tr><th>ID</th><th>Scout</th><th>Match</th><th>Pick</th><th className="num">Wager</th><th className="num">Payout</th><th>Status</th><th></th></tr></thead>
+              <tbody>
+                {bets.map((b) => (
+                  <tr key={b.id}>
+                    <td className="mono">{b.id}</td>
+                    <td>{b.scout_name || b.scout_id}</td>
+                    <td>{matchLabel(b.comp_level, b.match_number)}</td>
+                    <td><span className={`badge ${b.pick}`}>{b.pick.toUpperCase()}</span></td>
+                    <td className="num mono">{b.wager}</td>
+                    <td className="num mono">{b.status === "open" ? `→${b.potential_payout}` : b.payout}</td>
+                    <td><span className={`badge ${b.status === "won" ? "green" : b.status === "lost" ? "red" : b.status === "open" ? "amber" : "muted"}`}>{b.status}</span></td>
+                    <td><button className="btn sm danger" onClick={() => deleteBet(b)}>Delete</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       <div className="card" style={{ marginTop: 16 }}>

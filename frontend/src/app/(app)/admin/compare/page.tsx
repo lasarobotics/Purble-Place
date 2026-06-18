@@ -2,8 +2,8 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { num } from "@/lib/format";
-import type { TeamSummary } from "@/lib/types";
-import { Loading, Empty, TeamAvatar } from "@/components/ui";
+import type { Team, TeamSummary } from "@/lib/types";
+import { Loading, Empty, TeamIdentity } from "@/components/ui";
 import { FieldHeatmap } from "@/components/Field";
 
 interface CompareData {
@@ -13,6 +13,7 @@ interface CompareData {
 
 export default function ComparePage() {
   const [available, setAvailable] = useState<number[]>([]);
+  const [teamProfiles, setTeamProfiles] = useState<Record<number, Team>>({});
   const [selected, setSelected] = useState<number[]>([]);
   const [data, setData] = useState<CompareData | null>(null);
   const [heats, setHeats] = useState<Record<number, any>>({});
@@ -22,6 +23,14 @@ export default function ComparePage() {
   useEffect(() => {
     api<number[]>("/api/admin/event-teams").then(setAvailable).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    const nums = available.filter((n) => n && !teamProfiles[n]);
+    if (!nums.length) return;
+    api<Team[]>("/api/teams/batch", { method: "POST", body: { teams: nums } })
+      .then((rows) => setTeamProfiles((cur) => ({ ...cur, ...Object.fromEntries(rows.map((t) => [t.team_number, t])) })))
+      .catch(() => {});
+  }, [available, teamProfiles]);
 
   function toggle(n: number) {
     setSelected((s) => s.includes(n) ? s.filter((x) => x !== n) : s.length < 6 ? [...s, n] : s);
@@ -51,7 +60,9 @@ export default function ComparePage() {
         </div>
         <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
           {available.map((t) => (
-            <button key={t} className={"chip" + (selected.includes(t) ? " on" : "")} onClick={() => toggle(t)}>{t}</button>
+            <button key={t} className={"chip" + (selected.includes(t) ? " on" : "")} onClick={() => toggle(t)}>
+              <TeamIdentity team={teamProfiles[t] || { team_number: t, nickname: "" }} showNickname={false} />
+            </button>
           ))}
         </div>
       </div>
@@ -69,7 +80,7 @@ export default function ComparePage() {
                     {data.teams.map((t) => (
                       <th key={t.team} className="num">
                         <div className="row" style={{ justifyContent: "flex-end", gap: 8 }}>
-                          <span>{t.team}</span><TeamAvatar team={{ team_number: t.team, nickname: t.nickname, avatar: t.avatar } as any} size="sm" />
+                          <TeamIdentity team={t} showNickname={false} />
                         </div>
                       </th>
                     ))}

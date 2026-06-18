@@ -6,7 +6,7 @@ import { useToast } from "@/lib/toast";
 import { onBus } from "@/lib/bus";
 import { matchLabel, pct } from "@/lib/format";
 import type { MatchRec, Odds, Bet } from "@/lib/types";
-import { Loading, Empty, Stat } from "@/components/ui";
+import { Loading, Empty, Stat, TeamIdentity } from "@/components/ui";
 
 export default function BettingPage() {
   const { session, setBucks, refresh } = useAuth();
@@ -40,7 +40,7 @@ export default function BettingPage() {
       setLoading(false);
     })();
     return onBus((e) => {
-      if (["bets_resolved", "betting_reset", "match_advanced", "betting_toggled"].includes(e)) {
+      if (["bets_resolved", "betting_reset", "bet_deleted", "match_advanced", "betting_toggled", "scout_submitted"].includes(e)) {
         loadBets();
         if (sel) loadOdds(sel);
       }
@@ -109,12 +109,22 @@ export default function BettingPage() {
             <>
               <div className="grid cols-2" style={{ marginBottom: 14 }}>
                 <button className={`card tight alliance-red ${pick === "red" ? "bg-red-soft" : ""}`} style={{ textAlign: "left", cursor: "pointer", borderColor: pick === "red" ? "var(--red)" : "var(--border)" }} onClick={() => setPick("red")}>
-                  <div className="badge red">RED {odds.red.join(" · ")}</div>
+                  <div className="badge red">RED</div>
+                  <div className="alliance-team-list">
+                    {(odds.red_teams?.length ? odds.red_teams : odds.red.map((team_number) => ({ team_number, nickname: "" }))).map((t) => (
+                      <TeamIdentity key={t.team_number} team={t} showNickname={false} />
+                    ))}
+                  </div>
                   <div style={{ fontSize: "1.5rem", fontWeight: 800, marginTop: 8 }}>{odds.red_odds.multiplier}×</div>
                   <div className="faint" style={{ fontSize: "0.78rem" }}>{pct(odds.red_odds.win_prob)} win · +{odds.red_odds.profit_pct}%</div>
                 </button>
                 <button className={`card tight alliance-blue ${pick === "blue" ? "bg-blue-soft" : ""}`} style={{ textAlign: "left", cursor: "pointer", borderColor: pick === "blue" ? "var(--blue)" : "var(--border)" }} onClick={() => setPick("blue")}>
-                  <div className="badge blue">BLUE {odds.blue.join(" · ")}</div>
+                  <div className="badge blue">BLUE</div>
+                  <div className="alliance-team-list">
+                    {(odds.blue_teams?.length ? odds.blue_teams : odds.blue.map((team_number) => ({ team_number, nickname: "" }))).map((t) => (
+                      <TeamIdentity key={t.team_number} team={t} showNickname={false} />
+                    ))}
+                  </div>
                   <div style={{ fontSize: "1.5rem", fontWeight: 800, marginTop: 8 }}>{odds.blue_odds.multiplier}×</div>
                   <div className="faint" style={{ fontSize: "0.78rem" }}>{pct(odds.blue_odds.win_prob)} win · +{odds.blue_odds.profit_pct}%</div>
                 </button>

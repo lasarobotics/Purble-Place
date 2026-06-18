@@ -2,6 +2,9 @@
 import React from "react";
 import type { Team } from "@/lib/types";
 
+type AvatarTeam = Pick<Team, "team_number"> & Partial<Omit<Team, "team_number">>;
+type TeamLike = AvatarTeam | ({ team: number } & Partial<Team>);
+
 export function Loading({ label = "Loading…" }: { label?: string }) {
   return (
     <div className="loading-wrap">
@@ -32,13 +35,23 @@ export function Stat({ label, value, accent }: { label: string; value: React.Rea
   );
 }
 
-export function TeamAvatar({ team, size = "" }: { team: Team; size?: "sm" | "lg" | "" }) {
+function normalizeTeam(team: TeamLike): AvatarTeam {
+  const teamNumber = "team_number" in team ? team.team_number : team.team;
+  return {
+    ...team,
+    team_number: teamNumber,
+    nickname: team.nickname || "",
+  };
+}
+
+export function TeamAvatar({ team, size = "" }: { team: TeamLike; size?: "sm" | "lg" | "" }) {
+  const normalized = normalizeTeam(team);
   const cls = "avatar" + (size ? " " + size : "");
-  if (team.avatar) {
+  if (normalized.avatar) {
     // eslint-disable-next-line @next/next/no-img-element
-    return <img className={cls} src={team.avatar} alt={`${team.team_number}`} />;
+    return <img className={cls} src={normalized.avatar} alt={`${normalized.team_number}`} />;
   }
-  const hue = (team.team_number * 47) % 360;
+  const hue = (normalized.team_number * 47) % 360;
   return (
     <div
       className={cls}
@@ -50,8 +63,29 @@ export function TeamAvatar({ team, size = "" }: { team: Team; size?: "sm" | "lg"
         background: `linear-gradient(135deg, hsl(${hue} 50% 30%), hsl(${(hue + 40) % 360} 55% 22%))`,
       }}
     >
-      {team.team_number}
+      {normalized.team_number}
     </div>
+  );
+}
+
+export function TeamIdentity({
+  team,
+  size = "sm",
+  showNickname = true,
+}: {
+  team: TeamLike;
+  size?: "sm" | "lg" | "";
+  showNickname?: boolean;
+}) {
+  const normalized = normalizeTeam(team);
+  return (
+    <span className="team-id">
+      <TeamAvatar team={normalized} size={size} />
+      <span className="team-id-text">
+        <b>{normalized.team_number}</b>
+        {showNickname && normalized.nickname && <span>{normalized.nickname}</span>}
+      </span>
+    </span>
   );
 }
 

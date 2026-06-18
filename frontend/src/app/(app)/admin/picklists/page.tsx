@@ -3,14 +3,15 @@ import { useEffect, useState, useCallback } from "react";
 import { api } from "@/lib/api";
 import { onBus } from "@/lib/bus";
 import { timeAgo } from "@/lib/format";
-import type { Picklist } from "@/lib/types";
-import { Loading, Empty } from "@/components/ui";
+import type { Picklist, Team } from "@/lib/types";
+import { Loading, Empty, TeamIdentity } from "@/components/ui";
 
 const TIER_CLS: Record<string, string> = { first: "green", second: "haze", third: "blue", dnp: "red" };
 const TIER_LABEL: Record<string, string> = { first: "1st", second: "2nd", third: "Bench", dnp: "DNP" };
 
 export default function AllPicklistsPage() {
   const [lists, setLists] = useState<Picklist[]>([]);
+  const [teams, setTeams] = useState<Record<number, Team>>({});
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -22,6 +23,14 @@ export default function AllPicklistsPage() {
     load();
     return onBus((e) => { if (e === "picklist_changed") load(); });
   }, [load]);
+
+  useEffect(() => {
+    const nums = Array.from(new Set(lists.flatMap((list) => list.items.map((it) => it.team)))).filter((n) => n && !teams[n]);
+    if (!nums.length) return;
+    api<Team[]>("/api/teams/batch", { method: "POST", body: { teams: nums } })
+      .then((rows) => setTeams((cur) => ({ ...cur, ...Object.fromEntries(rows.map((t) => [t.team_number, t])) })))
+      .catch(() => {});
+  }, [lists, teams]);
 
   if (loading) return <Loading />;
 
@@ -48,7 +57,7 @@ export default function AllPicklistsPage() {
                   {p.items.slice(0, 12).map((it) => (
                     <li key={it.team}>
                       <span className="row" style={{ gap: 8 }}>
-                        <b>{it.team}</b>
+                        <TeamIdentity team={teams[it.team] || { team_number: it.team, nickname: "" }} showNickname={false} />
                         <span className={`badge ${TIER_CLS[it.tier] || "muted"}`}>{TIER_LABEL[it.tier] || it.tier}</span>
                         {it.note && <span className="faint" style={{ fontSize: "0.75rem" }}>{it.note}</span>}
                       </span>

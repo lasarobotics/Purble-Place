@@ -34,7 +34,7 @@ export default function HomePage() {
   useEffect(() => {
     load();
     return onBus((e) => {
-      if (["bet_placed", "bets_resolved", "betting_reset", "match_advanced", "scout_submitted"].includes(e)) load();
+      if (["bet_placed", "bets_resolved", "betting_reset", "bet_deleted", "match_advanced", "scout_submitted"].includes(e)) load();
     });
   }, [load]);
 

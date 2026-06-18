@@ -10,7 +10,7 @@ from sqlmodel import Session, select
 from ..auth import current_scouter
 from ..database import get_session
 from ..external import sync_team
-from ..models import PitEntry, Scouter, ScoutEntry, TeamCache
+from ..models import MatchRecord, PitEntry, Scouter, ScoutEntry, TeamCache
 from ..realtime import emit
 from ..scoring import compute_points
 from ..store import get_setting
@@ -103,6 +103,18 @@ async def submit_scout(
 
     scouter.matches_scouted += 1
     session.add(scouter)
+
+    match = session.exec(
+        select(MatchRecord).where(
+            MatchRecord.event_key == event_key,
+            MatchRecord.comp_level == body.comp_level,
+            MatchRecord.match_number == body.match_number,
+        )
+    ).first()
+    if match and not match.betting_locked:
+        match.betting_locked = True
+        session.add(match)
+
     session.commit()
     session.refresh(entry)
 
@@ -113,7 +125,7 @@ async def submit_scout(
         except Exception:
             pass
 
-    emit("scout_submitted", {"team": entry.team_number, "match": entry.match_number})
+    emit("scout_submitted", {"team": entry.team_number, "match": entry.match_number, "bets_locked": bool(match)})
     return {"ok": True, "duplicate": False, "entry": _entry_dict(entry)}
 
 

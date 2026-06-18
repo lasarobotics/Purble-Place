@@ -5,8 +5,8 @@ import { useAuth } from "@/lib/auth";
 import { useToast } from "@/lib/toast";
 import { onBus } from "@/lib/bus";
 import { timeAgo } from "@/lib/format";
-import type { Picklist, PicklistItem } from "@/lib/types";
-import { Loading, Empty } from "@/components/ui";
+import type { Picklist, PicklistItem, Team } from "@/lib/types";
+import { Loading, Empty, TeamIdentity } from "@/components/ui";
 
 const TIERS: { value: PicklistItem["tier"]; label: string; cls: string }[] = [
   { value: "first", label: "1st pick", cls: "green" },
@@ -106,10 +106,18 @@ export default function PicklistsPage() {
 
 function Editor({ list, canEdit, onSave, onDelete }: { list: Picklist; canEdit: boolean; onSave: (p: Picklist) => void; onDelete?: (p: Picklist) => void }) {
   const [items, setItems] = useState<PicklistItem[]>(list.items || []);
+  const [teams, setTeams] = useState<Record<number, Team>>({});
   const [team, setTeam] = useState("");
   const [dirty, setDirty] = useState(false);
 
   useEffect(() => { setItems(list.items || []); setDirty(false); }, [list.id, list.updated_at]);
+  useEffect(() => {
+    const nums = Array.from(new Set(items.map((it) => it.team))).filter((n) => n && !teams[n]);
+    if (!nums.length) return;
+    api<Team[]>("/api/teams/batch", { method: "POST", body: { teams: nums } })
+      .then((rows) => setTeams((cur) => ({ ...cur, ...Object.fromEntries(rows.map((t) => [t.team_number, t])) })))
+      .catch(() => {});
+  }, [items, teams]);
 
   const upd = (next: PicklistItem[]) => { setItems(next); setDirty(true); };
   const add = () => {
@@ -152,7 +160,7 @@ function Editor({ list, canEdit, onSave, onDelete }: { list: Picklist; canEdit: 
           {items.map((it, i) => (
             <div key={it.team} className="card tight" style={{ display: "flex", gap: 10, alignItems: "center" }}>
               <span className="rank-chip">{i + 1}</span>
-              <b style={{ fontSize: "1.05rem", minWidth: 56 }}>{it.team}</b>
+              <TeamIdentity team={teams[it.team] || { team_number: it.team, nickname: "" }} />
               {canEdit ? (
                 <>
                   <select value={it.tier} onChange={(e) => upd(items.map((x, k) => k === i ? { ...x, tier: e.target.value as any } : x))} style={{ width: "auto" }}>

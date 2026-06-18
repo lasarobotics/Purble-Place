@@ -22,6 +22,12 @@ export function youtubeId(input: string): string {
   return m ? m[1] : "";
 }
 
+// Return the iframe-ready embed URL used by the Film tab.
+export function youtubeEmbedUrl(input: string): string {
+  const id = youtubeId(input);
+  return id ? `https://www.youtube.com/embed/${id}` : "";
+}
+
 export function rankClass(rank: number): string {
   if (rank === 1) return "rank-chip gold";
   if (rank === 2) return "rank-chip silver";

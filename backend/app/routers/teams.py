@@ -12,6 +12,10 @@ from ..models import Scouter, TeamCache
 router = APIRouter(prefix="/api/teams", tags=["teams"])
 
 
+def _needs_profile_refresh(tc: TeamCache | None) -> bool:
+    return tc is None or not tc.avatar
+
+
 def _team_dict(tc: TeamCache) -> dict:
     return {
         "team_number": tc.team_number,
@@ -35,7 +39,7 @@ async def get_team(
     _: Scouter = Depends(current_scouter),
 ) -> dict:
     tc = session.get(TeamCache, team_number)
-    if tc is None or refresh:
+    if refresh or _needs_profile_refresh(tc):
         tc = await sync_team(session, team_number)
     return _team_dict(tc)
 
@@ -54,7 +58,7 @@ async def get_teams_batch(
         except (TypeError, ValueError):
             continue
         tc = session.get(TeamCache, n)
-        if tc is None:
+        if _needs_profile_refresh(tc):
             tc = await sync_team(session, n)
         out.append(_team_dict(tc))
     return out

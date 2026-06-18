@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { num, pct, rankClass } from "@/lib/format";
 import type { TeamSummary } from "@/lib/types";
-import { Loading, Empty } from "@/components/ui";
+import { Loading, Empty, TeamIdentity } from "@/components/ui";
 
 export default function DataPicklistPage() {
   const [data, setData] = useState<{ teams: TeamSummary[]; explanation: string; event_avg_epa: number } | null>(null);
@@ -50,7 +50,7 @@ export default function DataPicklistPage() {
               {data.teams.map((r) => (
                 <tr key={r.team}>
                   <td><span className={rankClass(r.rank || 0)}>{r.rank}</span></td>
-                  <td><b>{r.team}</b> <span className="faint">{r.nickname}</span></td>
+                  <td><TeamIdentity team={r} /></td>
                   <td className="num mono"><b style={{ color: "var(--haze-glow)" }}>{num(r.true_score)}</b></td>
                   <td className="num mono">{num(r.base)}</td>
                   <td className="num mono">{pct(r.reliability)}</td>

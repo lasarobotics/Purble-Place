@@ -67,6 +67,7 @@ export interface MatchRec {
   winner?: string | null;
   betting_locked: boolean;
   youtube_key: string;
+  video_url?: string;
   film_summary?: string;
   film_events?: FilmEvent[];
   predicted_time?: number | null;
@@ -106,6 +107,8 @@ export interface Odds {
   locked: boolean;
   betting_enabled: boolean;
   source: string;
+  red_teams?: Team[];
+  blue_teams?: Team[];
   red_odds: { win_prob: number; profit_pct: number; multiplier: number };
   blue_odds: { win_prob: number; profit_pct: number; multiplier: number };
 }

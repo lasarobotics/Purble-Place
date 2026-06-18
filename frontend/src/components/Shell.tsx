@@ -32,8 +32,8 @@ const MOBILE_NAV = [
   { href: "/home", label: "Home", icon: "🏠" },
   { href: "/scout", label: "Scout", icon: "📋" },
   { href: "/prematch", label: "Match", icon: "🤖" },
+  { href: "/film", label: "Film", icon: "🎥" },
   { href: "/betting", label: "Bets", icon: "🎲" },
-  { href: "/picklists", label: "Lists", icon: "📝" },
 ];
 
 export function Shell({ children }: { children: React.ReactNode }) {

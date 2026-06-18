@@ -1,6 +1,8 @@
 """Match schedule, current/on-deck match, pre-match team display."""
 from __future__ import annotations
 
+import re
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
@@ -11,6 +13,19 @@ from ..models import MatchRecord, Scouter, TeamCache
 from ..store import get_setting
 
 router = APIRouter(prefix="/api/matches", tags=["matches"])
+
+
+def _youtube_id(value: str) -> str:
+    value = (value or "").strip()
+    if re.fullmatch(r"[A-Za-z0-9_-]{11}", value):
+        return value
+    match = re.search(r"(?:v=|/embed/|youtu\.be/|/v/|/shorts/)([A-Za-z0-9_-]{11})", value)
+    return match.group(1) if match else ""
+
+
+def _youtube_embed_url(value: str) -> str:
+    video_id = _youtube_id(value)
+    return f"https://www.youtube.com/embed/{video_id}" if video_id else ""
 
 
 def _resolve_event(session: Session, event_key: str | None) -> str:
@@ -30,6 +45,7 @@ def _match_dict(m: MatchRecord) -> dict:
         "winner": m.winner,
         "betting_locked": m.betting_locked,
         "youtube_key": m.youtube_key,
+        "video_url": _youtube_embed_url(m.youtube_key),
         "film_summary": m.film_summary,
         "film_events": m.film_events,
         "predicted_time": m.predicted_time,
@@ -49,6 +65,7 @@ def _sorted_matches(session: Session, event_key: str) -> list[MatchRecord]:
 async def list_matches(
     event: str | None = None,
     refresh: bool = False,
+    include_teams: bool = False,
     session: Session = Depends(get_session),
     _: Scouter = Depends(current_scouter),
 ) -> dict:
@@ -59,14 +76,23 @@ async def list_matches(
     if refresh or not existing:
         await sync_event_matches(session, event_key)
         existing = _sorted_matches(session, event_key)
-    return {"event": event_key, "matches": [_match_dict(m) for m in existing]}
+    if not include_teams:
+        return {"event": event_key, "matches": [_match_dict(m) for m in existing]}
+
+    async def enrich(m: MatchRecord) -> dict:
+        d = _match_dict(m)
+        d["red_teams"] = await _teams_payload(session, m.red)
+        d["blue_teams"] = await _teams_payload(session, m.blue)
+        return d
+
+    return {"event": event_key, "matches": [await enrich(m) for m in existing]}
 
 
 async def _teams_payload(session: Session, numbers: list[int]) -> list[dict]:
     out = []
     for n in numbers:
         tc = session.get(TeamCache, n)
-        if tc is None:
+        if tc is None or not tc.avatar:
             tc = await sync_team(session, n)
         out.append(
             {

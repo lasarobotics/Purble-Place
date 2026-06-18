@@ -124,21 +124,6 @@ def generate() -> None:
                 rec.blue_score = int(blue_perf)
                 rec.winner = "red" if red_perf > blue_perf else "blue" if blue_perf > red_perf else "tie"
 
-            # Film review demo: link a video + summary + timestamped key events.
-            # (dQw4w9WgXcQ is a public, embeddable placeholder — swap for the real
-            #  match video by editing the film on the Film tab.)
-            if mn <= 4:
-                rec.youtube_key = "dQw4w9WgXcQ"
-                rec.film_summary = (
-                    f"{red[0]} controlled the cleanest cycle path; {blue[0]} absorbed "
-                    f"defense and opened lanes late. {red[1]} disrupted the source side."
-                )
-                rec.film_events = [
-                    {"time": "0:14", "team": red[0], "type": "Auto", "detail": "Completed two-piece auto"},
-                    {"time": "1:02", "team": blue[0], "type": "Cycle", "detail": "Fast center-lane cycle"},
-                    {"time": "1:37", "team": red[1], "type": "Defense", "detail": f"Pinned {blue[1]} near source"},
-                    {"time": "2:07", "team": blue[2], "type": "Reliability", "detail": "Recovered after bumper contact"},
-                ]
             s.add(rec)
 
         # Pit entries for a couple teams.

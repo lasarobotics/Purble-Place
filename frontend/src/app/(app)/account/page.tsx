@@ -3,13 +3,14 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { matchLabel, timeAgo } from "@/lib/format";
-import type { ScoutEntry, Bet } from "@/lib/types";
-import { Loading, Empty, Stat } from "@/components/ui";
+import type { ScoutEntry, Bet, Team } from "@/lib/types";
+import { Loading, Empty, Stat, TeamIdentity } from "@/components/ui";
 
 export default function AccountPage() {
   const { session, logout } = useAuth();
   const [entries, setEntries] = useState<ScoutEntry[]>([]);
   const [bets, setBets] = useState<Bet[]>([]);
+  const [teams, setTeams] = useState<Record<number, Team>>({});
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -18,6 +19,14 @@ export default function AccountPage() {
       api<{ bets: Bet[] }>("/api/betting/mine").catch(() => ({ bets: [] })),
     ]).then(([e, b]) => { setEntries(e); setBets(b.bets); setLoading(false); });
   }, []);
+
+  useEffect(() => {
+    const nums = Array.from(new Set(entries.map((e) => e.team_number))).filter((n) => n && !teams[n]);
+    if (!nums.length) return;
+    api<Team[]>("/api/teams/batch", { method: "POST", body: { teams: nums } })
+      .then((rows) => setTeams((cur) => ({ ...cur, ...Object.fromEntries(rows.map((t) => [t.team_number, t])) })))
+      .catch(() => {});
+  }, [entries, teams]);
 
   if (loading) return <Loading />;
 
@@ -61,7 +70,7 @@ export default function AccountPage() {
                   {entries.slice(0, 25).map((e) => (
                     <tr key={e.id}>
                       <td>{matchLabel(e.comp_level, e.match_number)}</td>
-                      <td><span className={`badge ${e.alliance}`}>{e.team_number}</span></td>
+                      <td><TeamIdentity team={teams[e.team_number] || { team_number: e.team_number, nickname: "" }} showNickname={false} /></td>
                       <td className="num mono">{e.points}</td>
                       <td className="faint">{e.created_at ? timeAgo(e.created_at) : "—"}</td>
                     </tr>

@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { num, pct, rankClass } from "@/lib/format";
 import type { TeamSummary } from "@/lib/types";
-import { Loading, Empty } from "@/components/ui";
+import { Loading, Empty, TeamIdentity } from "@/components/ui";
 import { Bar } from "@/components/ui";
 
 const FMT: Record<string, (v: number) => string> = {
@@ -53,7 +53,7 @@ export default function TeamRankPage() {
                 {rows.map((r) => (
                   <tr key={r.team}>
                     <td><span className={rankClass(r.rank || 0)}>{r.rank}</span></td>
-                    <td><b>{r.team}</b> <span className="faint">{r.nickname}</span></td>
+                    <td><TeamIdentity team={r} /></td>
                     <td className="num mono"><b>{fmt((r as any)[metric] || 0)}</b></td>
                     <td><Bar value={(r as any)[metric] || 0} max={maxVal} /></td>
                     <td className="num mono">{r.matches}</td>

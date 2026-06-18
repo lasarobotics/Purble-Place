@@ -11,7 +11,7 @@ from sqlmodel import Session, select
 from ..auth import current_scouter
 from ..betting_logic import odds_for, payout_for
 from ..database import get_session
-from ..external import match_win_prob
+from ..external import match_win_prob, sync_team
 from ..models import Bet, MatchRecord, Scouter, TeamCache
 from ..realtime import emit
 from ..store import get_setting
@@ -38,6 +38,24 @@ def _epa_prob(session: Session, m: MatchRecord) -> float:
     return 1.0 / (1.0 + math.pow(10, -(red - blue) / 30.0))
 
 
+async def _teams_payload(session: Session, numbers: list[int]) -> list[dict]:
+    out = []
+    for n in numbers:
+        tc = session.get(TeamCache, n)
+        if tc is None or not tc.avatar:
+            tc = await sync_team(session, n)
+        out.append(
+            {
+                "team_number": tc.team_number,
+                "nickname": tc.nickname,
+                "avatar": tc.avatar,
+                "photos": tc.photos,
+                "epa": tc.epa,
+            }
+        )
+    return out
+
+
 async def _win_probs(session: Session, m: MatchRecord) -> dict:
     red = await match_win_prob(session, m.match_key)
     source = "statbotics"
@@ -53,11 +71,6 @@ def _is_locked(session: Session, m: MatchRecord) -> bool:
         return True
     if m.betting_locked or m.winner is not None:
         return True
-    # A match is "started" once the field pointer reaches it.
-    if m.comp_level == "qm":
-        cur = int(get_setting(session, "current_match") or 0)
-        if m.match_number <= cur:
-            return True
     return False
 
 
@@ -77,6 +90,8 @@ async def odds(
         "comp_level": m.comp_level,
         "red": m.red,
         "blue": m.blue,
+        "red_teams": await _teams_payload(session, m.red),
+        "blue_teams": await _teams_payload(session, m.blue),
         "locked": _is_locked(session, m),
         "betting_enabled": get_setting(session, "betting_enabled") == "1",
         "source": probs["source"],

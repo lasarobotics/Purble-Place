@@ -1,8 +1,7 @@
 """Admin: event/match control, betting management, analytics."""
 from __future__ import annotations
 
-from typing import Optional
-
+import re
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlmodel import Session, delete, select
@@ -13,19 +12,44 @@ from ..analytics import (
     data_picklist,
     event_teams,
     rank_teams,
+    team_entries,
     team_heatmap,
     team_summary,
 )
 from ..auth import require_admin
 from ..config import settings
 from ..database import get_session
-from ..external import sync_event_matches
-from ..models import Bet, MatchRecord, Scouter
+from ..external import sync_event_matches, sync_team
+from ..models import Bet, MatchRecord, Scouter, TeamCache
 from ..realtime import emit
 from ..store import all_settings, get_setting, set_setting
 from .betting import resolve_match_bets
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+
+def _youtube_id(value: str) -> str:
+    value = (value or "").strip()
+    if re.fullmatch(r"[A-Za-z0-9_-]{11}", value):
+        return value
+    match = re.search(r"(?:v=|/embed/|youtu\.be/|/v/|/shorts/)([A-Za-z0-9_-]{11})", value)
+    return match.group(1) if match else value
+
+
+async def _sync_missing_team_profiles(session: Session, event_key: str, teams: list[int] | None = None) -> None:
+    numbers = teams if teams is not None else event_teams(session, event_key)
+    for team in numbers:
+        tc = session.get(TeamCache, team)
+        if tc is None or not tc.avatar:
+            await sync_team(session, team)
+
+
+def _settle_finished_matches(session: Session, event_key: str) -> int:
+    settled = 0
+    for match in session.exec(select(MatchRecord).where(MatchRecord.event_key == event_key)).all():
+        if match.winner is not None:
+            settled += resolve_match_bets(session, match)
+    return settled
 
 
 @router.get("/settings")
@@ -56,8 +80,9 @@ async def set_event(
     event_key = body.event_key.strip()
     set_setting(session, "current_event", event_key)
     matches = await sync_event_matches(session, event_key) if event_key else []
+    settled = _settle_finished_matches(session, event_key) if event_key else 0
     emit("settings_changed", {"current_event": event_key})
-    return {"ok": True, "event": event_key, "matches": len(matches)}
+    return {"ok": True, "event": event_key, "matches": len(matches), "bets_settled": settled}
 
 
 class CurrentMatchIn(BaseModel):
@@ -76,11 +101,7 @@ async def set_current_match(
     settled = 0
     if event_key:
         await sync_event_matches(session, event_key)
-        for m in session.exec(
-            select(MatchRecord).where(MatchRecord.event_key == event_key)
-        ).all():
-            if m.winner is not None:
-                settled += resolve_match_bets(session, m)
+        settled = _settle_finished_matches(session, event_key)
     emit("match_advanced", {"current_match": body.match_number})
     return {"ok": True, "current_match": body.match_number, "bets_settled": settled}
 
@@ -91,13 +112,9 @@ class ToggleIn(BaseModel):
 
 @router.post("/betting/toggle")
 def toggle_betting(
-    body: ToggleIn,
-    session: Session = Depends(get_session),
     _: Scouter = Depends(require_admin),
 ) -> dict:
-    set_setting(session, "betting_enabled", "1" if body.enabled else "0")
-    emit("betting_toggled", {"enabled": body.enabled})
-    return {"ok": True, "betting_enabled": body.enabled}
+    raise HTTPException(status_code=400, detail="Manual betting toggles are disabled. Admins may only reset betting or delete bad bets.")
 
 
 @router.post("/betting/reset")
@@ -115,27 +132,55 @@ def reset_betting(
     return {"ok": True, "starting": settings.STARTING_BUCKS}
 
 
-class MatchLockIn(BaseModel):
-    match_key: str
-    locked: bool
+def _admin_bet_dict(session: Session, bet: Bet) -> dict:
+    scouter = session.get(Scouter, bet.scout_id)
+    return {
+        "id": bet.id,
+        "scout_id": bet.scout_id,
+        "scout_name": scouter.display_name if scouter else bet.scout_id,
+        "match_key": bet.match_key,
+        "match_number": bet.match_number,
+        "comp_level": bet.comp_level,
+        "pick": bet.pick,
+        "wager": bet.wager,
+        "win_prob": bet.win_prob,
+        "multiplier": bet.multiplier,
+        "potential_payout": bet.potential_payout,
+        "status": bet.status,
+        "payout": bet.payout,
+        "created_at": bet.created_at.isoformat(),
+    }
 
 
-@router.post("/match/lock")
-def lock_match(
-    body: MatchLockIn,
+@router.get("/bets")
+def list_bets(
+    session: Session = Depends(get_session),
+    _: Scouter = Depends(require_admin),
+) -> list[dict]:
+    rows = session.exec(select(Bet).order_by(Bet.id.desc())).all()
+    return [_admin_bet_dict(session, bet) for bet in rows]
+
+
+@router.delete("/bets/{bet_id}")
+def delete_bet(
+    bet_id: int,
     session: Session = Depends(get_session),
     _: Scouter = Depends(require_admin),
 ) -> dict:
-    m = session.exec(
-        select(MatchRecord).where(MatchRecord.match_key == body.match_key)
-    ).first()
-    if not m:
-        raise HTTPException(status_code=404, detail="Match not found")
-    m.betting_locked = body.locked
-    session.add(m)
+    bet = session.get(Bet, bet_id)
+    if not bet:
+        raise HTTPException(status_code=404, detail="Bet not found")
+    scouter = session.get(Scouter, bet.scout_id)
+    if scouter:
+        if bet.status in ("open", "lost"):
+            scouter.bucks += bet.wager
+        elif bet.status == "won":
+            scouter.bucks -= max(0, bet.payout - bet.wager)
+        session.add(scouter)
+    session.delete(bet)
     session.commit()
-    emit("settings_changed", {"match_lock": body.match_key})
-    return {"ok": True}
+    emit("bet_deleted", {"id": bet_id})
+    return {"ok": True, "bucks": scouter.bucks if scouter else None}
 
 
 class FilmIn(BaseModel):
@@ -158,7 +203,7 @@ def set_film(
     ).first()
     if not m:
         raise HTTPException(status_code=404, detail="Match not found")
-    m.youtube_key = body.youtube_key.strip()
+    m.youtube_key = _youtube_id(body.youtube_key)
     if body.film_summary is not None:
         m.film_summary = body.film_summary
     if body.film_events is not None:
@@ -169,35 +214,11 @@ def set_film(
     return {"ok": True}
 
 
-class ResultIn(BaseModel):
-    match_key: str
-    winner: str  # red / blue / tie
-    red_score: Optional[int] = None
-    blue_score: Optional[int] = None
-
-
 @router.post("/match/result")
 def set_result(
-    body: ResultIn,
-    session: Session = Depends(get_session),
     _: Scouter = Depends(require_admin),
 ) -> dict:
-    if body.winner not in ("red", "blue", "tie"):
-        raise HTTPException(status_code=400, detail="winner must be red/blue/tie")
-    m = session.exec(
-        select(MatchRecord).where(MatchRecord.match_key == body.match_key)
-    ).first()
-    if not m:
-        raise HTTPException(status_code=404, detail="Match not found")
-    m.winner = body.winner
-    if body.red_score is not None:
-        m.red_score = body.red_score
-    if body.blue_score is not None:
-        m.blue_score = body.blue_score
-    session.add(m)
-    session.commit()
-    settled = resolve_match_bets(session, m)
-    return {"ok": True, "bets_settled": settled}
+    raise HTTPException(status_code=400, detail="Manual result setting is disabled. Winners are pulled from TBA.")
 
 
 # --------------------------------------------------------------------------- #
@@ -219,28 +240,30 @@ def list_event_teams(
 
 
 @router.get("/rank")
-def rank(
+async def rank(
     metric: str = "avg_points",
     event: str | None = None,
     session: Session = Depends(get_session),
     _: Scouter = Depends(require_admin),
 ) -> dict:
     event_key = (event or get_setting(session, "current_event")).strip()
+    await _sync_missing_team_profiles(session, event_key)
     return {"metric": metric, "teams": rank_teams(session, event_key, metric)}
 
 
 @router.get("/data-picklist")
-def get_data_picklist(
+async def get_data_picklist(
     event: str | None = None,
     session: Session = Depends(get_session),
     _: Scouter = Depends(require_admin),
 ) -> dict:
     event_key = (event or get_setting(session, "current_event")).strip()
+    await _sync_missing_team_profiles(session, event_key)
     return data_picklist(session, event_key)
 
 
 @router.get("/compare")
-def compare(
+async def compare(
     teams: str,
     event: str | None = None,
     session: Session = Depends(get_session),
@@ -252,17 +275,20 @@ def compare(
         part = part.strip()
         if part.isdigit():
             nums.append(int(part))
-    return compare_teams(session, event_key, nums[:6])
+    nums = nums[:6]
+    await _sync_missing_team_profiles(session, event_key, nums)
+    return compare_teams(session, event_key, nums)
 
 
 @router.get("/team/{team}/summary")
-def get_team_summary(
+async def get_team_summary(
     team: int,
     event: str | None = None,
     session: Session = Depends(get_session),
     _: Scouter = Depends(require_admin),
 ) -> dict:
     event_key = (event or get_setting(session, "current_event")).strip()
+    await _sync_missing_team_profiles(session, event_key, [team])
     return team_summary(session, event_key, team)
 
 
@@ -276,6 +302,48 @@ def get_team_heatmap(
 ) -> dict:
     event_key = (event or get_setting(session, "current_event")).strip()
     return team_heatmap(session, event_key, team, phase)
+
+
+@router.get("/team/{team}/reports")
+def get_team_reports(
+    team: int,
+    event: str | None = None,
+    session: Session = Depends(get_session),
+    _: Scouter = Depends(require_admin),
+) -> list[dict]:
+    event_key = (event or get_setting(session, "current_event")).strip()
+    rows = team_entries(session, event_key, team)
+    out = []
+    for entry in rows:
+        scouter = session.get(Scouter, entry.scout_id)
+        out.append(
+            {
+                "id": entry.id,
+                "match_number": entry.match_number,
+                "comp_level": entry.comp_level,
+                "alliance": entry.alliance,
+                "station": entry.station,
+                "scout_id": entry.scout_id,
+                "scout_name": scouter.display_name if scouter else entry.scout_id,
+                "points": entry.points,
+                "auto_leave": entry.auto_leave,
+                "auto_climb": entry.auto_climb,
+                "climb": entry.climb,
+                "climb_seconds": entry.climb_seconds,
+                "played_defense": entry.played_defense,
+                "defense_rating": entry.defense_rating,
+                "defense_on": entry.defense_on,
+                "successful_stops": entry.successful_stops,
+                "driver_skill": entry.driver_skill,
+                "speed_rating": entry.speed_rating,
+                "fouls": entry.fouls,
+                "failure": entry.failure,
+                "failure_details": entry.failure_details,
+                "notes": entry.notes,
+                "created_at": entry.created_at.isoformat(),
+            }
+        )
+    return out
 
 
 @router.get("/scouters")

@@ -7,7 +7,7 @@ import { queueScout, uuid } from "@/lib/db";
 import { flushQueue } from "@/lib/sync";
 import type { HeatPoint, MatchRec, ScoutEntry } from "@/lib/types";
 import { FieldInput } from "@/components/Field";
-import { Segmented, Stepper, Rating } from "@/components/ui";
+import { Segmented, Stepper, Rating, TeamIdentity } from "@/components/ui";
 import { matchLabel } from "@/lib/format";
 
 const STATION_KEY = "hazehub.station";
@@ -57,7 +57,7 @@ export default function ScoutPage() {
     api<{ alliance: "red" | "blue"; station: number }>("/api/scout/last-assignment")
       .then((a) => setF((p) => ({ ...p, alliance: a.alliance, station: a.station })))
       .catch(() => {});
-    api<{ matches: MatchRec[] }>("/api/matches").then((r) => setMatches(r.matches)).catch(() => {});
+    api<{ matches: MatchRec[] }>("/api/matches?include_teams=true").then((r) => setMatches(r.matches)).catch(() => {});
   }, []);
 
   const points = useMemo(() => f.points ?? 0, [f]);
@@ -68,6 +68,13 @@ export default function ScoutPage() {
     const arr = f.alliance === "red" ? m.red : m.blue;
     return arr[f.station - 1] || 0;
   }, [matches, f.match_number, f.alliance, f.station]);
+
+  const scheduledTeamProfile = useMemo(() => {
+    if (!scheduledTeam) return null;
+    const m = matches.find((x) => x.comp_level === "qm" && x.match_number === f.match_number);
+    const teams = f.alliance === "red" ? m?.red_teams : m?.blue_teams;
+    return teams?.find((t) => t.team_number === scheduledTeam) || { team_number: scheduledTeam, nickname: "" };
+  }, [matches, f.match_number, f.alliance, scheduledTeam]);
 
   function autofillTeam() {
     if (scheduledTeam) {
@@ -123,7 +130,7 @@ export default function ScoutPage() {
       {/* Assignment */}
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="card-h"><h3>Assignment</h3>
-          {scheduledTeam ? <span className="badge green">schedule: {scheduledTeam}</span> : <span className="badge muted">no schedule</span>}
+          {scheduledTeamProfile ? <TeamIdentity team={scheduledTeamProfile} /> : <span className="badge muted">no schedule</span>}
         </div>
         <div className="inline-fields">
           <label className="field" style={{ margin: 0 }}>
