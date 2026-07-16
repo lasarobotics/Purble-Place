@@ -8,11 +8,11 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .config import settings
-from .database import init_db
-from .realtime import hub
-from .routers import admin, auth, betting, matches, picklists, scouting, sync, teams
-from .seed import seed
+from app.config import settings
+from app.database import init_db
+from app.realtime import hub
+from app.routers import admin, auth, betting, matches, picklists, scouting, sync, teams
+from app.seed import seed
 
 STATIC_FIELD = Path(__file__).resolve().parent / "static_field"
 

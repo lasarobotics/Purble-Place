@@ -1,10 +1,8 @@
-"""
-HazeHub configuration.
+""" HazeHub configuration.
 
-Detects whether we are running locally or on Azure and configures the
-database / realtime layer accordingly.  Everything has a sane local default
-so the app "just works" with zero setup, but switches to the production
-services automatically when the relevant Azure environment variables appear.
+Detects whether we are running locally, on Azure, or Vercel and configures
+the database / realtime layer accordingly. Everything has a sane local default
+so the app "just works" with zero setup, but switches to production services.
 """
 from __future__ import annotations
 
@@ -15,7 +13,17 @@ from pathlib import Path
 # Repo paths -----------------------------------------------------------------
 APP_DIR = Path(__file__).resolve().parent
 BACKEND_DIR = APP_DIR.parent
-DATA_DIR = BACKEND_DIR / "data"
+
+# Check if running on Vercel platform
+IS_VERCEL = os.environ.get("VERCEL") == "1"
+
+if IS_VERCEL:
+    # Vercel is a read-only environment; /tmp is the only writable directory
+    DATA_DIR = Path("/tmp/data")
+else:
+    DATA_DIR = BACKEND_DIR / "data"
+
+# This will now safely succeed on Vercel
 DATA_DIR.mkdir(exist_ok=True)
 
 
@@ -42,10 +50,10 @@ def _on_azure() -> bool:
     return any(
         os.getenv(k)
         for k in (
-            "WEBSITE_SITE_NAME",        # App Service
-            "CONTAINER_APP_NAME",       # Container Apps
+            "WEBSITE_SITE_NAME",  # App Service
+            "CONTAINER_APP_NAME",  # Container Apps
             "AZURE_FUNCTIONS_ENVIRONMENT",
-            "HAZEHUB_FORCE_AZURE",      # manual override for testing
+            "HAZEHUB_FORCE_AZURE",  # manual override for testing
         )
     )
 
@@ -54,8 +62,8 @@ def _database_url() -> str:
     """Pick a database URL.
 
     Priority:
-      1. Explicit DATABASE_URL (Azure Database for PostgreSQL, etc.)
-      2. Local SQLite file (no setup required)
+    1. Explicit DATABASE_URL (Azure Database, Vercel Postgres, Neon, etc.)
+    2. Local SQLite file inside the allowed data directory
     """
     url = os.getenv("DATABASE_URL", "").strip()
     if url:
@@ -78,7 +86,9 @@ class Settings:
 
     # Home teams: FRC 418 Purple Haze / FRC 436 Purple Rain
     HOME_TEAMS: list[int] = [
-        int(t) for t in os.getenv("HAZEHUB_HOME_TEAMS", "418,436").split(",") if t.strip().isdigit()
+        int(t)
+        for t in os.getenv("HAZEHUB_HOME_TEAMS", "418,436").split(",")
+        if t.strip().isdigit()
     ]
 
     # Auth
@@ -101,9 +111,10 @@ class Settings:
 
     # Environment
     IS_AZURE: bool = _on_azure()
+    IS_VERCEL: bool = IS_VERCEL
     DATABASE_URL: str = _database_url()
 
-    # CORS — local dev front-ends + anything you configure for Azure SWA
+    # CORS — local dev front-ends + anything you configure for Azure / Vercel
     @property
     def cors_origins(self) -> list[str]:
         extra = os.getenv("HAZEHUB_CORS", "")
@@ -114,8 +125,9 @@ class Settings:
         ]
         if extra:
             origins.extend(o.strip() for o in extra.split(",") if o.strip())
-        # Allow all when nothing custom configured on Azure (SWA domains vary)
-        if self.IS_AZURE and not extra:
+
+        # Allow all when running in cloud production environments without strict overrides
+        if (self.IS_AZURE or self.IS_VERCEL) and not extra:
             origins.append("*")
         return origins
 
