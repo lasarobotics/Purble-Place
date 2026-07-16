@@ -55,7 +55,7 @@ export default function PreMatchPage() {
       <div className="page-title"><h1>Pre-Match</h1>
         <span className="badge muted">{data.event}</span>
       </div>
-      <p className="page-sub">Scout the robots while you wait — tap any team for robot photos & stats.</p>
+      <p className="page-sub">Tap any team for photos &amp; stats.</p>
 
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="spread" style={{ gap: 12, flexWrap: "wrap" }}>

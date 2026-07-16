@@ -94,11 +94,19 @@ def team_summary(session: Session, event_key: str, team: int) -> dict[str, Any]:
 
 
 def event_teams(session: Session, event_key: str) -> list[int]:
-    """All team numbers seen in scouting for this event."""
+    """All team numbers at this event — the match schedule plus anything
+    scouted (covers offline/pit teams the schedule doesn't know yet)."""
+    teams: set[int] = set()
     rows = session.exec(
         select(ScoutEntry.team_number).where(ScoutEntry.event_key == event_key)
     ).all()
-    return sorted({int(t) for t in rows})
+    teams.update(int(t) for t in rows)
+    for m in session.exec(
+        select(MatchRecord).where(MatchRecord.event_key == event_key)
+    ).all():
+        teams.update(m.red)
+        teams.update(m.blue)
+    return sorted(teams)
 
 
 # --------------------------------------------------------------------------- #

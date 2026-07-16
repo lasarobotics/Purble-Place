@@ -133,11 +133,11 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
       <div className="main">
         <header className="topbar">
-          <div className="brand" style={{ fontSize: "1rem" }}>
+          <div className="brand topbar-brand" style={{ fontSize: "1rem" }}>
             <span className="logo" style={{ width: 26, height: 26 }} />
             <span className="name" style={{ fontSize: "1rem" }}>Haze<b>Hub</b></span>
           </div>
-          <div className="row" style={{ gap: 10 }}>
+          <div className="row" style={{ gap: 10, marginLeft: "auto" }}>
             {pending > 0 && (
               <span className="badge amber" title="Entries waiting to sync">
                 <Icon name="refresh" size={12} /> {pending} queued

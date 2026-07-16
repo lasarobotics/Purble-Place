@@ -1,6 +1,7 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { useLiveRefetch } from "@/lib/bus";
 import { num, pct, rankClass } from "@/lib/format";
 import type { TeamSummary } from "@/lib/types";
 import { Loading, Empty } from "@/components/ui";
@@ -23,10 +24,11 @@ export default function TeamRankPage() {
     api<{ metrics: { key: string; label: string }[] }>("/api/admin/metrics").then((r) => setMetrics(r.metrics)).catch(() => {});
   }, []);
 
-  useEffect(() => {
-    setLoading(true);
+  const load = useCallback(() => {
     api<{ teams: TeamSummary[] }>(`/api/admin/rank?metric=${metric}`).then((r) => setRows(r.teams)).catch(() => setRows([])).finally(() => setLoading(false));
   }, [metric]);
+  useEffect(() => setLoading(true), [metric]);
+  useLiveRefetch(load);
 
   const fmt = FMT[metric] || ((v: number) => num(v, metric === "epa" ? 0 : 1));
   const maxVal = Math.max(...rows.map((r) => (r as any)[metric] || 0), 1);

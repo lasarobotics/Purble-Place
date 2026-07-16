@@ -30,6 +30,7 @@ interface TeamReport {
   fouls: number;
   failure: boolean;
   failure_details: string;
+  no_show?: boolean;
   notes: string;
   tags?: string[];
   created_at: string;
@@ -162,6 +163,7 @@ function TeamDetailBody({ data }: { data: TeamDetail }) {
                     <span className="badge muted">Speed {num(r.speed_rating)}/5</span>
                     {r.fouls > 0 && <span className="badge amber">{r.fouls} fouls</span>}
                     {r.failure && <span className="badge red">Failure</span>}
+                    {r.no_show && <span className="badge red">No show</span>}
                   </div>
                 </div>
                 {r.tags && r.tags.length > 0 && (

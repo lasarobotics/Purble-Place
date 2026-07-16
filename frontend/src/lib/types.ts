@@ -39,6 +39,7 @@ export interface ScoutEntry {
   fouls: number;
   failure: boolean;
   failure_details: string;
+  no_show: boolean;
   notes: string;
   points?: number;
   created_at?: string;

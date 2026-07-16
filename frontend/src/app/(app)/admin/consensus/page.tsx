@@ -1,6 +1,7 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { api } from "@/lib/api";
+import { useLiveRefetch } from "@/lib/bus";
 import { num, pct } from "@/lib/format";
 import type { DisagreementRow } from "@/lib/types";
 import { Empty, Loading, Bar } from "@/components/ui";
@@ -17,13 +18,15 @@ export default function ConsensusPage() {
   const [data, setData] = useState<{ explanation: string; teams: DisagreementRow[] } | null>(null);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState<number | null>(null);
+  const [showAll, setShowAll] = useState(false);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     api<{ explanation: string; teams: DisagreementRow[] }>("/api/admin/disagreements")
       .then(setData)
       .catch(() => setData(null))
       .finally(() => setLoading(false));
   }, []);
+  useLiveRefetch(load);
 
   if (loading) return <Loading label="Cross-examining the scouting record…" />;
 
@@ -37,15 +40,14 @@ export default function ConsensusPage() {
         {flagged.length > 0 && <span className="badge amber">{flagged.length} flagged</span>}
       </div>
       <p className="page-sub">
-        Where the scouting record disagrees with itself — re-watch these on film before the
-        picklist locks. {data?.explanation}
+        Where the scouting record disagrees with itself — re-watch these before the picklist locks.
       </p>
 
       {teams.length === 0 ? (
         <div className="card"><Empty icon="radar" title="No scouting data yet" sub="Disagreements appear once matches are scouted." /></div>
       ) : (
         <div className="grid" style={{ gap: 12 }}>
-          {teams.map((t) => {
+          {(showAll || flagged.length === 0 ? teams : flagged).map((t) => {
             const expanded = open === t.team;
             return (
               <div key={t.team} className={"card tight consensus-row" + (t.flags.length ? " flagged" : "")}>
@@ -100,6 +102,11 @@ export default function ConsensusPage() {
               </div>
             );
           })}
+          {flagged.length > 0 && flagged.length < teams.length && (
+            <button className="btn ghost" onClick={() => setShowAll((v) => !v)}>
+              {showAll ? "Show flagged only" : `Show all ${teams.length} teams`}
+            </button>
+          )}
         </div>
       )}
     </div>

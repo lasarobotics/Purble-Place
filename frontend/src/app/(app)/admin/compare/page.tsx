@@ -1,6 +1,7 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { useLiveRefetch } from "@/lib/bus";
 import { num } from "@/lib/format";
 import type { Team, TeamSummary } from "@/lib/types";
 import { Loading, Empty, TeamIdentity } from "@/components/ui";
@@ -11,18 +12,21 @@ interface CompareData {
   metrics: { key: string; label: string; better: string; values: { team: number; value: number; best: boolean }[] }[];
 }
 
+const SLOTS = 6;
+
 export default function ComparePage() {
   const [available, setAvailable] = useState<number[]>([]);
   const [teamProfiles, setTeamProfiles] = useState<Record<number, Team>>({});
-  const [selected, setSelected] = useState<number[]>([]);
+  // Fixed dropdown slots, like the Google Sheet — no free typing.
+  const [slots, setSlots] = useState<(number | null)[]>(Array(SLOTS).fill(null));
   const [data, setData] = useState<CompareData | null>(null);
   const [heats, setHeats] = useState<Record<number, any>>({});
-  const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
+  const loadTeams = useCallback(() => {
     api<number[]>("/api/admin/event-teams").then(setAvailable).catch(() => {});
   }, []);
+  useLiveRefetch(loadTeams, ["settings_changed", "scout_submitted", "match_advanced"]);
 
   useEffect(() => {
     const nums = available.filter((n) => n && !teamProfiles[n]);
@@ -32,8 +36,11 @@ export default function ComparePage() {
       .catch(() => {});
   }, [available, teamProfiles]);
 
-  function toggle(n: number) {
-    setSelected((s) => s.includes(n) ? s.filter((x) => x !== n) : s.length < 6 ? [...s, n] : s);
+  const selected = slots.filter((n): n is number => n != null);
+
+  function setSlot(i: number, value: string) {
+    const n = value ? parseInt(value, 10) : null;
+    setSlots((cur) => cur.map((v, k) => (k === i ? n : v)));
   }
 
   useEffect(() => {
@@ -43,32 +50,41 @@ export default function ComparePage() {
     selected.forEach((n) => {
       if (!heats[n]) api<any>(`/api/admin/team/${n}/heatmap`).then((h) => setHeats((x) => ({ ...x, [n]: h }))).catch(() => {});
     });
-  }, [selected]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected.join(",")]);
 
   const fmt = (key: string, v: number) => key.includes("rate") || key === "consistency" ? `${(v * 100).toFixed(0)}%` : num(v, key === "epa" || key.includes("foul") ? 0 : 1);
+  const label = (t: number) => `${t}${teamProfiles[t]?.nickname ? ` — ${teamProfiles[t].nickname}` : ""}`;
 
   return (
     <div>
       <div className="page-title"><h1>Compare Robots</h1></div>
-      <p className="page-sub">Add 2–6 robots for a side-by-side breakdown. Best value in each row is highlighted.</p>
+      <p className="page-sub">Pick 2–6 robots from the event — best value in each row is highlighted.</p>
 
-      <div className="card team-name-white" style={{ marginBottom: 16 }}>
-        <div className="row" style={{ gap: 8, marginBottom: 10 }}>
-          <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Add team #" style={{ maxWidth: 150 }}
-            onKeyDown={(e) => { if (e.key === "Enter") { const n = parseInt(input.replace(/[^0-9]/g, ""), 10); if (n) { toggle(n); setInput(""); } } }} />
-          <button className="btn" onClick={() => { const n = parseInt(input.replace(/[^0-9]/g, ""), 10); if (n) { toggle(n); setInput(""); } }}>Add</button>
-        </div>
-        <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
-          {available.map((t) => (
-            <button key={t} className={"chip" + (selected.includes(t) ? " on" : "")} onClick={() => toggle(t)}>
-              <TeamIdentity team={teamProfiles[t] || { team_number: t, nickname: "" }} showNickname={false} />
-            </button>
-          ))}
-        </div>
+      <div className="card" style={{ marginBottom: 16 }}>
+        {available.length === 0 ? (
+          <Empty icon="scale" title="No teams at this event yet" sub="Set an event in the Dashboard to load the team list." />
+        ) : (
+          <div className="compare-slots">
+            {slots.map((val, i) => (
+              <label key={i} className="field compare-slot">
+                <span>Robot {i + 1}{i < 2 ? "" : " (optional)"}</span>
+                <select value={val ?? ""} onChange={(e) => setSlot(i, e.target.value)}>
+                  <option value="">— pick a team —</option>
+                  {available
+                    .filter((t) => t === val || !selected.includes(t))
+                    .map((t) => (
+                      <option key={t} value={t}>{label(t)}</option>
+                    ))}
+                </select>
+              </label>
+            ))}
+          </div>
+        )}
       </div>
 
       {selected.length < 2 ? (
-        <Empty icon="scale" title="Pick at least 2 robots" sub="Select teams above to compare them." />
+        <Empty icon="scale" title="Pick at least 2 robots" sub="Use the dropdowns above — the list comes straight from the event." />
       ) : loading || !data ? <Loading /> : (
         <>
           <div className="card team-name-white" style={{ marginBottom: 16 }}>

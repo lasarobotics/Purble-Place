@@ -1,7 +1,8 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { useLiveRefetch } from "@/lib/bus";
 import { useToast } from "@/lib/toast";
 import { matchLabel, youtubeEmbedUrl, youtubeId } from "@/lib/format";
 import type { MatchRec, FilmEvent } from "@/lib/types";
@@ -20,12 +21,17 @@ export default function FilmPage() {
   const [summary, setSummary] = useState("");
   const [events, setEvents] = useState<FilmEvent[]>([]);
 
-  useEffect(() => {
+  // Reload when the admin changes the event / saves film on another device.
+  const load = useCallback(() => {
     api<{ matches: MatchRec[] }>("/api/matches?include_teams=true")
-      .then((r) => { setMatches(r.matches); setSel((s) => s || r.matches[0] || null); })
+      .then((r) => {
+        setMatches(r.matches);
+        setSel((s) => r.matches.find((m) => m.match_key === s?.match_key) || r.matches[0] || null);
+      })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
+  useLiveRefetch(load);
 
   useEffect(() => {
     if (!sel) return;
@@ -60,14 +66,12 @@ export default function FilmPage() {
   }
 
   if (loading) return <Loading />;
-  if (!matches.length) return (<div><h1>Film Review</h1><Empty icon="film" title="No matches yet" sub="Set an event in the Dashboard to load the schedule." /></div>);
+  if (!matches.length) return (<div><h1>Film Review</h1><Empty icon="film" title="No schedule loaded" sub="Set an event in the Dashboard. If it's already set, TBA hasn't published that event's schedule yet." /></div>);
 
   return (
     <div className="film-page">
-      <div className="page-title"><h1>Film Review</h1>
-        <span className="badge haze">Video-grounded scouting</span>
-      </div>
-      <p className="page-sub">Pair match video with scouting data — validate observations against what actually happened.</p>
+      <div className="page-title"><h1>Film Review</h1></div>
+      <p className="page-sub">Match video next to the scouting record.</p>
 
       <div className="card film-control-card">
         <div className="spread film-toolbar">

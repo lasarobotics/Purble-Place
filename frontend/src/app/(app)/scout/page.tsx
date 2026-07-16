@@ -1,7 +1,6 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
-import { useAuth } from "@/lib/auth";
 import { useToast } from "@/lib/toast";
 import { queueScout, uuid } from "@/lib/db";
 import { flushQueue } from "@/lib/sync";
@@ -11,12 +10,6 @@ import { Segmented, Stepper, Rating, TeamIdentity } from "@/components/ui";
 import { matchLabel } from "@/lib/format";
 
 const STATION_KEY = "hazehub.station";
-const CLIMB_OPTS = [
-  { value: "none", label: "None" },
-  { value: "l1", label: "L1" },
-  { value: "l2", label: "L2" },
-  { value: "l3", label: "L3" },
-];
 
 // Structured qualitative tags — one tap each, aggregated per team so picklist
 // meetings see *what kind* of robot this is (TideScout-style qual insights).
@@ -58,12 +51,27 @@ const blank = (): ScoutEntry => ({
   fouls: 0,
   failure: false,
   failure_details: "",
+  no_show: false,
   notes: "",
 });
 
+function Step({ n, title, hint, children }: { n: number; title: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <section className="card step-card">
+      <header className="step-head">
+        <span className="step-num">{n}</span>
+        <div>
+          <h3>{title}</h3>
+          {hint && <p className="step-hint">{hint}</p>}
+        </div>
+      </header>
+      {children}
+    </section>
+  );
+}
+
 export default function ScoutPage() {
   const toast = useToast();
-  const { session } = useAuth();
   const [f, setF] = useState<ScoutEntry>(blank());
   const [matches, setMatches] = useState<MatchRec[]>([]);
   const [busy, setBusy] = useState(false);
@@ -81,8 +89,6 @@ export default function ScoutPage() {
     api<{ matches: MatchRec[] }>("/api/matches?include_teams=true").then((r) => setMatches(r.matches)).catch(() => {});
   }, []);
 
-  const points = useMemo(() => f.points ?? 0, [f]);
-
   const scheduledTeam = useMemo(() => {
     const m = matches.find((x) => x.comp_level === "qm" && x.match_number === f.match_number);
     if (!m) return 0;
@@ -97,27 +103,25 @@ export default function ScoutPage() {
     return teams?.find((t) => t.team_number === scheduledTeam) || { team_number: scheduledTeam, nickname: "" };
   }, [matches, f.match_number, f.alliance, scheduledTeam]);
 
-  function autofillTeam() {
-    if (scheduledTeam) {
-      set("team_number", scheduledTeam);
-      toast(`Team ${scheduledTeam} from the schedule`, "ok");
-    } else {
-      toast("No schedule loaded for that station", "err");
-    }
-  }
+  // Auto-fill the team from the schedule whenever the slot changes and the
+  // scouter hasn't typed their own number.
+  useEffect(() => {
+    if (scheduledTeam) setF((p) => (p.team_number === 0 || p.team_number !== scheduledTeam ? { ...p, team_number: scheduledTeam } : p));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scheduledTeam]);
 
   function rememberStation(alliance: "red" | "blue", station: number) {
     localStorage.setItem(STATION_KEY, JSON.stringify({ alliance, station }));
   }
 
   async function submit() {
-    if (!f.team_number) return toast("Enter or pull the team number", "err");
+    if (!f.team_number) return toast("Enter the team number first", "err");
     setBusy(true);
     const entry: ScoutEntry = { ...f, client_uuid: uuid() };
     rememberStation(f.alliance, f.station);
     try {
       const res = await api<{ entry: ScoutEntry }>("/api/scout", { method: "POST", body: entry });
-      toast(`Saved team ${f.team_number} · ${res.entry.points} pts`, "ok");
+      toast(f.no_show ? `No-show recorded for ${f.team_number}` : `Saved team ${f.team_number} · ${res.entry.points} pts`, "ok");
       resetForNext();
     } catch (err: any) {
       // Offline or server error → keep it locally and sync later.
@@ -138,25 +142,25 @@ export default function ScoutPage() {
       comp_level: p.comp_level,
       match_number: p.match_number + 1,
     }));
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   return (
-    <div>
-      <div className="page-title">
-        <h1>Match Scouting</h1>
-        <span className="badge haze">{session?.display_name}</span>
-      </div>
-      <p className="page-sub">Tap the field to log scoring. Your alliance & station are remembered between matches.</p>
+    <div className="scout-flow">
+      <div className="page-title"><h1>Scout a Match</h1></div>
+      <p className="page-sub">Top to bottom, done in a minute.</p>
 
-      {/* Assignment */}
-      <div className="card" style={{ marginBottom: 16 }}>
-        <div className="card-h"><h3>Assignment</h3>
-          {scheduledTeamProfile ? <TeamIdentity team={scheduledTeamProfile} /> : <span className="badge muted">no schedule</span>}
-        </div>
-        <div className="inline-fields">
+      {/* 1 — who are you watching */}
+      <Step n={1} title="Your robot" hint="The team number fills in from the schedule.">
+        <div className="slot-grid">
           <label className="field" style={{ margin: 0 }}>
             <span>Match #</span>
-            <input type="number" value={f.match_number} onChange={(e) => set("match_number", parseInt(e.target.value || "0", 10))} />
+            <input
+              type="number"
+              inputMode="numeric"
+              value={f.match_number}
+              onChange={(e) => set("match_number", parseInt(e.target.value || "0", 10))}
+            />
           </label>
           <div className="field" style={{ margin: 0 }}>
             <span>Alliance</span>
@@ -175,127 +179,160 @@ export default function ScoutPage() {
               onChange={(v) => { const s = parseInt(v, 10); set("station", s); rememberStation(f.alliance, s); }}
             />
           </div>
-          <label className="field" style={{ margin: 0 }}>
-            <span>Team #</span>
-            <input type="number" value={f.team_number || ""} onChange={(e) => set("team_number", parseInt(e.target.value || "0", 10))} placeholder="0000" />
-          </label>
-          <div className="field" style={{ margin: 0, display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
-            <span>&nbsp;</span>
-            <button className="btn" type="button" onClick={autofillTeam}>Pull from schedule</button>
-          </div>
-        </div>
-      </div>
-
-      <div className="grid cols-2">
-        {/* Field + auto */}
-        <div className="card">
-          <div className="card-h"><h3>Scoring Map</h3><span className="badge haze">{points} pts</span></div>
-          <FieldInput points={f.heatmap} onChange={(pts: HeatPoint[]) => set("heatmap", pts)} />
-          <div className="divider" />
-          <div className="row" style={{ gap: 10 }}>
-            <label className={"pill-check" + (f.auto_leave ? " on" : "")}>
-              <input type="checkbox" checked={f.auto_leave} onChange={(e) => set("auto_leave", e.target.checked)} /> Auto Leave
-            </label>
-            <label className={"pill-check" + (f.auto_climb ? " on" : "")}>
-              <input type="checkbox" checked={f.auto_climb} onChange={(e) => set("auto_climb", e.target.checked)} /> Auto Climb
-            </label>
-          </div>
         </div>
 
-        {/* Qualitative + endgame */}
-        <div className="card">
-          <h3>Teleop & Endgame</h3>
-          <label className={"pill-check" + (f.played_defense ? " on" : "")} style={{ marginBottom: 12 }}>
-            <input type="checkbox" checked={f.played_defense} onChange={(e) => set("played_defense", e.target.checked)} /> Played Defense
-          </label>
-          {f.played_defense && (
-            <div style={{ marginBottom: 12 }}>
-              <span className="muted" style={{ fontSize: "0.8rem" }}>Defense quality</span>
-              <div style={{ marginTop: 6 }}><Rating value={f.defense_rating} onChange={(v) => set("defense_rating", v)} /></div>
-              <label className="field" style={{ marginTop: 10 }}>
-                <span>Teams they defended</span>
-                <input value={f.defense_on} onChange={(e) => set("defense_on", e.target.value)} placeholder="e.g. 254, 1678" />
-              </label>
-              <div className="row" style={{ justifyContent: "space-between" }}>
-                <span className="muted" style={{ fontSize: "0.8rem" }}>Successful stops</span>
-                <Stepper value={f.successful_stops} onChange={(v) => set("successful_stops", v)} />
-              </div>
+        <div className="watching">
+          {scheduledTeamProfile && f.team_number === scheduledTeam ? (
+            <div className="watching-team">
+              <span className="step-hint" style={{ margin: "0 0 6px" }}>You're watching</span>
+              <TeamIdentity team={scheduledTeamProfile} size="lg" />
             </div>
+          ) : (
+            <label className="field" style={{ margin: 0, flex: 1 }}>
+              <span>Team #{scheduledTeam ? ` (schedule says ${scheduledTeam})` : " (no schedule loaded)"}</span>
+              <input
+                type="number"
+                inputMode="numeric"
+                value={f.team_number || ""}
+                onChange={(e) => set("team_number", parseInt(e.target.value || "0", 10))}
+                placeholder="0000"
+              />
+            </label>
           )}
-          <div className="divider" />
-          <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
-            <span className="muted" style={{ fontSize: "0.85rem" }}>Driver skill</span>
-            <Rating value={f.driver_skill} onChange={(v) => set("driver_skill", v)} />
-          </div>
-          <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
-            <span className="muted" style={{ fontSize: "0.85rem" }}>Speed / cycling</span>
-            <Rating value={f.speed_rating} onChange={(v) => set("speed_rating", v)} />
-          </div>
-          <label className="field">
-            <span>Endgame climb</span>
-            <select value={f.climb} onChange={(e) => set("climb", e.target.value)}>
-              {CLIMB_OPTS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          </label>
-        </div>
-      </div>
-
-      {/* Quick tags */}
-      <div className="card" style={{ marginTop: 16 }}>
-        <div className="card-h">
-          <h3>Quick Tags</h3>
-          {f.tags.length > 0 && <span className="badge haze">{f.tags.length} tagged</span>}
-        </div>
-        <p className="muted" style={{ marginTop: 0, fontSize: "0.85rem" }}>
-          Tap anything you saw — these feed the team profile and Consensus Radar.
-        </p>
-        <div className="tag-list">
-          {QUICK_TAGS.map(({ tag, tone }) => {
-            const on = f.tags.includes(tag);
-            return (
-              <button
-                key={tag}
-                type="button"
-                className={"chip " + tone + (on ? " on" : "")}
-                onClick={() =>
-                  set("tags", on ? f.tags.filter((t) => t !== tag) : [...f.tags, tag])
-                }
-              >
-                {tag}
+          <div className="watching-actions">
+            {scheduledTeamProfile && f.team_number === scheduledTeam && (
+              <button className="btn sm ghost" type="button" onClick={() => set("team_number", 0)}>
+                Wrong team?
               </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Errors + notes */}
-      <div className="card" style={{ marginTop: 16 }}>
-        <h3>Errors & Notes</h3>
-        <div className="inline-fields" style={{ alignItems: "center" }}>
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <span className="muted">Fouls</span>
-            <Stepper value={f.fouls} onChange={(v) => set("fouls", v)} />
+            )}
+            <label className={"pill-check no-show" + (f.no_show ? " on" : "")}>
+              <input type="checkbox" checked={f.no_show} onChange={(e) => set("no_show", e.target.checked)} />
+              Robot never showed up
+            </label>
           </div>
-          <label className={"pill-check" + (f.failure ? " on" : "")}>
-            <input type="checkbox" checked={f.failure} onChange={(e) => set("failure", e.target.checked)} /> Robot failure / died
-          </label>
         </div>
-        {f.failure && (
-          <label className="field" style={{ marginTop: 12 }}>
-            <span>What failed?</span>
-            <input value={f.failure_details} onChange={(e) => set("failure_details", e.target.value)} placeholder="e.g. lost comms, drivetrain" />
-          </label>
-        )}
-        <label className="field" style={{ marginTop: 12 }}>
-          <span>Notes (qualitative insight)</span>
-          <textarea value={f.notes} onChange={(e) => set("notes", e.target.value)} placeholder="Strategy, partner compatibility, what numbers miss…" />
-        </label>
-      </div>
+      </Step>
 
-      <div className="btn-row" style={{ marginTop: 18, justifyContent: "flex-end" }}>
-        <button className="btn ghost" type="button" onClick={() => setF(blank())}>Reset</button>
-        <button className="btn primary" type="button" onClick={submit} disabled={busy}>
-          {busy ? "Saving…" : `Submit ${matchLabel(f.comp_level, f.match_number)} →`}
+      {f.no_show ? (
+        <div className="card step-card noshow-note">
+          <p style={{ margin: 0 }}>
+            That's all we need — hit <b>Submit</b> below. The no-show is tracked as a
+            reliability flag and won't drag down the team's scoring averages.
+          </p>
+        </div>
+      ) : (
+        <>
+          {/* 2 — score the match */}
+          <Step n={2} title="Score the match" hint="Tap the field where each attempt happened. Switch Auto/Teleop and Made/Missed as you go.">
+            <FieldInput points={f.heatmap} onChange={(pts: HeatPoint[]) => set("heatmap", pts)} />
+            <div className="row" style={{ gap: 10, marginTop: 14 }}>
+              <label className={"pill-check" + (f.auto_leave ? " on" : "")}>
+                <input type="checkbox" checked={f.auto_leave} onChange={(e) => set("auto_leave", e.target.checked)} /> Left start zone in Auto
+              </label>
+              <label className={"pill-check" + (f.auto_climb ? " on" : "")}>
+                <input type="checkbox" checked={f.auto_climb} onChange={(e) => set("auto_climb", e.target.checked)} /> Auto climb
+              </label>
+            </div>
+          </Step>
+
+          {/* 3 — endgame */}
+          <Step n={3} title="Endgame climb">
+            <Segmented
+              options={[
+                { value: "none", label: "No climb" },
+                { value: "l1", label: "L1" },
+                { value: "l2", label: "L2" },
+                { value: "l3", label: "L3" },
+              ]}
+              value={f.climb}
+              onChange={(v) => set("climb", v)}
+            />
+          </Step>
+
+          {/* 4 — how did they look */}
+          <Step n={4} title="How did they look?" hint="Gut ratings — 3 is average.">
+            <div className="rate-row">
+              <span>Driver skill</span>
+              <Rating value={f.driver_skill} onChange={(v) => set("driver_skill", v)} />
+            </div>
+            <div className="rate-row">
+              <span>Speed / cycling</span>
+              <Rating value={f.speed_rating} onChange={(v) => set("speed_rating", v)} />
+            </div>
+            <label className={"pill-check" + (f.played_defense ? " on" : "")} style={{ marginTop: 4 }}>
+              <input type="checkbox" checked={f.played_defense} onChange={(e) => set("played_defense", e.target.checked)} /> Played defense
+            </label>
+            {f.played_defense && (
+              <div className="defense-extra">
+                <div className="rate-row">
+                  <span>Defense quality</span>
+                  <Rating value={f.defense_rating} onChange={(v) => set("defense_rating", v)} />
+                </div>
+                <div className="rate-row">
+                  <span>Successful stops</span>
+                  <Stepper value={f.successful_stops} onChange={(v) => set("successful_stops", v)} />
+                </div>
+                <label className="field" style={{ margin: 0 }}>
+                  <span>Who did they defend?</span>
+                  <input value={f.defense_on} onChange={(e) => set("defense_on", e.target.value)} placeholder="e.g. 254, 1678" />
+                </label>
+              </div>
+            )}
+          </Step>
+
+          {/* 5 — quick tags */}
+          <Step n={5} title="Quick tags" hint="Tap anything you saw — these build the team's profile.">
+            <div className="tag-list">
+              {QUICK_TAGS.map(({ tag, tone }) => {
+                const on = f.tags.includes(tag);
+                return (
+                  <button
+                    key={tag}
+                    type="button"
+                    className={"chip " + tone + (on ? " on" : "")}
+                    onClick={() => set("tags", on ? f.tags.filter((t) => t !== tag) : [...f.tags, tag])}
+                  >
+                    {tag}
+                  </button>
+                );
+              })}
+            </div>
+          </Step>
+
+          {/* 6 — problems + notes */}
+          <Step n={6} title="Problems &amp; notes" hint="Only if something happened — otherwise skip straight to Submit.">
+            <div className="rate-row">
+              <span>Fouls</span>
+              <Stepper value={f.fouls} onChange={(v) => set("fouls", v)} />
+            </div>
+            <label className={"pill-check" + (f.failure ? " on" : "")} style={{ margin: "4px 0 10px" }}>
+              <input type="checkbox" checked={f.failure} onChange={(e) => set("failure", e.target.checked)} /> Robot broke / died
+            </label>
+            {f.failure && (
+              <label className="field">
+                <span>What failed?</span>
+                <input value={f.failure_details} onChange={(e) => set("failure_details", e.target.value)} placeholder="e.g. lost comms, drivetrain" />
+              </label>
+            )}
+            <label className="field" style={{ margin: 0 }}>
+              <span>Anything the numbers miss?</span>
+              <textarea value={f.notes} onChange={(e) => set("notes", e.target.value)} placeholder="Strategy, partner compatibility, driver decisions…" />
+            </label>
+          </Step>
+        </>
+      )}
+
+      {/* sticky submit bar */}
+      <div className="submit-bar">
+        <div className="submit-info">
+          <b>{matchLabel(f.comp_level, f.match_number)}</b>
+          <span>{f.team_number ? `Team ${f.team_number}` : "No team yet"}{f.no_show ? " · NO SHOW" : ""}</span>
+        </div>
+        <button className="btn ghost" type="button" onClick={() => setF((p) => ({ ...blank(), alliance: p.alliance, station: p.station, match_number: p.match_number }))}>
+          Clear
+        </button>
+        <button className="btn primary submit-cta" type="button" onClick={submit} disabled={busy}>
+          {busy ? "Saving…" : "Submit →"}
         </button>
       </div>
     </div>

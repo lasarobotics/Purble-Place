@@ -48,7 +48,11 @@ export default function AdminDashboard() {
     setBusy("event");
     try {
       const r = await api<{ matches: number; bets_settled?: number }>("/api/admin/event", { method: "POST", body: { event_key: event.trim() } });
-      toast(`Event set · ${r.matches} matches loaded`, "ok");
+      if (r.matches === 0) {
+        toast("Event set, but TBA returned no schedule — check the key (e.g. 2026txaus), or the schedule isn't published yet", "err");
+      } else {
+        toast(`Event set · ${r.matches} matches loaded`, "ok");
+      }
       if (r.bets_settled) toast(`${r.bets_settled} bets settled from TBA results`, "ok");
       await load();
     } catch (e: any) { toast(e.message || "Failed", "err"); } finally { setBusy(""); }

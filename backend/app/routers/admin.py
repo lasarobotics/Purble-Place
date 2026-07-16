@@ -71,7 +71,11 @@ async def set_event(
     _: Scouter = Depends(require_admin),
 ) -> dict:
     event_key = body.event_key.strip()
+    previous = get_setting(session, "current_event")
     set_setting(session, "current_event", event_key)
+    if event_key != previous:
+        # New event → the old field pointer is meaningless.
+        set_setting(session, "current_match", "0")
     matches = await sync_event_matches(session, event_key) if event_key else []
     settled = _settle_finished_matches(session, event_key) if event_key else 0
     emit("settings_changed", {"current_event": event_key})

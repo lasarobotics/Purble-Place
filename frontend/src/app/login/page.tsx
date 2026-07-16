@@ -75,12 +75,6 @@ export default function LoginPage() {
           <button className="btn primary block" disabled={busy} type="submit">
             {busy ? "Signing in…" : "Sign in"}
           </button>
-
-          <div className="divider" />
-          <p style={{ fontSize: "0.78rem", margin: 0 }} className="faint">
-            Demo accounts: <b>1</b>, <b>2</b>, <b>3</b> (scouts) and <b>admin</b>. New IDs are created
-            automatically on first sign-in.
-          </p>
         </form>
       </div>
     </div>
