@@ -34,18 +34,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Replace your current router loop with this in backend/app/main.py:
 for r in (
-    auth.router,
-    teams.router,
-    matches.router,
-    scouting.router,
-    scouting.pit_router,
-    betting.router,
-    picklists.router,
-    admin.router,
+    auth.router, 
+    teams.router, 
+    matches.router, 
+    scouting.router, 
+    scouting.pit_router, 
+    betting.router, 
+    picklists.router, 
+    admin.router, 
     sync.router,
 ):
-    app.include_router(r)
+    app.include_router(r, prefix="/api")  # Adds /api/ to the beginning of all sub-routes
 
 
 @app.get("/api/health")
