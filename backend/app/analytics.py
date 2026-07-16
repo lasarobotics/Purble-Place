@@ -36,7 +36,10 @@ def _coeff_var(values: list[float]) -> float:
 
 
 def team_summary(session: Session, event_key: str, team: int) -> dict[str, Any]:
-    entries = team_entries(session, event_key, team)
+    all_entries = team_entries(session, event_key, team)
+    # No-shows are a reliability signal, not a performance sample.
+    entries = [e for e in all_entries if not e.no_show]
+    no_shows = len(all_entries) - len(entries)
     pts = [e.points for e in entries]
     n = len(entries)
 
@@ -57,6 +60,13 @@ def team_summary(session: Session, event_key: str, team: int) -> dict[str, Any]:
     climb_levels = [e.climb for e in entries if e.climb and e.climb != "none"]
     consistency = max(0.0, 1.0 - _coeff_var(pts)) if n >= 2 else (1.0 if n == 1 else 0.0)
 
+    # Structured qualitative tags, counted across every report on this team.
+    tag_counts: dict[str, int] = {}
+    for e in entries:
+        for t in e.tags or []:
+            tag_counts[t] = tag_counts.get(t, 0) + 1
+    top_tags = sorted(tag_counts.items(), key=lambda kv: -kv[1])
+
     tc = session.get(TeamCache, team)
     return {
         "team": team,
@@ -72,12 +82,14 @@ def team_summary(session: Session, event_key: str, team: int) -> dict[str, Any]:
         "climb_rate": round(len(climb_levels) / n, 3) if n else 0.0,
         "defense_rate": round(sum(e.played_defense for e in entries) / n, 3) if n else 0.0,
         "failure_rate": round(sum(e.failure for e in entries) / n, 3) if n else 0.0,
+        "no_shows": no_shows,
         "avg_driver": round(statistics.fmean([e.driver_skill for e in entries]), 2) if n else 0.0,
         "avg_speed": round(statistics.fmean([e.speed_rating for e in entries]), 2) if n else 0.0,
         "total_fouls": sum(e.fouls for e in entries),
         "total_stops": sum(e.successful_stops for e in entries),
         "counts": counts,
         "match_points": match_points,
+        "tags": [{"tag": t, "count": c} for t, c in top_tags],
     }
 
 
@@ -239,6 +251,132 @@ def data_picklist(session: Session, event_key: str) -> dict[str, Any]:
             "Schedule adjust rewards teams that faced tougher opponents with "
             "weaker partners, and penalises teams carried by strong partners "
             "against weak opponents."
+        ),
+        "teams": rows,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Scout disagreement detection ("Consensus Radar")                             #
+# --------------------------------------------------------------------------- #
+NEGATIVE_TAGS = {
+    "Died on field", "Dropped pieces", "Slow cycles", "Tippy / unstable",
+    "Penalty prone", "Struggled vs defense", "Comms issues",
+}
+POSITIVE_TAGS = {
+    "Fast cycles", "Strong auto", "Clutch climb", "Great defense",
+    "Smart driver", "Consistent", "Good under pressure", "Great partner",
+}
+
+
+def scout_disagreements(session: Session, event_key: str) -> dict[str, Any]:
+    """Flag teams where the scouting record doesn't agree with itself.
+
+    Two signals, per the TideScout-style "separate individual judgment from
+    consensus" idea:
+
+      1. **Numeric spread** — the same team+match scouted by 2+ scouts with a
+         big point gap means someone missed cycles (or padded them).
+      2. **Quant vs qual gap** — a team whose scored output ranks high while
+         its qualitative signals (driver/speed ratings, negative tags,
+         failures) rank low — or vice versa. Those are exactly the teams to
+         re-watch on film before locking a picklist.
+    """
+    teams = event_teams(session, event_key)
+    summaries = {t: team_summary(session, event_key, t) for t in teams}
+    summaries = {t: s for t, s in summaries.items() if s["matches"] > 0}
+    if not summaries:
+        return {"event": event_key, "teams": []}
+
+    # Percentile helpers across the event.
+    def _pct(values: dict[int, float], team: int) -> float:
+        vals = sorted(values.values())
+        if len(vals) < 2:
+            return 0.5
+        below = sum(1 for v in vals if v < values[team])
+        return below / (len(vals) - 1)
+
+    quant = {t: s["avg_points"] for t, s in summaries.items()}
+    qual: dict[int, float] = {}
+    for t, s in summaries.items():
+        tag_bal = 0.0
+        total_reports = max(1, s["matches"])
+        for row in s["tags"]:
+            if row["tag"] in POSITIVE_TAGS:
+                tag_bal += row["count"] / total_reports
+            elif row["tag"] in NEGATIVE_TAGS:
+                tag_bal -= row["count"] / total_reports
+        # Blend ratings (1-5 → 0-1), failure rate and tag balance.
+        ratings = ((s["avg_driver"] + s["avg_speed"]) / 2 - 1) / 4
+        qual[t] = ratings - 0.35 * s["failure_rate"] + 0.15 * tag_bal
+
+    rows: list[dict[str, Any]] = []
+    for t, s in summaries.items():
+        entries = team_entries(session, event_key, t)
+
+        # Signal 1: same match, multiple scouts.
+        by_match: dict[int, list[Any]] = {}
+        for e in entries:
+            by_match.setdefault(e.match_number, []).append(e)
+        conflicts = []
+        for mn, group in sorted(by_match.items()):
+            if len(group) < 2:
+                continue
+            pts = [e.points for e in group]
+            spread = max(pts) - min(pts)
+            conflicts.append(
+                {
+                    "match": mn,
+                    "spread": round(spread, 1),
+                    "reports": [
+                        {"scout_id": e.scout_id, "points": e.points} for e in group
+                    ],
+                }
+            )
+        conflicts.sort(key=lambda c: -c["spread"])
+        max_spread = conflicts[0]["spread"] if conflicts else 0.0
+        avg_pts = s["avg_points"] or 1.0
+        spread_score = min(1.0, max_spread / max(6.0, avg_pts))
+
+        # Signal 2: quantitative rank vs qualitative rank.
+        qp, ql = _pct(quant, t), _pct(qual, t)
+        gap = qp - ql
+        gap_score = abs(gap)
+
+        score = round(0.55 * spread_score + 0.45 * gap_score, 3)
+        flags = []
+        if max_spread > 0 and spread_score >= 0.3:
+            flags.append("scouts_disagree")
+        if gap >= 0.35:
+            flags.append("numbers_look_better_than_eyes")
+        elif gap <= -0.35:
+            flags.append("eyes_look_better_than_numbers")
+
+        rows.append(
+            {
+                "team": t,
+                "nickname": s["nickname"],
+                "avatar": s["avatar"],
+                "matches": s["matches"],
+                "avg_points": s["avg_points"],
+                "quant_pct": round(qp, 2),
+                "qual_pct": round(ql, 2),
+                "gap": round(gap, 2),
+                "max_spread": max_spread,
+                "conflicts": conflicts[:4],
+                "score": score,
+                "flags": flags,
+            }
+        )
+
+    rows.sort(key=lambda r: -r["score"])
+    return {
+        "event": event_key,
+        "explanation": (
+            "Score blends (1) how far apart scouts landed when covering the "
+            "same team in the same match, and (2) how far the team's scored "
+            "output percentile sits from its qualitative percentile (ratings, "
+            "tags, failures). High scores = watch film before picking."
         ),
         "teams": rows,
     }

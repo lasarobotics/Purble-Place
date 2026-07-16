@@ -49,7 +49,7 @@ export default function ComparePage() {
 
   return (
     <div>
-      <div className="page-title"><h1>⚖️ Compare Robots</h1></div>
+      <div className="page-title"><h1>Compare Robots</h1></div>
       <p className="page-sub">Add 2–6 robots for a side-by-side breakdown. Best value in each row is highlighted.</p>
 
       <div className="card team-name-white" style={{ marginBottom: 16 }}>
@@ -68,7 +68,7 @@ export default function ComparePage() {
       </div>
 
       {selected.length < 2 ? (
-        <Empty icon="⚖️" title="Pick at least 2 robots" sub="Select teams above to compare them." />
+        <Empty icon="scale" title="Pick at least 2 robots" sub="Select teams above to compare them." />
       ) : loading || !data ? <Loading /> : (
         <>
           <div className="card team-name-white" style={{ marginBottom: 16 }}>
@@ -108,7 +108,7 @@ export default function ComparePage() {
             {data.teams.map((t) => (
               <div key={t.team} className="card tight">
                 <div className="card-h"><h3 style={{ fontSize: "0.95rem" }}>{t.team} heatmap</h3></div>
-                {heats[t.team]?.points?.length ? <FieldHeatmap points={heats[t.team].points} height={150} /> : <Empty icon="🗺️" title="No map" />}
+                {heats[t.team]?.points?.length ? <FieldHeatmap points={heats[t.team].points} height={150} /> : <Empty icon="map" title="No map" />}
               </div>
             ))}
           </div>

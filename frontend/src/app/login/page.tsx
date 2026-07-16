@@ -36,12 +36,15 @@ export default function LoginPage() {
       <div className="login-card">
         <div style={{ textAlign: "center", marginBottom: 22 }}>
           <div className="brand" style={{ justifyContent: "center" }}>
-            <span className="logo" style={{ width: 48, height: 48 }} />
-            <span className="name haze-text" style={{ fontSize: "2rem", fontWeight: 900 }}>
-              HazeHub
+            <span className="logo" style={{ width: 46, height: 46 }} />
+            <span className="name" style={{ fontSize: "1.9rem", fontWeight: 800 }}>
+              Haze<b>Hub</b>
             </span>
           </div>
-          <p style={{ marginTop: 8 }}>FRC scouting · strategy · picklists</p>
+          <p style={{ marginTop: 8, marginBottom: 2 }}>Scouting · Strategy · Picklists</p>
+          <p className="faint" style={{ margin: 0, fontSize: "0.78rem", letterSpacing: "0.05em" }}>
+            FRC 418 PURPLE HAZE &nbsp;·&nbsp; FRC 436 PURPLE RAIN
+          </p>
         </div>
 
         <form className="card" onSubmit={submit}>
@@ -70,7 +73,7 @@ export default function LoginPage() {
           </label>
 
           <button className="btn primary block" disabled={busy} type="submit">
-            {busy ? "Signing in…" : "Enter HazeHub →"}
+            {busy ? "Signing in…" : "Sign in"}
           </button>
 
           <div className="divider" />

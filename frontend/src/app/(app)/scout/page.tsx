@@ -18,6 +18,26 @@ const CLIMB_OPTS = [
   { value: "l3", label: "L3" },
 ];
 
+// Structured qualitative tags — one tap each, aggregated per team so picklist
+// meetings see *what kind* of robot this is (TideScout-style qual insights).
+const QUICK_TAGS: { tag: string; tone: "good" | "bad" }[] = [
+  { tag: "Fast cycles", tone: "good" },
+  { tag: "Strong auto", tone: "good" },
+  { tag: "Clutch climb", tone: "good" },
+  { tag: "Great defense", tone: "good" },
+  { tag: "Smart driver", tone: "good" },
+  { tag: "Consistent", tone: "good" },
+  { tag: "Good under pressure", tone: "good" },
+  { tag: "Great partner", tone: "good" },
+  { tag: "Died on field", tone: "bad" },
+  { tag: "Dropped pieces", tone: "bad" },
+  { tag: "Slow cycles", tone: "bad" },
+  { tag: "Tippy / unstable", tone: "bad" },
+  { tag: "Penalty prone", tone: "bad" },
+  { tag: "Struggled vs defense", tone: "bad" },
+  { tag: "Comms issues", tone: "bad" },
+];
+
 const blank = (): ScoutEntry => ({
   match_number: 1,
   comp_level: "qm",
@@ -28,6 +48,7 @@ const blank = (): ScoutEntry => ({
   auto_climb: false,
   heatmap: [],
   climb: "none",
+  tags: [],
   played_defense: false,
   defense_rating: 0,
   defense_on: "",
@@ -122,7 +143,7 @@ export default function ScoutPage() {
   return (
     <div>
       <div className="page-title">
-        <h1>📋 Match Scouting</h1>
+        <h1>Match Scouting</h1>
         <span className="badge haze">{session?.display_name}</span>
       </div>
       <p className="page-sub">Tap the field to log scoring. Your alliance & station are remembered between matches.</p>
@@ -160,7 +181,7 @@ export default function ScoutPage() {
           </label>
           <div className="field" style={{ margin: 0, display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
             <span>&nbsp;</span>
-            <button className="btn" type="button" onClick={autofillTeam}>⤵ Pull from schedule</button>
+            <button className="btn" type="button" onClick={autofillTeam}>Pull from schedule</button>
           </div>
         </div>
       </div>
@@ -216,6 +237,34 @@ export default function ScoutPage() {
               {CLIMB_OPTS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
           </label>
+        </div>
+      </div>
+
+      {/* Quick tags */}
+      <div className="card" style={{ marginTop: 16 }}>
+        <div className="card-h">
+          <h3>Quick Tags</h3>
+          {f.tags.length > 0 && <span className="badge haze">{f.tags.length} tagged</span>}
+        </div>
+        <p className="muted" style={{ marginTop: 0, fontSize: "0.85rem" }}>
+          Tap anything you saw — these feed the team profile and Consensus Radar.
+        </p>
+        <div className="tag-list">
+          {QUICK_TAGS.map(({ tag, tone }) => {
+            const on = f.tags.includes(tag);
+            return (
+              <button
+                key={tag}
+                type="button"
+                className={"chip " + tone + (on ? " on" : "")}
+                onClick={() =>
+                  set("tags", on ? f.tags.filter((t) => t !== tag) : [...f.tags, tag])
+                }
+              >
+                {tag}
+              </button>
+            );
+          })}
         </div>
       </div>
 

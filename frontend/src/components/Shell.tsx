@@ -8,32 +8,34 @@ import { emitBus } from "@/lib/bus";
 import { flushQueue } from "@/lib/sync";
 import { pendingCount } from "@/lib/db";
 import { Loading } from "./ui";
+import { Icon } from "./icons";
 
 const MAIN_NAV = [
-  { href: "/home", label: "Home", icon: "🏠" },
-  { href: "/scout", label: "Scout", icon: "📋" },
-  { href: "/prematch", label: "Pre-Match", icon: "🤖" },
-  { href: "/film", label: "Film", icon: "🎥" },
-  { href: "/betting", label: "Betting", icon: "🎲" },
-  { href: "/picklists", label: "Picklists", icon: "📝" },
-  { href: "/account", label: "Account", icon: "👤" },
+  { href: "/home", label: "Home", icon: "home" },
+  { href: "/scout", label: "Scout", icon: "clipboard" },
+  { href: "/prematch", label: "Pre-Match", icon: "bot" },
+  { href: "/film", label: "Film", icon: "film" },
+  { href: "/betting", label: "Betting", icon: "coins" },
+  { href: "/picklists", label: "Picklists", icon: "list" },
+  { href: "/account", label: "Account", icon: "user" },
 ];
 
 const ADMIN_NAV = [
-  { href: "/admin", label: "Dashboard", icon: "⚙️" },
-  { href: "/admin/team-search", label: "Team Search", icon: "🔎" },
-  { href: "/admin/team-rank", label: "Team Rank", icon: "📊" },
-  { href: "/admin/data-picklist", label: "Data Picklist", icon: "🧠" },
-  { href: "/admin/compare", label: "Compare Robots", icon: "⚖️" },
-  { href: "/admin/picklists", label: "All Pick Lists", icon: "🗂️" },
+  { href: "/admin", label: "Dashboard", icon: "sliders" },
+  { href: "/admin/team-search", label: "Team Search", icon: "search" },
+  { href: "/admin/team-rank", label: "Team Rank", icon: "chart" },
+  { href: "/admin/data-picklist", label: "Data Picklist", icon: "trend" },
+  { href: "/admin/compare", label: "Compare Robots", icon: "scale" },
+  { href: "/admin/consensus", label: "Consensus Radar", icon: "radar" },
+  { href: "/admin/picklists", label: "All Pick Lists", icon: "folder" },
 ];
 
 const MOBILE_NAV = [
-  { href: "/home", label: "Home", icon: "🏠" },
-  { href: "/scout", label: "Scout", icon: "📋" },
-  { href: "/prematch", label: "Match", icon: "🤖" },
-  { href: "/film", label: "Film", icon: "🎥" },
-  { href: "/betting", label: "Bets", icon: "🎲" },
+  { href: "/home", label: "Home", icon: "home" },
+  { href: "/scout", label: "Scout", icon: "clipboard" },
+  { href: "/prematch", label: "Match", icon: "bot" },
+  { href: "/film", label: "Film", icon: "film" },
+  { href: "/betting", label: "Bets", icon: "coins" },
 ];
 
 export function Shell({ children }: { children: React.ReactNode }) {
@@ -86,7 +88,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const isActive = (href: string) =>
     href === "/admin" ? pathname === "/admin" : pathname.startsWith(href);
   const mobileNav = session.is_admin
-    ? [...MOBILE_NAV.slice(0, 4), { href: "/admin", label: "Admin", icon: "⚙️" }]
+    ? [...MOBILE_NAV.slice(0, 4), { href: "/admin", label: "Admin", icon: "sliders" }]
     : MOBILE_NAV;
 
   return (
@@ -99,7 +101,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
         <div className="nav-section">Scouting</div>
         {MAIN_NAV.map((n) => (
           <Link key={n.href} href={n.href} className={"nav-link" + (isActive(n.href) ? " active" : "")}>
-            <span className="ico">{n.icon}</span> {n.label}
+            <span className="ico"><Icon name={n.icon} /></span> {n.label}
           </Link>
         ))}
         {session.is_admin && (
@@ -107,7 +109,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <div className="nav-section">Admin · Strategy</div>
             {ADMIN_NAV.map((n) => (
               <Link key={n.href} href={n.href} className={"nav-link" + (isActive(n.href) ? " active" : "")}>
-                <span className="ico">{n.icon}</span> {n.label}
+                <span className="ico"><Icon name={n.icon} /></span> {n.label}
               </Link>
             ))}
           </>
@@ -123,6 +125,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
             </div>
             <button className="btn sm ghost" onClick={logout}>Sign out</button>
           </div>
+          <div className="faint" style={{ fontSize: "0.68rem", marginTop: 10, letterSpacing: "0.04em" }}>
+            FRC 418 PURPLE HAZE · FRC 436 PURPLE RAIN
+          </div>
         </div>
       </aside>
 
@@ -134,12 +139,14 @@ export function Shell({ children }: { children: React.ReactNode }) {
           </div>
           <div className="row" style={{ gap: 10 }}>
             {pending > 0 && (
-              <span className="badge amber" title="Entries waiting to sync">↻ {pending} queued</span>
+              <span className="badge amber" title="Entries waiting to sync">
+                <Icon name="refresh" size={12} /> {pending} queued
+              </span>
             )}
             <span className="badge muted" title={online ? "Online" : "Offline — saving locally"}>
               <span className={"dot " + (online ? "green" : "red")} /> {online ? "Live" : "Offline"}
             </span>
-            <span className="badge haze">🟣 {session.bucks} PB</span>
+            <span className="badge haze">{session.bucks} PB</span>
           </div>
         </header>
         {!online && <div className="offline-bar">Offline — your scouting is saved on this device and will sync automatically.</div>}
@@ -149,7 +156,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
       <nav className="bottomnav">
         {mobileNav.map((n) => (
           <Link key={n.href} href={n.href} className={isActive(n.href) ? "active" : ""}>
-            <span className="ico">{n.icon}</span>
+            <span className="ico"><Icon name={n.icon} size={20} /></span>
             {n.label}
           </Link>
         ))}

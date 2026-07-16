@@ -29,6 +29,7 @@ export interface ScoutEntry {
   heatmap: HeatPoint[];
   climb: string;
   climb_seconds?: number | null;
+  tags: string[];
   played_defense: boolean;
   defense_rating: number;
   defense_on: string;
@@ -141,6 +142,46 @@ export interface Picklist {
   updated_at: string;
 }
 
+export interface InsightBullet {
+  text: string;
+  evidence: string;
+}
+
+export interface TeamInsight {
+  team: number;
+  event: string;
+  generated_at: string;
+  matches: number;
+  headline: string;
+  role: string;
+  verdict: "first-pick" | "second-pick" | "third-pick" | "avoid" | "unknown";
+  strengths: InsightBullet[];
+  concerns: InsightBullet[];
+  watch: string[];
+  source: "rules" | "claude";
+}
+
+export interface DisagreementConflict {
+  match: number;
+  spread: number;
+  reports: { scout_id: string; points: number }[];
+}
+
+export interface DisagreementRow {
+  team: number;
+  nickname: string;
+  avatar?: string;
+  matches: number;
+  avg_points: number;
+  quant_pct: number;
+  qual_pct: number;
+  gap: number;
+  max_spread: number;
+  conflicts: DisagreementConflict[];
+  score: number;
+  flags: string[];
+}
+
 export interface TeamSummary {
   team: number;
   nickname: string;
@@ -161,6 +202,7 @@ export interface TeamSummary {
   total_stops: number;
   counts: { auto_made: number; auto_missed: number; teleop_made: number; teleop_missed: number };
   match_points: { match: number; points: number }[];
+  tags?: { tag: string; count: number }[];
   rank?: number;
   // data-picklist extras
   true_score?: number;

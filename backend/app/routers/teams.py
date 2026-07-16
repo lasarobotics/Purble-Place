@@ -8,6 +8,7 @@ from ..analytics import team_entries, team_heatmap, team_summary
 from ..auth import current_scouter
 from ..database import get_session
 from ..external import sync_team
+from ..insights import team_insight
 from ..models import Scouter, TeamCache
 from ..store import get_setting
 
@@ -68,6 +69,7 @@ def get_team_scouting(
                 "auto_climb": entry.auto_climb,
                 "climb": entry.climb,
                 "climb_seconds": entry.climb_seconds,
+                "tags": entry.tags or [],
                 "played_defense": entry.played_defense,
                 "defense_rating": entry.defense_rating,
                 "defense_on": entry.defense_on,
@@ -77,6 +79,7 @@ def get_team_scouting(
                 "fouls": entry.fouls,
                 "failure": entry.failure,
                 "failure_details": entry.failure_details,
+                "no_show": entry.no_show,
                 "notes": entry.notes,
                 "created_at": entry.created_at.isoformat(),
             }
@@ -86,6 +89,19 @@ def get_team_scouting(
         "heatmap": team_heatmap(session, event_key, team_number),
         "reports": reports,
     }
+
+
+@router.get("/{team_number}/insight")
+def get_team_insight(
+    team_number: int,
+    event: str | None = None,
+    session: Session = Depends(get_session),
+    _: Scouter = Depends(current_scouter),
+) -> dict:
+    """Haze Intel — an AI-assisted summary where every claim carries the
+    scouting evidence behind it."""
+    event_key = (event or get_setting(session, "current_event")).strip()
+    return team_insight(session, event_key, team_number)
 
 
 @router.get("/{team_number}")

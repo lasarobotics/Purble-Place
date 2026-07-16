@@ -60,11 +60,11 @@ export default function FilmPage() {
   }
 
   if (loading) return <Loading />;
-  if (!matches.length) return (<div><h1>🎥 Film Review</h1><Empty icon="🎬" title="No matches yet" sub="Set an event in the Dashboard to load the schedule." /></div>);
+  if (!matches.length) return (<div><h1>Film Review</h1><Empty icon="film" title="No matches yet" sub="Set an event in the Dashboard to load the schedule." /></div>);
 
   return (
     <div className="film-page">
-      <div className="page-title"><h1>🎥 Film Review</h1>
+      <div className="page-title"><h1>Film Review</h1>
         <span className="badge haze">Video-grounded scouting</span>
       </div>
       <p className="page-sub">Pair match video with scouting data — validate observations against what actually happened.</p>
@@ -76,14 +76,14 @@ export default function FilmPage() {
             <select value={sel?.match_key || ""} onChange={(e) => setSel(matches.find((m) => m.match_key === e.target.value) || null)}>
               {matches.map((m) => (
                 <option key={m.match_key} value={m.match_key}>
-                  {matchLabel(m.comp_level, m.match_number)}{m.youtube_key ? " 🎥" : ""}
+                  {matchLabel(m.comp_level, m.match_number)}{m.youtube_key ? " · video" : ""}
                 </option>
               ))}
             </select>
           </label>
           {session?.is_admin && (
             <div className="film-toolbar-action">
-              <button className="btn" onClick={() => setEditing((v) => !v)}>{editing ? "Close editor" : "✎ Edit film"}</button>
+              <button className="btn" onClick={() => setEditing((v) => !v)}>{editing ? "Close editor" : "Edit film"}</button>
             </div>
           )}
         </div>
@@ -163,7 +163,7 @@ export default function FilmPage() {
                   ))}
                 </div>
               ) : (
-                <Empty icon="⏱️" title="No timestamped events" sub={session?.is_admin ? "Add key moments with Edit film." : undefined} />
+                <Empty icon="clock" title="No timestamped events" sub={session?.is_admin ? "Add key moments with Edit film." : undefined} />
               )}
             </>
           )}

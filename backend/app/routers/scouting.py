@@ -34,6 +34,7 @@ class ScoutIn(BaseModel):
     climb: str = "none"
     climb_seconds: Optional[float] = None
 
+    tags: list[str] = Field(default_factory=list)
     played_defense: bool = False
     defense_rating: int = 0
     defense_on: str = ""
@@ -43,6 +44,7 @@ class ScoutIn(BaseModel):
     fouls: int = 0
     failure: bool = False
     failure_details: str = ""
+    no_show: bool = False
     notes: str = ""
 
 
@@ -62,6 +64,7 @@ def _entry_dict(e: ScoutEntry) -> dict:
         "heatmap": e.heatmap,
         "climb": e.climb,
         "climb_seconds": e.climb_seconds,
+        "tags": e.tags or [],
         "played_defense": e.played_defense,
         "defense_rating": e.defense_rating,
         "defense_on": e.defense_on,
@@ -71,6 +74,7 @@ def _entry_dict(e: ScoutEntry) -> dict:
         "fouls": e.fouls,
         "failure": e.failure,
         "failure_details": e.failure_details,
+        "no_show": e.no_show,
         "notes": e.notes,
         "points": e.points,
         "created_at": e.created_at.isoformat(),
@@ -96,9 +100,10 @@ async def submit_scout(
     data = body.model_dump()
     data["event_key"] = event_key
     data["scout_id"] = scouter.scout_id
-    points = compute_points(data)
+    # A no-show robot scores nothing regardless of stray taps.
+    data["points"] = 0.0 if body.no_show else compute_points(data)
 
-    entry = ScoutEntry(**{**data, "points": points})
+    entry = ScoutEntry.from_submission(data)
     session.add(entry)
 
     scouter.matches_scouted += 1

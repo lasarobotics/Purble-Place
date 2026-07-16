@@ -87,6 +87,7 @@ async def sync_event_matches(session: Session, event_key: str) -> list[MatchReco
     the YouTube match videos for the Film tab.
     """
     data = await tba(session, f"/event/{event_key}/matches")
+    await sync_event_info(session, event_key)
     out: list[MatchRecord] = []
     if not data:
         return out
@@ -99,8 +100,10 @@ async def sync_event_matches(session: Session, event_key: str) -> list[MatchReco
         alliances = m.get("alliances", {}) or {}
         red = alliances.get("red", {}) or {}
         blue = alliances.get("blue", {}) or {}
-        rec.red = [int(t[3:]) for t in red.get("team_keys", []) if t.startswith("frc")]
-        rec.blue = [int(t[3:]) for t in blue.get("team_keys", []) if t.startswith("frc")]
+        rec.set_alliances(
+            [int(t[3:]) for t in red.get("team_keys", []) if t.startswith("frc")],
+            [int(t[3:]) for t in blue.get("team_keys", []) if t.startswith("frc")],
+        )
         rs, bs = red.get("score"), blue.get("score")
         rec.red_score = rs if rs not in (None, -1) else None
         rec.blue_score = bs if bs not in (None, -1) else None
@@ -123,6 +126,24 @@ async def sync_event_matches(session: Session, event_key: str) -> list[MatchReco
         out.append(rec)
     session.commit()
     return out
+
+
+async def sync_event_info(session: Session, event_key: str) -> None:
+    """Upsert the events row (start_date + name from TBA, best effort)."""
+    from datetime import date as _date
+
+    from .models import Event
+
+    row = session.get(Event, event_key) or Event(event_key=event_key)
+    info = await tba(session, f"/event/{event_key}")
+    if info:
+        row.name = info.get("name") or row.name
+        try:
+            row.start_date = _date.fromisoformat(info["start_date"])
+        except (KeyError, TypeError, ValueError):
+            pass
+    session.add(row)
+    session.commit()
 
 
 def _match_by_key(session: Session, mk: str) -> Optional[MatchRecord]:
@@ -164,9 +185,15 @@ async def sync_team(session: Session, team_number: int, season: Optional[int] = 
 
     sb = await statbotics(session, f"/team_year/{team_number}/{season}", ttl=3600)
     if sb:
-        try:
-            tc.epa = sb.get("epa", {}).get("total_points", {}).get("mean")
-        except Exception:
+        # Statbotics has shipped two shapes for this field:
+        #   v3 (2025):  epa.total_points = {"mean": 55.1, ...}
+        #   v3 (2026):  epa.total_points = 112.62
+        raw = (sb.get("epa") or {}).get("total_points")
+        if isinstance(raw, dict):
+            tc.epa = raw.get("mean")
+        elif isinstance(raw, (int, float)):
+            tc.epa = float(raw)
+        else:
             tc.epa = None
 
     tc.updated_at = datetime.now(timezone.utc)

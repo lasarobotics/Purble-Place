@@ -1,7 +1,12 @@
 "use client";
 import React, { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { api } from "@/lib/api";
 import type { Team } from "@/lib/types";
+import { Icon } from "./icons";
+
+// FRC 418 Purple Haze · FRC 436 Purple Rain — highlighted across the app.
+export const HOME_TEAMS = [418, 436];
 
 type AvatarTeam = Pick<Team, "team_number"> & Partial<Omit<Team, "team_number">>;
 type TeamLike = AvatarTeam | ({ team: number } & Partial<Team>);
@@ -19,10 +24,10 @@ export function Loading({ label = "Loading…" }: { label?: string }) {
   );
 }
 
-export function Empty({ icon = "✨", title, sub }: { icon?: string; title: string; sub?: string }) {
+export function Empty({ icon = "inbox", title, sub }: { icon?: string; title: string; sub?: string }) {
   return (
     <div className="empty">
-      <div className="big">{icon}</div>
+      <div className="big"><Icon name={icon} size={34} strokeWidth={1.6} /></div>
       <h3 style={{ margin: "0 0 4px" }}>{title}</h3>
       {sub && <p style={{ margin: 0 }}>{sub}</p>}
     </div>
@@ -99,7 +104,8 @@ function useResolvedTeam(team: TeamLike): AvatarTeam {
 
 export function TeamAvatar({ team, size = "" }: { team: TeamLike; size?: "sm" | "lg" | "" }) {
   const normalized = useResolvedTeam(team);
-  const cls = "avatar" + (size ? " " + size : "");
+  const home = HOME_TEAMS.includes(normalized.team_number) ? " home" : "";
+  const cls = "avatar" + (size ? " " + size : "") + home;
   if (normalized.avatar) {
     // eslint-disable-next-line @next/next/no-img-element
     return <img className={cls} src={normalized.avatar} alt={`${normalized.team_number}`} />;
@@ -143,12 +149,18 @@ export function TeamIdentity({
 }
 
 export function Modal({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
-  return (
+  // Portal to <body>: ancestors with backdrop-filter/transform (e.g. .card)
+  // create containing blocks that would trap a position:fixed overlay.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  if (!mounted) return null;
+  return createPortal(
     <div className="modal-back" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

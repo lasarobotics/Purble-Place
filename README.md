@@ -17,7 +17,9 @@ Container Apps) when the Azure environment variables are present.
   on first sign-in. Demo accounts: **`1`, `2`, `3`** (scouts) and **`admin`**.
 - **Home** — live Top-Bettors leaderboard, the match on the field, and your open bets.
 - **Match Scouting** — tap-the-field heatmap for every scoring attempt (auto/teleop,
-  made/missed), endgame climb, defense, driver/speed ratings, fouls, failures, notes.
+  made/missed), endgame climb, defense, driver/speed ratings, fouls, failures, notes,
+  and **quick tags** — one-tap structured qualitative chips ("Fast cycles",
+  "Died on field", …) that aggregate on the team profile.
   - **Station memory:** your alliance + station are remembered between matches.
   - **Pull from schedule:** auto-fills the team you're watching from the TBA schedule.
   - **Offline-first:** if the connection drops, entries are saved in IndexedDB and
@@ -29,6 +31,10 @@ Container Apps) when the Azure environment variables are present.
   pay little (a 99% favourite → ~5% profit); underdogs pay big. Bets **lock when the
   match starts** and can't be changed. Everyone starts with **100 PB**.
 - **Picklists** — build your own, or collaborate on the shared **master picklist**.
+- **Haze Intel** — every team profile carries an AI-assisted summary (headline,
+  role, picklist verdict, strengths/concerns) where **every claim cites the
+  scouting evidence** behind it. Works offline via a built-in rules engine and
+  upgrades to Claude automatically when `ANTHROPIC_API_KEY` is set.
 
 ### Admin (everything above, plus)
 - **Dashboard** — set the event (syncs the TBA schedule), advance the current match
@@ -43,6 +49,10 @@ Container Apps) when the Azure environment variables are present.
   schedule adjustment so you can see *why* a team ranks where it does.
 - **Compare Robots** — side-by-side comparison of 2–6 robots with the best value in each
   row highlighted, plus each robot's heatmap.
+- **Consensus Radar** — scout disagreement detection. Flags teams where scouts who
+  covered the same match landed far apart, and teams whose scored output percentile
+  diverges from their qualitative percentile (ratings, tags, failures) — the exact
+  teams to re-watch on film before the picklist locks.
 - **All Pick Lists** — every picklist made across the team in one place.
 
 Live updates (new scouting, bets, picklist edits, match changes) push to every connected
@@ -104,6 +114,36 @@ Chromebook / phone ──► Next.js (TypeScript)  ──►  FastAPI (Python)  
 | Database | SQLite file | **Azure Database for PostgreSQL** |
 | Realtime | WebSocket (`/ws`) | same code / swap to **Azure SignalR** |
 | Offline | Dexie / IndexedDB | same |
+
+### Docker (mirrors the Azure topology)
+
+With Docker installed, one command runs the production stack — PostgreSQL +
+FastAPI + Next.js — exactly like it runs on Azure:
+
+```bash
+docker compose up --build
+# web -> http://localhost:3000   api -> http://localhost:8000/docs
+```
+
+Images: [backend/Dockerfile](backend/Dockerfile) (uvicorn, port 8000) and
+[frontend/Dockerfile](frontend/Dockerfile) (Next.js standalone, port 3000 —
+pass `--build-arg NEXT_PUBLIC_API_URL=<api url>` since `NEXT_PUBLIC_*` is
+inlined at build time).
+
+### Deploy to Azure Container Apps
+
+```powershell
+az login
+az extension add --name containerapp --upgrade
+./deploy/azure-containerapps.ps1
+```
+
+The script ([deploy/azure-containerapps.ps1](deploy/azure-containerapps.ps1))
+provisions the resource group, container registry, **Azure Database for
+PostgreSQL**, the Container Apps environment, and both apps — building the
+images in the cloud with `az acr build`, so you don't need Docker locally.
+Re-run it to ship updates. It prints the live web/API URLs and the generated
+Postgres password when it finishes.
 
 ### How the Azure switch works
 The backend reads its environment at startup (`backend/app/config.py`):

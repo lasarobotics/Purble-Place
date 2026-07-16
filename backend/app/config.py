@@ -76,6 +76,11 @@ class Settings:
     BRAND_COLOR: str = "#663399"  # Purple Haze
     SEASON: int = int(os.getenv("HAZEHUB_SEASON", "2026"))
 
+    # Home teams: FRC 418 Purple Haze / FRC 436 Purple Rain
+    HOME_TEAMS: list[int] = [
+        int(t) for t in os.getenv("HAZEHUB_HOME_TEAMS", "418,436").split(",") if t.strip().isdigit()
+    ]
+
     # Auth
     TEAM_PASSWORD: str = os.getenv("HAZEHUB_TEAM_PASSWORD", "HazeRain!")
     ADMIN_ID: str = os.getenv("HAZEHUB_ADMIN_ID", "admin")

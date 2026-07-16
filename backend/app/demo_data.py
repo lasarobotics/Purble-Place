@@ -14,6 +14,7 @@ from sqlmodel import Session, delete, select
 from .database import engine, init_db
 from .models import (
     Bet,
+    Event,
     MatchRecord,
     Picklist,
     PitEntry,
@@ -32,18 +33,40 @@ NICKS = {
     1986: "Team Titanium", 2056: "OP Robotics", 2767: "Stryke Force", 3310: "Black Hawk",
 }
 SCOUTS = ["1", "2", "3"]
+# Each scout counts slightly differently — feeds the Consensus Radar.
+SCOUT_BIAS = {"1": 1.0, "2": 0.82, "3": 1.14}
+
+POSITIVE_TAGS = ["Fast cycles", "Strong auto", "Clutch climb", "Great defense",
+                 "Smart driver", "Consistent", "Good under pressure", "Great partner"]
+NEGATIVE_TAGS = ["Died on field", "Dropped pieces", "Slow cycles", "Tippy / unstable",
+                 "Penalty prone", "Struggled vs defense", "Comms issues"]
+FAILURES = ["lost comms mid-match", "drivetrain stalled", "intake jammed",
+            "browned out", "arm chain snapped"]
 
 
-def _heatmap(skill: float) -> list[dict]:
+def _tags(skill: float, failed: bool) -> list[str]:
+    tags: list[str] = []
+    for t in random.sample(POSITIVE_TAGS, 3):
+        if random.random() < skill * 0.55:
+            tags.append(t)
+    for t in random.sample(NEGATIVE_TAGS, 3):
+        if random.random() < (1 - skill) * 0.4:
+            tags.append(t)
+    if failed and "Died on field" not in tags:
+        tags.append("Died on field")
+    return tags
+
+
+def _heatmap(skill: float, bias: float = 1.0) -> list[dict]:
     pts = []
     auto_attempts = random.randint(1, 4)
-    tele_attempts = random.randint(4, 12)
+    tele_attempts = max(2, round(random.randint(4, 12) * bias))
     for _ in range(auto_attempts):
-        made = random.random() < 0.4 + skill * 0.4
+        made = random.random() < (0.4 + skill * 0.4) * bias
         pts.append({"x": random.uniform(0.1, 0.45), "y": random.uniform(0.15, 0.85),
                     "phase": "auto", "result": "made" if made else "missed"})
     for _ in range(tele_attempts):
-        made = random.random() < 0.45 + skill * 0.45
+        made = random.random() < min(0.95, (0.45 + skill * 0.45) * bias)
         pts.append({"x": random.uniform(0.1, 0.9), "y": random.uniform(0.1, 0.9),
                     "phase": "teleop", "result": "made" if made else "missed"})
     return pts
@@ -59,6 +82,12 @@ def generate() -> None:
         for p in s.exec(select(Picklist).where(Picklist.event_key == EVENT)).all():
             s.delete(p)
         s.commit()
+
+        # Event row (2027-schema events table).
+        ev = s.get(Event, EVENT) or Event(event_key=EVENT)
+        ev.name = "Haze Invitational (Demo)"
+        ev.start_date = datetime.now(timezone.utc).date()
+        s.add(ev)
 
         # Teams + EPA (skill 0..1 maps to EPA ~25..75).
         skill = {}
@@ -79,44 +108,57 @@ def generate() -> None:
             red, blue = picks[:3], picks[3:]
             mk = f"{EVENT}_qm{mn}"
             rec = MatchRecord(match_key=mk, event_key=EVENT, comp_level="qm",
-                              match_number=mn, red=red, blue=blue)
+                              match_number=mn)
+            rec.set_alliances(red, blue)
 
             red_perf = blue_perf = 0.0
             for alliance, station_teams in (("red", red), ("blue", blue)):
                 for idx, t in enumerate(station_teams, 1):
                     sk = skill[t]
-                    hm = _heatmap(sk)
-                    entry = {
-                        "event_key": EVENT, "match_number": mn, "comp_level": "qm",
-                        "team_number": t, "alliance": alliance, "station": idx,
-                        "scout_id": random.choice(SCOUTS),
-                        "auto_leave": random.random() < 0.85,
-                        "auto_climb": random.random() < sk * 0.4,
-                        "heatmap": hm,
-                        "climb": random.choices(["none", "l1", "l2", "l3"],
-                                                weights=[0.2, 0.3, 0.3, 0.2 + sk])[0],
-                        "played_defense": random.random() < 0.25,
-                        "defense_rating": random.randint(0, 5),
-                        "defense_on": "",
-                        "successful_stops": random.randint(0, 3),
-                        "driver_skill": min(5, max(1, round(sk * 5 + random.uniform(-1, 1)))),
-                        "speed_rating": min(5, max(1, round(sk * 5 + random.uniform(-1, 1)))),
-                        "fouls": random.choices([0, 1, 2], weights=[0.7, 0.2, 0.1])[0],
-                        "failure": random.random() < 0.08,
-                        "failure_details": "",
-                        "notes": random.choice([
-                            "Fast cycler, clean driving.", "Struggled under defense.",
-                            "Reliable climb every match.", "Great auto routine.",
-                            "Mechanical hiccup mid-match.", "Strong partner, good comms.", "",
-                        ]),
-                    }
-                    pts = compute_points(entry)
-                    entry["points"] = pts
-                    s.add(ScoutEntry(**entry))
+                    scouts_here = [random.choice(SCOUTS)]
+                    # ~30% of slots get double-scouted → Consensus Radar data.
+                    if random.random() < 0.3:
+                        scouts_here.append(random.choice(
+                            [x for x in SCOUTS if x != scouts_here[0]]))
+                    first_pts = 0.0
+                    for i, scout in enumerate(scouts_here):
+                        bias = SCOUT_BIAS[scout]
+                        failed = random.random() < 0.08
+                        entry = {
+                            "event_key": EVENT, "match_number": mn, "comp_level": "qm",
+                            "team_number": t, "alliance": alliance, "station": idx,
+                            "scout_id": scout,
+                            "auto_leave": random.random() < 0.85,
+                            "auto_climb": random.random() < sk * 0.4,
+                            "heatmap": _heatmap(sk, bias),
+                            "climb": random.choices(["none", "l1", "l2", "l3"],
+                                                    weights=[0.2, 0.3, 0.3, 0.2 + sk])[0],
+                            "tags": _tags(sk, failed),
+                            "played_defense": random.random() < 0.25,
+                            "defense_rating": random.randint(0, 5),
+                            "defense_on": "",
+                            "successful_stops": random.randint(0, 3),
+                            "driver_skill": min(5, max(1, round(sk * 5 + random.uniform(-1.2, 1.2) * (2 - bias)))),
+                            "speed_rating": min(5, max(1, round(sk * 5 + random.uniform(-1, 1)))),
+                            "fouls": random.choices([0, 1, 2], weights=[0.7, 0.2, 0.1])[0],
+                            "failure": failed,
+                            "failure_details": random.choice(FAILURES) if failed else "",
+                            "notes": random.choice([
+                                "Fast cycler, clean driving.", "Struggled under defense.",
+                                "Reliable climb every match.", "Great auto routine.",
+                                "Mechanical hiccup mid-match.", "Strong partner, good comms.",
+                                "Only scores from the near zone.", "Driver adapts well mid-match.", "",
+                            ]),
+                        }
+                        pts = compute_points(entry)
+                        entry["points"] = pts
+                        s.add(ScoutEntry.from_submission(entry))
+                        if i == 0:
+                            first_pts = pts
                     if alliance == "red":
-                        red_perf += pts
+                        red_perf += first_pts
                     else:
-                        blue_perf += pts
+                        blue_perf += first_pts
 
             # First ~10 matches are "played" (have results); rest open for betting.
             if mn <= 10:

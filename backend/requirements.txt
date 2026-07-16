@@ -6,3 +6,6 @@ pydantic>=2.5,<3
 # Optional — only needed when DATABASE_URL points at PostgreSQL (Azure).
 # Safe to keep installed locally; SQLite is used by default.
 psycopg[binary]>=3.1,<4
+# Optional — Haze Intel upgrades from rule-based summaries to Claude when
+# ANTHROPIC_API_KEY is set. Without the key it stays rule-based (offline safe).
+anthropic>=0.60

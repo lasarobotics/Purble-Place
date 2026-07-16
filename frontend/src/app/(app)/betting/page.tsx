@@ -88,12 +88,12 @@ export default function BettingPage() {
 
   return (
     <div>
-      <div className="page-title"><h1>🎲 Purple Bucks Betting</h1>
-        <span className="badge haze">🟣 {session?.bucks} PB</span>
+      <div className="page-title"><h1>Purple Bucks Betting</h1>
+        <span className="badge haze">{session?.bucks} PB</span>
       </div>
       <p className="page-sub">Odds come from Statbotics win predictions. Favourites pay little; underdogs pay big. Locks when the match starts.</p>
 
-      {!enabled && <div className="card" style={{ marginBottom: 16, borderColor: "rgba(245,158,11,0.5)" }}>⚠️ Betting is currently turned off by an admin.</div>}
+      {!enabled && <div className="card" style={{ marginBottom: 16, borderColor: "rgba(245,158,11,0.5)" }}>Betting is currently turned off by an admin.</div>}
 
       <div className="grid cols-2">
         <div className="card">
@@ -104,7 +104,7 @@ export default function BettingPage() {
           </div>
 
           {!sel || !odds ? (
-            <Empty icon="🗓️" title="No open match" sub="Pick a match to see odds." />
+            <Empty icon="calendar" title="No open match" sub="Pick a match to see odds." />
           ) : (
             <>
               <div className="grid cols-2" style={{ marginBottom: 14 }}>
@@ -131,7 +131,7 @@ export default function BettingPage() {
               </div>
 
               {odds.locked ? (
-                <div className="card tight center" style={{ borderColor: "rgba(245,158,11,0.5)" }}>🔒 Betting closed for this match</div>
+                <div className="card tight center" style={{ borderColor: "rgba(245,158,11,0.5)" }}>Betting closed for this match</div>
               ) : (
                 <>
                   <label className="field">
@@ -164,7 +164,7 @@ export default function BettingPage() {
           </div>
           <div className="card">
             <div className="card-h"><h3>My Bets</h3></div>
-            {bets.length === 0 ? <Empty icon="🎲" title="No bets yet" /> : (
+            {bets.length === 0 ? <Empty icon="dice" title="No bets yet" /> : (
               <div className="table-wrap">
                 <table className="data">
                   <thead><tr><th>Match</th><th>Pick</th><th className="num">Wager</th><th className="num">Payout</th><th>Status</th></tr></thead>

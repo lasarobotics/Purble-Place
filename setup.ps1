@@ -16,8 +16,12 @@ Write-Host "[2/4] Installing backend dependencies..." -ForegroundColor Cyan
 & ".\.venv\Scripts\python.exe" -m pip install -r requirements.txt -q
 if (-not (Test-Path ".env")) { Copy-Item ".env.example" ".env" }
 
-Write-Host "[3/4] Seeding a demo event (12 teams, 18 matches)..." -ForegroundColor Cyan
-& ".\.venv\Scripts\python.exe" -m app.demo_data
+Write-Host "[3/4] Loading FIT District Championship - Apollo (2026txcmp2) from TBA..." -ForegroundColor Cyan
+& ".\.venv\Scripts\python.exe" -m app.load_event 2026txcmp2
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  TBA unreachable - seeding offline demo data instead." -ForegroundColor Yellow
+    & ".\.venv\Scripts\python.exe" -m app.demo_data
+}
 
 # --- Frontend ------------------------------------------------------------
 Write-Host "[4/4] Installing frontend dependencies..." -ForegroundColor Cyan

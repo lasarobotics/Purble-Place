@@ -34,7 +34,7 @@ export default function AccountPage() {
 
   return (
     <div>
-      <div className="page-title"><h1>👤 Account</h1></div>
+      <div className="page-title"><h1>Account</h1></div>
 
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="row" style={{ justifyContent: "space-between" }}>
@@ -62,7 +62,7 @@ export default function AccountPage() {
       <div className="grid cols-2">
         <div className="card">
           <div className="card-h"><h3>My Scouting</h3><span className="badge muted">{entries.length}</span></div>
-          {entries.length === 0 ? <Empty icon="📋" title="Nothing scouted yet" /> : (
+          {entries.length === 0 ? <Empty icon="clipboard" title="Nothing scouted yet" /> : (
             <div className="table-wrap">
               <table className="data">
                 <thead><tr><th>Match</th><th>Team</th><th className="num">Pts</th><th>When</th></tr></thead>
@@ -83,7 +83,7 @@ export default function AccountPage() {
 
         <div className="card">
           <div className="card-h"><h3>My Bets</h3><span className="badge muted">{bets.length}</span></div>
-          {bets.length === 0 ? <Empty icon="🎲" title="No bets placed" /> : (
+          {bets.length === 0 ? <Empty icon="dice" title="No bets placed" /> : (
             <div className="table-wrap">
               <table className="data">
                 <thead><tr><th>Match</th><th>Pick</th><th className="num">Wager</th><th>Result</th></tr></thead>

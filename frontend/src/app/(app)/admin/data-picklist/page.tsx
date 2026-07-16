@@ -14,17 +14,17 @@ export default function DataPicklistPage() {
   }, []);
 
   if (loading) return <Loading />;
-  if (!data || data.teams.length === 0) return (<div><h1>🧠 Data Picklist</h1><Empty icon="🧠" title="Not enough data yet" sub="Scout matches and set an event so EPA + schedule are available." /></div>);
+  if (!data || data.teams.length === 0) return (<div><h1>Data Picklist</h1><Empty icon="trend" title="Not enough data yet" sub="Scout matches and set an event so EPA + schedule are available." /></div>);
 
   return (
     <div>
-      <div className="page-title"><h1>🧠 Data Picklist</h1>
+      <div className="page-title"><h1>Data Picklist</h1>
         <span className="badge muted">auto-ranked</span>
       </div>
       <p className="page-sub">Robots ranked by <b>true strength</b> — adjusted for consistency and strength of schedule, so teams carried by easy match-ups don't rank too high.</p>
 
       <div className="card" style={{ marginBottom: 16, borderColor: "var(--border-strong)" }}>
-        <div className="row" style={{ gap: 10 }}><span style={{ fontSize: "1.4rem" }}>💡</span><p style={{ margin: 0 }}>{data.explanation}</p></div>
+        <div className="row" style={{ gap: 10 }}><p style={{ margin: 0 }}>{data.explanation}</p></div>
         <div className="row" style={{ gap: 16, marginTop: 10, fontSize: "0.8rem" }} >
           <span className="badge muted">Event avg EPA: {data.event_avg_epa}</span>
           <span className="muted">SOS = opponent strength − partner help. Positive means a hard road travelled alone.</span>

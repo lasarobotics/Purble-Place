@@ -42,8 +42,8 @@ export default function PreMatchPage() {
   if (!data?.event) {
     return (
       <div>
-        <h1>🤖 Pre-Match</h1>
-        <Empty icon="🗓️" title="No event selected" sub="An admin needs to set the current event in the Dashboard." />
+        <h1>Pre-Match</h1>
+        <Empty icon="calendar" title="No event selected" sub="An admin needs to set the current event in the Dashboard." />
       </div>
     );
   }
@@ -52,7 +52,7 @@ export default function PreMatchPage() {
 
   return (
     <div>
-      <div className="page-title"><h1>🤖 Pre-Match</h1>
+      <div className="page-title"><h1>Pre-Match</h1>
         <span className="badge muted">{data.event}</span>
       </div>
       <p className="page-sub">Scout the robots while you wait — tap any team for robot photos & stats.</p>
@@ -68,7 +68,7 @@ export default function PreMatchPage() {
           </div>
           <form onSubmit={doLookup} className="row" style={{ gap: 8 }}>
             <input value={lookup} onChange={(e) => setLookup(e.target.value)} placeholder="Look up team #" style={{ width: 150 }} />
-            <button className="btn" type="submit">🔎</button>
+            <button className="btn" type="submit">Search</button>
           </form>
         </div>
       </div>
@@ -108,7 +108,7 @@ function Alliance({ teams, color, onExpand }: { teams: Team[]; color: "red" | "b
               </div>
               <div className="tname">{t.nickname || "—"}</div>
             </div>
-            <span className="badge muted">{t.photos?.length ? `📷 ${t.photos.length}` : "tap"}</span>
+            <span className="badge muted">{t.photos?.length ? `${t.photos.length} photos` : "tap"}</span>
           </div>
         ))}
         {!teams.length && <div className="faint">Teams to be determined.</div>}

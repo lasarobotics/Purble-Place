@@ -12,6 +12,7 @@ from ..analytics import (
     data_picklist,
     event_teams,
     rank_teams,
+    scout_disagreements,
     team_entries,
     team_heatmap,
     team_summary,
@@ -256,6 +257,18 @@ async def get_data_picklist(
     return data_picklist(session, event_key)
 
 
+@router.get("/disagreements")
+def get_disagreements(
+    event: str | None = None,
+    session: Session = Depends(get_session),
+    _: Scouter = Depends(require_admin),
+) -> dict:
+    """Consensus radar: teams where scouts disagree with each other, or the
+    numbers disagree with the qualitative reads."""
+    event_key = (event or get_setting(session, "current_event")).strip()
+    return scout_disagreements(session, event_key)
+
+
 @router.get("/compare")
 async def compare(
     teams: str,
@@ -322,6 +335,7 @@ def get_team_reports(
                 "auto_climb": entry.auto_climb,
                 "climb": entry.climb,
                 "climb_seconds": entry.climb_seconds,
+                "tags": entry.tags or [],
                 "played_defense": entry.played_defense,
                 "defense_rating": entry.defense_rating,
                 "defense_on": entry.defense_on,
@@ -331,6 +345,7 @@ def get_team_reports(
                 "fouls": entry.fouls,
                 "failure": entry.failure,
                 "failure_details": entry.failure_details,
+                "no_show": entry.no_show,
                 "notes": entry.notes,
                 "created_at": entry.created_at.isoformat(),
             }
@@ -349,6 +364,7 @@ def scouters(
         out.append(
             {
                 "scout_id": s.scout_id,
+                "s_number": s.s_number,
                 "display_name": s.display_name or s.scout_id,
                 "is_admin": s.is_admin,
                 "bucks": s.bucks,

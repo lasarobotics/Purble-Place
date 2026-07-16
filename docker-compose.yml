@@ -1,0 +1,51 @@
+# HazeHub full stack: PostgreSQL + FastAPI + Next.js.
+# This mirrors the Azure topology (Container Apps + Azure Database for
+# PostgreSQL) so what runs here runs there.
+#
+#   docker compose up --build
+#   web  -> http://localhost:3000
+#   api  -> http://localhost:8000  (docs at /docs)
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: haze
+      POSTGRES_PASSWORD: haze
+      POSTGRES_DB: hazehub
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U haze -d hazehub"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://haze:haze@db:5432/hazehub
+      HAZEHUB_TEAM_PASSWORD: HazeRain!
+      HAZEHUB_SECRET: change-me-in-production
+      HAZEHUB_SEASON: "2026"
+      HAZEHUB_HOME_TEAMS: "418,436"
+      # HAZEHUB_CORS: https://your-web-host
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        # Inlined at build time — the browser calls this URL directly.
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:

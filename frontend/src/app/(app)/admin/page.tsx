@@ -88,7 +88,7 @@ export default function AdminDashboard() {
 
   return (
     <div>
-      <div className="page-title"><h1>⚙️ Admin Dashboard</h1>
+      <div className="page-title"><h1>Admin Dashboard</h1>
         <span className={`badge ${s.is_azure ? "blue" : "muted"}`}>{s.is_azure ? "Azure" : "Local"} · {s.season}</span>
       </div>
       <p className="page-sub">Control the event, match flow, betting and scouts.</p>
@@ -102,7 +102,7 @@ export default function AdminDashboard() {
 
       <div className="grid cols-2">
         <div className="card">
-          <h3>🗓️ Event</h3>
+          <h3>Event</h3>
           <label className="field"><span>TBA Event Key</span>
             <input value={event} onChange={(e) => setEvent(e.target.value)} placeholder="e.g. 2026txende" />
           </label>
@@ -111,7 +111,7 @@ export default function AdminDashboard() {
         </div>
 
         <div className="card">
-          <h3>🎲 Betting Recovery</h3>
+          <h3>Betting Recovery</h3>
           <p className="muted">Bets lock when scouting starts. Winners settle from TBA results; payouts use Statbotics odds captured when the bet was placed.</p>
           <div className="seg" style={{ marginBottom: 12 }}>
             <button
@@ -129,13 +129,13 @@ export default function AdminDashboard() {
               Turn Off
             </button>
           </div>
-          <button className="btn danger block" onClick={resetBetting}>♻️ Reset everyone to 100 Purple Bucks</button>
+          <button className="btn danger block" onClick={resetBetting}>Reset everyone to 100 Purple Bucks</button>
           <p className="faint" style={{ fontSize: "0.75rem", marginTop: 8 }}>Use reset only for event setup/testing mistakes. Individual bad bets can be deleted below.</p>
         </div>
       </div>
 
       <div className="card" style={{ marginTop: 16 }}>
-        <div className="card-h"><h3>🏁 Match Flow</h3>
+        <div className="card-h"><h3>Match Flow</h3>
           <div className="row" style={{ gap: 10 }}>
             <span className="muted">Current match on field</span>
             <Stepper value={curMatch} onChange={saveCurrent} />
@@ -148,7 +148,7 @@ export default function AdminDashboard() {
             <tbody>
               {qm.map((m) => (
                 <tr key={m.match_key} style={m.match_number === curMatch ? { background: "rgba(102,51,153,0.22)" } : {}}>
-                  <td>{m.match_number}{m.match_number === curMatch ? " 🔴" : ""}</td>
+                  <td>{m.match_number}{m.match_number === curMatch ? " · live" : ""}</td>
                   <td>
                     <div className="match-team-list">
                       {(m.red_teams?.length ? m.red_teams : m.red.map((team_number) => ({ team_number, nickname: "" }))).map((t) => (
@@ -178,7 +178,7 @@ export default function AdminDashboard() {
       </div>
 
       <div className="card" style={{ marginTop: 16 }}>
-        <div className="card-h"><h3>🎲 Bets</h3><span className="badge muted">{bets.length}</span></div>
+        <div className="card-h"><h3>Bets</h3><span className="badge muted">{bets.length}</span></div>
         {bets.length === 0 ? (
           <p className="muted">No bets yet.</p>
         ) : (
@@ -205,7 +205,7 @@ export default function AdminDashboard() {
       </div>
 
       <div className="card" style={{ marginTop: 16 }}>
-        <div className="card-h"><h3>👥 Scouts</h3></div>
+        <div className="card-h"><h3>Scouts</h3></div>
         <div className="table-wrap">
           <table className="data">
             <thead><tr><th>Scout</th><th>Role</th><th className="num">Matches</th><th className="num">Bucks</th></tr></thead>

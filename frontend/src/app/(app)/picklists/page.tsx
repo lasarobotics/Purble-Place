@@ -81,7 +81,7 @@ export default function PicklistsPage() {
   if (!unlocked) {
     return (
       <div>
-        <div className="page-title"><h1>📝 Picklists</h1></div>
+        <div className="page-title"><h1>Picklists</h1></div>
         <div className="card" style={{ maxWidth: 420 }}>
           <h3>Picklist Password</h3>
           <label className="field">
@@ -115,7 +115,7 @@ export default function PicklistsPage() {
 
   return (
     <div>
-      <div className="page-title"><h1>📝 Picklists</h1></div>
+      <div className="page-title"><h1>Picklists</h1></div>
       <p className="page-sub">Create a strategy list, fill the four default team slots, add more teams if needed, then send it to admin.</p>
 
       <div className="row" style={{ gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
@@ -128,7 +128,7 @@ export default function PicklistsPage() {
       {active ? (
         <Editor key={active.id} list={active} canEdit={active.owner_id === session?.scout_id || !!session?.is_admin} onSend={send} onDelete={!active.is_master ? remove : undefined} />
       ) : (
-        <Empty icon="📋" title="No picklists yet" sub="Create one to start ranking teams." />
+        <Empty icon="clipboard" title="No picklists yet" sub="Create one to start ranking teams." />
       )}
     </div>
   );

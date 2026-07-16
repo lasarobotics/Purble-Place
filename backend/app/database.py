@@ -27,6 +27,28 @@ def init_db() -> None:
     from . import models  # noqa: F401
 
     SQLModel.metadata.create_all(engine)
+    _apply_micro_migrations()
+
+
+# Columns added after the first release: (table, column, DDL type).
+# create_all never ALTERs existing tables, so this closes the gap for local
+# SQLite files created before the column existed. Works on Postgres too.
+# (Empty after the 2027-schema rebuild — tables were renamed, so old dev DBs
+# should be regenerated with `python -m app.demo_data`.)
+_NEW_COLUMNS: list[tuple[str, str, str]] = []
+
+
+def _apply_micro_migrations() -> None:
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    with engine.begin() as conn:
+        for table, column, ddl_type in _NEW_COLUMNS:
+            if table not in inspector.get_table_names():
+                continue
+            existing = {c["name"] for c in inspector.get_columns(table)}
+            if column not in existing:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}"))
 
 
 def get_session() -> Iterator[Session]:

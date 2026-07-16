@@ -76,7 +76,7 @@ export default function TeamSearchPage() {
 
   return (
     <div>
-      <div className="page-title"><h1>🔎 Team Search</h1></div>
+      <div className="page-title"><h1>Team Search</h1></div>
       <p className="page-sub">Every match for a team, with a field heatmap of all their scoring positions.</p>
 
       <div className="card team-name-white" style={{ marginBottom: 16 }}>
@@ -96,9 +96,9 @@ export default function TeamSearchPage() {
       </div>
 
       {loading ? <Loading /> : !summary ? (
-        <Empty icon="🤖" title="Search a team" sub="Pick a team above to see their data." />
+        <Empty icon="bot" title="Search a team" sub="Pick a team above to see their data." />
       ) : summary.matches === 0 ? (
-        <Empty icon="📭" title={`No scouting data for ${team}`} />
+        <Empty icon="inbox" title={`No scouting data for ${team}`} />
       ) : (
         <>
           <div className="card team-name-white" style={{ marginBottom: 16 }}>
@@ -130,7 +130,7 @@ export default function TeamSearchPage() {
                     <span className="badge haze">{pct(heat.accuracy)} accuracy</span>
                   </div>
                 </>
-              ) : <Empty icon="🗺️" title="No mapped scoring" />}
+              ) : <Empty icon="map" title="No mapped scoring" />}
             </div>
 
             <div className="card">
@@ -164,7 +164,7 @@ export default function TeamSearchPage() {
               <span className="badge muted">{reports.length} entries</span>
             </div>
             {reports.length === 0 ? (
-              <Empty icon="📋" title="No scouter reports" />
+              <Empty icon="clipboard" title="No scouter reports" />
             ) : (
               <div className="grid" style={{ gap: 10 }}>
                 {reports.map((r) => (

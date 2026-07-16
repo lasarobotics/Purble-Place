@@ -48,7 +48,7 @@ export default function HomePage() {
   return (
     <div>
       <div className="page-title">
-        <h1>Welcome back, <span className="haze-text">{session?.display_name}</span> 🟣</h1>
+        <h1>Overview</h1>
       </div>
       <p className="page-sub">Your hub for live scouting, betting and strategy.</p>
 
@@ -62,7 +62,7 @@ export default function HomePage() {
       <div className="grid cols-2">
         {/* Leaderboard */}
         <div className="card">
-          <div className="card-h"><h3>🏆 Top Bettors</h3><span className="badge muted">{board.length} scouts</span></div>
+          <div className="card-h"><h3>Top Bettors</h3><span className="badge muted">{board.length} scouts</span></div>
           <div className="table-wrap">
             <table className="data">
               <thead><tr><th>#</th><th>Scout</th><th className="num">Bucks</th><th className="num">Win%</th></tr></thead>
@@ -83,7 +83,7 @@ export default function HomePage() {
         {/* On deck */}
         <div className="card">
           <div className="card-h">
-            <h3>🤖 On The Field</h3>
+            <h3>On The Field</h3>
             <Link href="/prematch" className="btn sm ghost">Pre-Match →</Link>
           </div>
           {!cur?.event ? (
@@ -104,7 +104,7 @@ export default function HomePage() {
 
       {/* My open bets */}
       <div className="card" style={{ marginTop: 20 }}>
-        <div className="card-h"><h3>🎲 My Open Bets</h3><Link href="/betting" className="btn sm ghost">Betting →</Link></div>
+        <div className="card-h"><h3>My Open Bets</h3><Link href="/betting" className="btn sm ghost">Betting →</Link></div>
         {openBets.length === 0 ? (
           <p className="muted">No open bets. Head to the Betting tab to wager on upcoming matches.</p>
         ) : (

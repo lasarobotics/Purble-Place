@@ -66,4 +66,5 @@ def public_config() -> dict:
         "brand_color": settings.BRAND_COLOR,
         "season": settings.SEASON,
         "is_azure": settings.IS_AZURE,
+        "home_teams": settings.HOME_TEAMS,
     }

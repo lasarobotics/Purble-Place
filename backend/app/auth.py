@@ -13,14 +13,21 @@ import hashlib
 import hmac
 import json
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import Depends, Header, HTTPException, status
-from sqlmodel import Session
+from sqlmodel import Session, func, select
 
 from .config import settings
 from .database import get_session
 from .models import Scouter
+
+
+def next_s_number(session: Session) -> int:
+    """Sequential scout number (s_number is unique in the scouters table)."""
+    highest = session.exec(select(func.max(Scouter.s_number))).one()
+    return int(highest or 0) + 1
 
 
 def _sign(data: bytes) -> str:
@@ -72,13 +79,15 @@ def get_or_create_scouter(session: Session, scout_id: str) -> Scouter:
     if scouter is None:
         scouter = Scouter(
             scout_id=scout_id,
+            s_number=next_s_number(session),
             display_name=scout_id,
             is_admin=(scout_id.lower() == settings.ADMIN_ID.lower()),
             bucks=settings.STARTING_BUCKS,
         )
-        session.add(scouter)
-        session.commit()
-        session.refresh(scouter)
+    scouter.last_seen = datetime.now(timezone.utc)
+    session.add(scouter)
+    session.commit()
+    session.refresh(scouter)
     return scouter
 
 

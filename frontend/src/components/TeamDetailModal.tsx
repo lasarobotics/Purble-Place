@@ -6,6 +6,7 @@ import type { HeatPoint, Team, TeamSummary } from "@/lib/types";
 import { Empty, Loading, Modal, Stat, TeamIdentity } from "@/components/ui";
 import { FieldHeatmap } from "@/components/Field";
 import { LineChart } from "@/components/Chart";
+import { HazeIntel, TagCloud } from "@/components/Insight";
 
 type TeamLike = Pick<Team, "team_number"> & Partial<Team>;
 
@@ -30,6 +31,7 @@ interface TeamReport {
   failure: boolean;
   failure_details: string;
   notes: string;
+  tags?: string[];
   created_at: string;
 }
 
@@ -95,7 +97,10 @@ function TeamDetailBody({ data }: { data: TeamDetail }) {
     <div className="team-detail">
       <div className="card tight">
         <TeamIdentity team={summary} size="lg" />
+        <TagCloud tags={summary.tags} />
       </div>
+
+      <HazeIntel teamNumber={summary.team} />
 
       <div className="grid cols-4">
         <Stat label="Matches" value={summary.matches} />
@@ -159,6 +164,11 @@ function TeamDetailBody({ data }: { data: TeamDetail }) {
                     {r.failure && <span className="badge red">Failure</span>}
                   </div>
                 </div>
+                {r.tags && r.tags.length > 0 && (
+                  <div className="tag-list" style={{ marginTop: 8 }}>
+                    {r.tags.map((t) => <span key={t} className="chip static sm">{t}</span>)}
+                  </div>
+                )}
                 <div className="report-grid">
                   <div>
                     <span className="faint">Autonomous</span>
