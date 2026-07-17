@@ -71,6 +71,19 @@ class Settings:
     cors_extra: tuple[str, ...] = ()
 
     @property
+    def mongodb_is_default(self) -> bool:
+        """True when MONGODB_URI was never configured (localhost dev default)."""
+        return "localhost:27017" in self.mongodb_uri
+
+    @property
+    def mongodb_host(self) -> str:
+        """Host portion of the Mongo URI with credentials stripped (log-safe)."""
+        uri = self.mongodb_uri
+        after_scheme = uri.split("://", 1)[-1]
+        host = after_scheme.rsplit("@", 1)[-1]
+        return host.split("/", 1)[0].split("?", 1)[0]
+
+    @property
     def cors_origins(self) -> list[str]:
         origins = [
             "http://localhost:3000",

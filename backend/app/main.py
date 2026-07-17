@@ -64,11 +64,18 @@ async def mongo_error_handler(request: Request, exc: PyMongoError) -> JSONRespon
             "MongoDB connection string is invalid: "
             f"{exc}. Check the MONGODB_URI project setting."
         )
+    elif settings.mongodb_is_default:
+        detail = (
+            "MONGODB_URI is not set on this deployment, so the backend is "
+            "pointing at localhost. Add MONGODB_URI (a MongoDB Atlas "
+            "mongodb+srv:// connection string) in Vercel → Project → "
+            "Settings → Environment Variables, then redeploy."
+        )
     else:
         detail = (
-            "Database unreachable. Set MONGODB_URI in the Vercel project "
-            "settings to your MongoDB Atlas connection string and allow "
-            "access from anywhere (0.0.0.0/0) in Atlas Network Access."
+            f"Could not reach MongoDB at '{settings.mongodb_host}'. Check the "
+            "username/password in MONGODB_URI and allow access from anywhere "
+            "(0.0.0.0/0) in Atlas → Network Access."
         )
     return JSONResponse(status_code=503, content={"detail": detail})
 
@@ -101,5 +108,10 @@ def health() -> dict:
         "season": settings.season,
         "environment": "vercel" if settings.is_vercel else "local",
         "database": "mongodb",
+        "mongodb": {
+            "configured": not settings.mongodb_is_default,
+            "host": settings.mongodb_host,
+            "reachable": mongo_ok,
+        },
         "realtime": "polling (/api/events)",
     }
