@@ -1,5 +1,8 @@
 fastapi>=0.115,<1
 pydantic>=2.10,<3
+# pymongo >=4.7 bundles dnspython, so Atlas "mongodb+srv://" URIs work.
 pymongo>=4.11,<5
+# Trusted CA bundle for Atlas TLS on serverless (Vercel) runtimes.
+certifi>=2024.2.2
 httpx>=0.27,<1
 uvicorn>=0.30,<1

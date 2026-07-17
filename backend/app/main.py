@@ -10,8 +10,10 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pymongo.errors import ConfigurationError, PyMongoError
 
 from app.config import settings
 from app.database import ensure_schema
@@ -48,6 +50,28 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.exception_handler(PyMongoError)
+async def mongo_error_handler(request: Request, exc: PyMongoError) -> JSONResponse:
+    """Turn opaque 500s into an actionable 503 when MongoDB is the problem.
+
+    On Vercel this almost always means MONGODB_URI isn't set (the default
+    points at localhost) or the Atlas connection string / network access list
+    is wrong.
+    """
+    if isinstance(exc, ConfigurationError):
+        detail = (
+            "MongoDB connection string is invalid: "
+            f"{exc}. Check the MONGODB_URI project setting."
+        )
+    else:
+        detail = (
+            "Database unreachable. Set MONGODB_URI in the Vercel project "
+            "settings to your MongoDB Atlas connection string and allow "
+            "access from anywhere (0.0.0.0/0) in Atlas Network Access."
+        )
+    return JSONResponse(status_code=503, content={"detail": detail})
+
 
 for r in (
     auth.router,
