@@ -241,7 +241,8 @@ export function Rating({ value, onChange, max = 5 }: { value: number; onChange: 
             width: 38,
             padding: "8px 0",
             background: n <= value ? "var(--haze)" : "var(--panel-2)",
-            borderColor: n <= value ? "transparent" : "var(--border)",
+            color: n <= value ? "#fff" : undefined,
+            borderColor: n <= value ? "var(--haze-deep)" : "var(--border)",
           }}
         >
           {n}

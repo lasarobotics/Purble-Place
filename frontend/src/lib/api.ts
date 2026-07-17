@@ -12,16 +12,6 @@ export function apiBase(): string {
   return "http://localhost:8000";
 }
 
-export function wsUrl(): string {
-  const base = apiBase();
-  if (base.startsWith("http")) return base.replace(/^http/, "ws") + "/ws";
-  if (typeof window !== "undefined") {
-    const proto = window.location.protocol === "https:" ? "wss" : "ws";
-    return `${proto}://${window.location.host}/ws`;
-  }
-  return "ws://localhost:8000/ws";
-}
-
 const TOKEN_KEY = "hazehub.token";
 
 export function getToken(): string {

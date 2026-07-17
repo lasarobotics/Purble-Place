@@ -1,21 +1,31 @@
 """Match scouting + pit scouting."""
+
 from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlmodel import Session, select
+from pymongo.database import Database
 
 from ..auth import current_scouter
-from ..database import get_session
+from ..database import database_dependency
 from ..external import sync_team
-from ..models import MatchRecord, PitEntry, Scouter, ScoutEntry, TeamCache
+from ..models import MatchScoutingDocument, PitScoutingDocument, ScoutingData
 from ..realtime import emit
+from ..repositories import ConflictError, HazeHubRepository, ReferenceNotFoundError
 from ..scoring import compute_points
 from ..store import get_setting
+from ..views import EntryView, ScouterView, list_entries
 
 router = APIRouter(prefix="/api/scout", tags=["scouting"])
+
+PAYLOAD_KEYS = (
+    "heatmap", "auto_leave", "auto_climb", "climb", "climb_seconds",
+    "tags", "played_defense", "defense_rating", "defense_on",
+    "successful_stops", "driver_skill", "speed_rating",
+    "failure", "failure_details",
+)
 
 
 class ScoutIn(BaseModel):
@@ -48,7 +58,7 @@ class ScoutIn(BaseModel):
     notes: str = ""
 
 
-def _entry_dict(e: ScoutEntry) -> dict:
+def entry_dict(e: EntryView) -> dict:
     return {
         "id": e.id,
         "client_uuid": e.client_uuid,
@@ -81,86 +91,125 @@ def _entry_dict(e: ScoutEntry) -> dict:
     }
 
 
+def build_document(body: ScoutIn, event_key: str, scout_id: str) -> MatchScoutingDocument:
+    submission = body.model_dump()
+    payload = {k: submission[k] for k in PAYLOAD_KEYS}
+    payload["foul_count"] = int(body.fouls or 0)
+    points = 0.0 if body.no_show else compute_points(
+        {**submission, "foul_count": payload["foul_count"]}
+    )
+    return MatchScoutingDocument(
+        client_submission_id=body.client_uuid or None,
+        event_key=event_key,
+        comp_level=body.comp_level,
+        match_num=int(body.match_number),
+        team_num=int(body.team_number),
+        alliance=body.alliance,
+        station=max(1, min(3, int(body.station or 1))),
+        scouter_id=scout_id,
+        data=ScoutingData(**payload),
+        points=points,
+        no_show=bool(body.no_show),
+        comments=body.notes or None,
+    )
+
+
+def find_by_client_uuid(db: Database, client_uuid: str | None) -> EntryView | None:
+    if not client_uuid:
+        return None
+    doc = db.match_scouting.find_one({"client_submission_id": client_uuid})
+    return EntryView(doc) if doc else None
+
+
 @router.post("")
-async def submit_scout(
+def submit_scout(
     body: ScoutIn,
-    session: Session = Depends(get_session),
-    scouter: Scouter = Depends(current_scouter),
+    db: Database = Depends(database_dependency),
+    scouter: ScouterView = Depends(current_scouter),
 ) -> dict:
-    event_key = (body.event_key or get_setting(session, "current_event")).strip()
+    event_key = (body.event_key or get_setting(db, "current_event")).strip()
+    if not event_key:
+        raise HTTPException(status_code=400, detail="No event configured yet")
 
     # Idempotency: re-syncing the same offline entry must not duplicate.
-    if body.client_uuid:
-        existing = session.exec(
-            select(ScoutEntry).where(ScoutEntry.client_uuid == body.client_uuid)
-        ).first()
+    existing = find_by_client_uuid(db, body.client_uuid)
+    if existing:
+        return {"ok": True, "duplicate": True, "entry": entry_dict(existing)}
+
+    try:
+        document = build_document(body, event_key, scouter.scout_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    repo = HazeHubRepository(db)
+    try:
+        stored = repo.submit_match_scouting(document)
+    except ReferenceNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ConflictError as exc:
+        # Unique-key clash: either the same offline entry raced in, or this
+        # scouter already covered this robot in this match.
+        existing = find_by_client_uuid(db, body.client_uuid)
         if existing:
-            return {"ok": True, "duplicate": True, "entry": _entry_dict(existing)}
+            return {"ok": True, "duplicate": True, "entry": entry_dict(existing)}
+        raise HTTPException(
+            status_code=409,
+            detail="You already submitted a report for this robot in this match",
+        ) from exc
 
-    data = body.model_dump()
-    data["event_key"] = event_key
-    data["scout_id"] = scouter.scout_id
-    # A no-show robot scores nothing regardless of stray taps.
-    data["points"] = 0.0 if body.no_show else compute_points(data)
+    db.scouters.update_one(
+        {"_id": scouter.scout_id}, {"$inc": {"matches_scouted": 1}}
+    )
 
-    entry = ScoutEntry.from_submission(data)
-    session.add(entry)
-
-    scouter.matches_scouted += 1
-    session.add(scouter)
-
-    match = session.exec(
-        select(MatchRecord).where(
-            MatchRecord.event_key == event_key,
-            MatchRecord.comp_level == body.comp_level,
-            MatchRecord.match_number == body.match_number,
+    # First scouting report on a match closes its betting window.
+    match = db.matches.find_one({"_id": document.match_key}, {"betting_locked": 1})
+    if match and not match.get("betting_locked"):
+        db.matches.update_one(
+            {"_id": document.match_key}, {"$set": {"betting_locked": True}}
         )
-    ).first()
-    if match and not match.betting_locked:
-        match.betting_locked = True
-        session.add(match)
-
-    session.commit()
-    session.refresh(entry)
 
     # Warm the team cache the first time we see a team (best effort).
-    if session.get(TeamCache, body.team_number) is None:
+    if db.team_cache.find_one({"_id": int(body.team_number)}, {"_id": 1}) is None:
         try:
-            await sync_team(session, body.team_number)
+            sync_team(db, body.team_number)
         except Exception:
             pass
 
-    emit("scout_submitted", {"team": entry.team_number, "match": entry.match_number, "bets_locked": bool(match)})
-    return {"ok": True, "duplicate": False, "entry": _entry_dict(entry)}
+    emit(
+        db,
+        "scout_submitted",
+        {
+            "team": document.team_num,
+            "match": document.match_num,
+            "bets_locked": bool(match),
+        },
+    )
+    return {"ok": True, "duplicate": False, "entry": entry_dict(EntryView(stored))}
 
 
 @router.get("/mine")
 def my_entries(
-    session: Session = Depends(get_session),
-    scouter: Scouter = Depends(current_scouter),
+    db: Database = Depends(database_dependency),
+    scouter: ScouterView = Depends(current_scouter),
 ) -> list[dict]:
-    rows = session.exec(
-        select(ScoutEntry)
-        .where(ScoutEntry.scout_id == scouter.scout_id)
-        .order_by(ScoutEntry.id.desc())
-    ).all()
-    return [_entry_dict(e) for e in rows]
+    rows = list_entries(db, scout_id=scouter.scout_id)
+    rows.sort(key=lambda e: e.created_at, reverse=True)
+    return [entry_dict(e) for e in rows]
 
 
 @router.get("/last-assignment")
 def last_assignment(
-    session: Session = Depends(get_session),
-    scouter: Scouter = Depends(current_scouter),
+    db: Database = Depends(database_dependency),
+    scouter: ScouterView = Depends(current_scouter),
 ) -> dict:
     """Remember the scouter's last alliance + station so the next match
     auto-fills the same slot (they can still change it)."""
-    last = session.exec(
-        select(ScoutEntry)
-        .where(ScoutEntry.scout_id == scouter.scout_id)
-        .order_by(ScoutEntry.id.desc())
-    ).first()
-    if not last:
+    doc = db.match_scouting.find_one(
+        {"scouter_id": scouter.scout_id}, sort=[("submitted_at", -1)]
+    )
+    if not doc:
         return {"alliance": "red", "station": 1}
+    last = EntryView(doc)
     return {"alliance": last.alliance, "station": last.station}
 
 
@@ -168,17 +217,12 @@ def last_assignment(
 def entries_for_match(
     match_number: int,
     event: str | None = None,
-    session: Session = Depends(get_session),
-    scouter: Scouter = Depends(current_scouter),
+    db: Database = Depends(database_dependency),
+    _: ScouterView = Depends(current_scouter),
 ) -> list[dict]:
-    event_key = (event or get_setting(session, "current_event")).strip()
-    rows = session.exec(
-        select(ScoutEntry).where(
-            ScoutEntry.event_key == event_key,
-            ScoutEntry.match_number == match_number,
-        )
-    ).all()
-    return [_entry_dict(e) for e in rows]
+    event_key = (event or get_setting(db, "current_event")).strip()
+    rows = list_entries(db, event_key, match_number=match_number)
+    return [entry_dict(e) for e in rows]
 
 
 # --------------------------------------------------------------------------- #
@@ -204,28 +248,31 @@ pit_router = APIRouter(prefix="/api/pit", tags=["pit"])
 @pit_router.post("")
 def submit_pit(
     body: PitIn,
-    session: Session = Depends(get_session),
-    scouter: Scouter = Depends(current_scouter),
+    db: Database = Depends(database_dependency),
+    scouter: ScouterView = Depends(current_scouter),
 ) -> dict:
-    event_key = (body.event_key or get_setting(session, "current_event")).strip()
-    existing = session.exec(
-        select(PitEntry).where(
-            PitEntry.event_key == event_key,
-            PitEntry.team_number == body.team_number,
+    event_key = (body.event_key or get_setting(db, "current_event")).strip()
+    if not event_key:
+        raise HTTPException(status_code=400, detail="No event configured yet")
+    try:
+        document = PitScoutingDocument(
+            event_key=event_key,
+            team_num=int(body.team_number),
+            scouter_id=scouter.scout_id,
+            drivetrain=body.drivetrain,
+            weight_lbs=body.weight_lbs,
+            width_in=body.width_in,
+            length_in=body.length_in,
+            can_climb=body.can_climb,
+            auto_routine=body.auto_routine,
+            capabilities=body.capabilities,
+            robot_photo=body.robot_photo,
+            notes=body.notes,
         )
-    ).first()
-    data = body.model_dump()
-    data["event_key"] = event_key
-    if existing:
-        for k, v in data.items():
-            setattr(existing, k, v)
-        existing.scout_id = scouter.scout_id
-        row = existing
-    else:
-        row = PitEntry(**data, scout_id=scouter.scout_id)
-    session.add(row)
-    session.commit()
-    emit("pit_submitted", {"team": body.team_number})
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    HazeHubRepository(db).upsert_pit_scouting(document)
+    emit(db, "pit_submitted", {"team": body.team_number})
     return {"ok": True}
 
 
@@ -233,27 +280,24 @@ def submit_pit(
 def get_pit(
     team_number: int,
     event: str | None = None,
-    session: Session = Depends(get_session),
-    _: Scouter = Depends(current_scouter),
+    db: Database = Depends(database_dependency),
+    _: ScouterView = Depends(current_scouter),
 ) -> dict | None:
-    event_key = (event or get_setting(session, "current_event")).strip()
-    row = session.exec(
-        select(PitEntry).where(
-            PitEntry.event_key == event_key,
-            PitEntry.team_number == team_number,
-        )
-    ).first()
+    event_key = (event or get_setting(db, "current_event")).strip()
+    row = db.pit_scouting.find_one(
+        {"event_key": event_key, "team_num": int(team_number)}
+    )
     if not row:
         return None
     return {
-        "team_number": row.team_number,
-        "drivetrain": row.drivetrain,
-        "weight_lbs": row.weight_lbs,
-        "width_in": row.width_in,
-        "length_in": row.length_in,
-        "can_climb": row.can_climb,
-        "auto_routine": row.auto_routine,
-        "capabilities": row.capabilities,
-        "robot_photo": row.robot_photo,
-        "notes": row.notes,
+        "team_number": row.get("team_num"),
+        "drivetrain": row.get("drivetrain") or "",
+        "weight_lbs": row.get("weight_lbs"),
+        "width_in": row.get("width_in"),
+        "length_in": row.get("length_in"),
+        "can_climb": row.get("can_climb") or "none",
+        "auto_routine": row.get("auto_routine") or "",
+        "capabilities": row.get("capabilities") or [],
+        "robot_photo": row.get("robot_photo") or "",
+        "notes": row.get("notes") or "",
     }

@@ -1,16 +1,24 @@
 """Match schedule, current/on-deck match, pre-match team display."""
+
 from __future__ import annotations
 
 import re
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlmodel import Session, select
+from pymongo.database import Database
 
 from ..auth import current_scouter
-from ..database import get_session
+from ..database import database_dependency
 from ..external import sync_event_matches
-from ..models import MatchRecord, Scouter, TeamCache
 from ..store import get_setting
+from ..views import (
+    MatchView,
+    ScouterView,
+    TeamView,
+    get_match,
+    get_teams_cache,
+    list_matches,
+)
 
 router = APIRouter(prefix="/api/matches", tags=["matches"])
 
@@ -28,11 +36,11 @@ def _youtube_embed_url(value: str) -> str:
     return f"https://www.youtube.com/embed/{video_id}" if video_id else ""
 
 
-def _resolve_event(session: Session, event_key: str | None) -> str:
-    return (event_key or get_setting(session, "current_event")).strip()
+def _resolve_event(db: Database, event_key: str | None) -> str:
+    return (event_key or get_setting(db, "current_event")).strip()
 
 
-def _match_dict(m: MatchRecord) -> dict:
+def match_dict(m: MatchView) -> dict:
     return {
         "match_key": m.match_key,
         "event_key": m.event_key,
@@ -52,46 +60,10 @@ def _match_dict(m: MatchRecord) -> dict:
     }
 
 
-def _sorted_matches(session: Session, event_key: str) -> list[MatchRecord]:
-    order = {"qm": 0, "ef": 1, "qf": 2, "sf": 3, "f": 4}
-    rows = list(
-        session.exec(select(MatchRecord).where(MatchRecord.event_key == event_key)).all()
-    )
-    rows.sort(key=lambda m: (order.get(m.comp_level, 9), m.match_number))
-    return rows
-
-
-@router.get("")
-async def list_matches(
-    event: str | None = None,
-    refresh: bool = False,
-    include_teams: bool = False,
-    session: Session = Depends(get_session),
-    _: Scouter = Depends(current_scouter),
-) -> dict:
-    event_key = _resolve_event(session, event)
-    if not event_key:
-        return {"event": "", "matches": []}
-    existing = _sorted_matches(session, event_key)
-    if refresh or not existing:
-        await sync_event_matches(session, event_key)
-        existing = _sorted_matches(session, event_key)
-    if not include_teams:
-        return {"event": event_key, "matches": [_match_dict(m) for m in existing]}
-
-    async def enrich(m: MatchRecord) -> dict:
-        d = _match_dict(m)
-        d["red_teams"] = await _teams_payload(session, m.red)
-        d["blue_teams"] = await _teams_payload(session, m.blue)
-        return d
-
-    return {"event": event_key, "matches": [await enrich(m) for m in existing]}
-
-
-async def _teams_payload(session: Session, numbers: list[int]) -> list[dict]:
+def teams_payload(cache: dict[int, TeamView], numbers: list[int]) -> list[dict]:
     out = []
     for n in numbers:
-        tc = session.get(TeamCache, n)
+        tc = cache.get(n)
         out.append(
             {
                 "team_number": tc.team_number if tc else n,
@@ -106,53 +78,84 @@ async def _teams_payload(session: Session, numbers: list[int]) -> list[dict]:
     return out
 
 
-@router.get("/current")
-async def current_match(
+def _team_cache_for(db: Database, matches: list[MatchView]) -> dict[int, TeamView]:
+    numbers: set[int] = set()
+    for m in matches:
+        numbers.update(m.red)
+        numbers.update(m.blue)
+    return get_teams_cache(db, numbers)
+
+
+def enrich(db: Database, matches: list[MatchView]) -> list[dict]:
+    cache = _team_cache_for(db, matches)
+    out = []
+    for m in matches:
+        d = match_dict(m)
+        d["red_teams"] = teams_payload(cache, m.red)
+        d["blue_teams"] = teams_payload(cache, m.blue)
+        out.append(d)
+    return out
+
+
+@router.get("")
+def list_event_matches(
     event: str | None = None,
-    session: Session = Depends(get_session),
-    _: Scouter = Depends(current_scouter),
+    refresh: bool = False,
+    include_teams: bool = False,
+    db: Database = Depends(database_dependency),
+    _: ScouterView = Depends(current_scouter),
+) -> dict:
+    event_key = _resolve_event(db, event)
+    if not event_key:
+        return {"event": "", "matches": []}
+    existing = list_matches(db, event_key)
+    if refresh or not existing:
+        sync_event_matches(db, event_key)
+        existing = list_matches(db, event_key)
+    if not include_teams:
+        return {"event": event_key, "matches": [match_dict(m) for m in existing]}
+    return {"event": event_key, "matches": enrich(db, existing)}
+
+
+@router.get("/current")
+def current_match(
+    event: str | None = None,
+    db: Database = Depends(database_dependency),
+    _: ScouterView = Depends(current_scouter),
 ) -> dict:
     """The match on the field + the next few, with full team detail for the
     pre-match waiting screen (avatars, robot photos, EPA)."""
-    event_key = _resolve_event(session, event)
+    event_key = _resolve_event(db, event)
     if not event_key:
         return {"event": "", "current": None, "on_deck": []}
-    matches = _sorted_matches(session, event_key)
+    matches = list_matches(db, event_key)
     if not matches:
-        await sync_event_matches(session, event_key)
-        matches = _sorted_matches(session, event_key)
+        sync_event_matches(db, event_key)
+        matches = list_matches(db, event_key)
 
-    cur_num = int(get_setting(session, "current_match") or 0)
+    cur_num = int(get_setting(db, "current_match") or 0)
     qm = [m for m in matches if m.comp_level == "qm"]
     current = next((m for m in qm if m.match_number == cur_num), None)
     on_deck = [m for m in qm if m.match_number > cur_num][:3]
 
-    async def enrich(m: MatchRecord) -> dict:
-        d = _match_dict(m)
-        d["red_teams"] = await _teams_payload(session, m.red)
-        d["blue_teams"] = await _teams_payload(session, m.blue)
-        return d
+    enriched = enrich(db, ([current] if current else []) + on_deck)
+    current_payload = enriched.pop(0) if current else None
 
     return {
         "event": event_key,
         "current_number": cur_num,
-        "current": await enrich(current) if current else None,
-        "on_deck": [await enrich(m) for m in on_deck],
+        "current": current_payload,
+        "on_deck": enriched,
     }
 
 
 @router.get("/{match_key}")
-async def get_match(
+def get_one_match(
     match_key: str,
-    session: Session = Depends(get_session),
-    _: Scouter = Depends(current_scouter),
+    db: Database = Depends(database_dependency),
+    _: ScouterView = Depends(current_scouter),
 ) -> dict:
-    m = session.exec(
-        select(MatchRecord).where(MatchRecord.match_key == match_key)
-    ).first()
+    m = get_match(db, match_key)
     if m is None:
         raise HTTPException(status_code=404, detail="Match not found")
-    d = _match_dict(m)
-    d["red_teams"] = await _teams_payload(session, m.red)
-    d["blue_teams"] = await _teams_payload(session, m.blue)
-    return d
+    return enrich(db, [m])[0]

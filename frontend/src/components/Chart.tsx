@@ -3,7 +3,7 @@ import React, { useState } from "react";
 
 interface Pt { x: number | string; y: number; }
 
-export function LineChart({ data, height = 180, color = "#a855f7", label }: { data: Pt[]; height?: number; color?: string; label?: string }) {
+export function LineChart({ data, height = 180, color = "#6d28d9", label }: { data: Pt[]; height?: number; color?: string; label?: string }) {
   const [hover, setHover] = useState<number | null>(null);
   if (!data.length) return <div className="empty" style={{ padding: 24 }}>No data yet</div>;
   const W = 100, H = 50, pad = 4;
@@ -71,7 +71,7 @@ export function LineChart({ data, height = 180, color = "#a855f7", label }: { da
   );
 }
 
-export function MiniBars({ data, color = "#8b5cf6", height = 120 }: { data: Pt[]; color?: string; height?: number }) {
+export function MiniBars({ data, color = "#6d28d9", height = 120 }: { data: Pt[]; color?: string; height?: number }) {
   if (!data.length) return null;
   const max = Math.max(...data.map((d) => d.y), 1);
   return (

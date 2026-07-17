@@ -1,11 +1,13 @@
 """Authentication: sign-in with Scouter ID + shared team password.
 
-The team password is the same for everyone (HazeRain!).  The Scouter ID
-identifies the user and ``admin`` is privileged.  Accounts are auto-provisioned
-on first successful sign-in (just like the old PurpleScout betting accounts).
+The team password is the same for everyone.  The Scouter ID identifies the
+user and the configured admin ID is privileged.  Accounts are auto-provisioned
+on first successful sign-in.
 
-Tokens are stateless HMAC-signed blobs — no extra dependency required.
+Tokens are stateless HMAC-signed blobs — no extra dependency required, and
+nothing server-side to lose between serverless cold starts.
 """
+
 from __future__ import annotations
 
 import base64
@@ -13,25 +15,21 @@ import hashlib
 import hmac
 import json
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Optional
 
 from fastapi import Depends, Header, HTTPException, status
-from sqlmodel import Session, func, select
+from pymongo.database import Database
 
 from .config import settings
-from .database import get_session
-from .models import Scouter
-
-
-def next_s_number(session: Session) -> int:
-    """Sequential scout number (s_number is unique in the scouters table)."""
-    highest = session.exec(select(func.max(Scouter.s_number))).one()
-    return int(highest or 0) + 1
+from .database import database_dependency
+from .models import ScouterDocument
+from .repositories import ConflictError, HazeHubRepository
+from .views import ScouterView
 
 
 def _sign(data: bytes) -> str:
-    sig = hmac.new(settings.SECRET_KEY.encode(), data, hashlib.sha256).digest()
+    sig = hmac.new(settings.secret_key.encode(), data, hashlib.sha256).digest()
     return base64.urlsafe_b64encode(sig).decode().rstrip("=")
 
 
@@ -39,7 +37,7 @@ def create_token(scout_id: str, is_admin: bool) -> str:
     body = {
         "sub": scout_id,
         "admin": is_admin,
-        "exp": int(time.time()) + settings.TOKEN_TTL_HOURS * 3600,
+        "exp": int(time.time()) + settings.token_ttl_hours * 3600,
     }
     raw = base64.urlsafe_b64encode(json.dumps(body).encode()).decode().rstrip("=")
     return f"{raw}.{_sign(raw.encode())}"
@@ -70,32 +68,56 @@ def normalize_id(scout_id: str) -> str:
 
 
 def verify_team_password(password: str) -> bool:
-    return password == settings.TEAM_PASSWORD
+    return hmac.compare_digest(password, settings.team_password)
 
 
-def get_or_create_scouter(session: Session, scout_id: str) -> Scouter:
+def next_s_number(db: Database) -> int:
+    highest = db.scouters.find_one({}, {"s_number": 1}, sort=[("s_number", -1)])
+    return int(highest["s_number"] if highest else 0) + 1
+
+
+def get_or_create_scouter(db: Database, scout_id: str) -> ScouterView:
     scout_id = normalize_id(scout_id)
-    scouter = session.get(Scouter, scout_id)
+    now = datetime.now(UTC)
+    doc = db.scouters.find_one_and_update(
+        {"_id": scout_id},
+        {"$set": {"last_seen": now, "updated_at": now}},
+    )
+    if doc is not None:
+        doc["last_seen"] = now
+        return ScouterView(doc)
+
+    repo = HazeHubRepository(db)
+    scouter = None
+    # s_number is a unique sequence; retry a few times if two first-time
+    # sign-ins race for the same number.
+    for _ in range(5):
+        try:
+            scouter = repo.create_scouter(
+                ScouterDocument(
+                    _id=scout_id,
+                    s_number=next_s_number(db),
+                    display_name=scout_id,
+                    is_admin=scout_id.lower() == settings.admin_id.lower(),
+                    bucks=settings.starting_bucks,
+                )
+            )
+            break
+        except ConflictError:
+            existing = db.scouters.find_one({"_id": scout_id})
+            if existing is not None:
+                scouter = existing
+                break
     if scouter is None:
-        scouter = Scouter(
-            scout_id=scout_id,
-            s_number=next_s_number(session),
-            display_name=scout_id,
-            is_admin=(scout_id.lower() == settings.ADMIN_ID.lower()),
-            bucks=settings.STARTING_BUCKS,
-        )
-    scouter.last_seen = datetime.now(timezone.utc)
-    session.add(scouter)
-    session.commit()
-    session.refresh(scouter)
-    return scouter
+        raise HTTPException(status_code=500, detail="Could not provision account")
+    return ScouterView(scouter)
 
 
 # --- FastAPI dependencies --------------------------------------------------- #
 def current_scouter(
     authorization: str = Header(default=""),
-    session: Session = Depends(get_session),
-) -> Scouter:
+    db: Database = Depends(database_dependency),
+) -> ScouterView:
     token = authorization.removeprefix("Bearer ").strip()
     body = decode_token(token)
     if not body:
@@ -103,13 +125,13 @@ def current_scouter(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not signed in",
         )
-    scouter = session.get(Scouter, body["sub"])
+    scouter = db.scouters.find_one({"_id": body["sub"]})
     if scouter is None:
         raise HTTPException(status_code=401, detail="Unknown scouter")
-    return scouter
+    return ScouterView(scouter)
 
 
-def require_admin(scouter: Scouter = Depends(current_scouter)) -> Scouter:
+def require_admin(scouter: ScouterView = Depends(current_scouter)) -> ScouterView:
     if not scouter.is_admin:
         raise HTTPException(status_code=403, detail="Admin only")
     return scouter

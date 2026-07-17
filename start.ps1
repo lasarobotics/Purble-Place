@@ -1,5 +1,6 @@
 # HazeHub launcher (Windows / PowerShell)
-# Opens the backend (FastAPI) and frontend (Next.js) each in their own window.
+# Starts MongoDB, then the backend (FastAPI) and frontend (Next.js) each in
+# their own window.
 
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
@@ -10,8 +11,14 @@ if (-not (Test-Path "$root\backend\.venv")) {
 }
 
 Write-Host "`nStarting HazeHub..." -ForegroundColor Magenta
+Write-Host "  MongoDB  -> localhost:27017 (docker)" -ForegroundColor Cyan
 Write-Host "  Backend  -> http://localhost:8000  (API + docs at /docs)" -ForegroundColor Cyan
 Write-Host "  Frontend -> http://localhost:3000" -ForegroundColor Cyan
+
+# MongoDB
+Set-Location "$root\backend"
+docker compose up -d
+Set-Location $root
 
 # Backend
 Start-Process powershell -ArgumentList @(
@@ -27,4 +34,4 @@ Start-Process powershell -ArgumentList @(
 
 Start-Sleep -Seconds 2
 Write-Host "`nTwo windows launched. Open http://localhost:3000 in your browser." -ForegroundColor Green
-Write-Host "Sign in: ID 'admin' (or 1/2/3), password 'HazeRain!'." -ForegroundColor Green
+Write-Host "Sign in with any Scouter ID and the team password ('admin' is privileged)." -ForegroundColor Green

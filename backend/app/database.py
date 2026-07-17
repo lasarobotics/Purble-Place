@@ -1,56 +1,127 @@
-"""Database engine + session helpers (SQLModel / SQLAlchemy)."""
+"""MongoDB connection lifecycle and idempotent schema initialization."""
+
 from __future__ import annotations
 
-from collections.abc import Iterator
+from datetime import UTC, datetime
+from threading import Lock
+from typing import Iterator
 
-from sqlmodel import Session, SQLModel, create_engine
+from pymongo import MongoClient
+from pymongo.database import Database
 
 from .config import settings
-
-_connect_args = {}
-if settings.DATABASE_URL.startswith("sqlite"):
-    # Needed so the SQLite connection works across FastAPI's threadpool.
-    _connect_args = {"check_same_thread": False}
-
-engine = create_engine(
-    settings.DATABASE_URL,
-    echo=False,
-    connect_args=_connect_args,
-    pool_pre_ping=not settings.DATABASE_URL.startswith("sqlite"),
-)
+from .schema import COLLECTION_INDEXES, COLLECTION_SCHEMAS, SCHEMA_VERSION
 
 
-def init_db() -> None:
-    """Create tables. On Azure you would normally run Alembic migrations,
-    but create_all keeps local dev frictionless and is idempotent."""
-    # Import models so SQLModel.metadata is populated before create_all.
-    from . import models  # noqa: F401
-
-    SQLModel.metadata.create_all(engine)
-    _apply_micro_migrations()
+_client: MongoClient | None = None
+_client_lock = Lock()
+_schema_checked = False
 
 
-# Columns added after the first release: (table, column, DDL type).
-# create_all never ALTERs existing tables, so this closes the gap for local
-# SQLite files created before the column existed. Works on Postgres too.
-# (Empty after the 2027-schema rebuild — tables were renamed, so old dev DBs
-# should be regenerated with `python -m app.demo_data`.)
-_NEW_COLUMNS: list[tuple[str, str, str]] = []
+def get_client() -> MongoClient:
+    global _client
+    if _client is None:
+        with _client_lock:
+            if _client is None:
+                _client = MongoClient(
+                    settings.mongodb_uri,
+                    appname="HazeHub",
+                    tz_aware=True,
+                    serverSelectionTimeoutMS=settings.mongodb_timeout_ms,
+                    connectTimeoutMS=settings.mongodb_timeout_ms,
+                )
+    return _client
 
 
-def _apply_micro_migrations() -> None:
-    from sqlalchemy import inspect, text
-
-    inspector = inspect(engine)
-    with engine.begin() as conn:
-        for table, column, ddl_type in _NEW_COLUMNS:
-            if table not in inspector.get_table_names():
-                continue
-            existing = {c["name"] for c in inspector.get_columns(table)}
-            if column not in existing:
-                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}"))
+def get_database() -> Database:
+    """Return the configured database (also suitable as a FastAPI dependency)."""
+    return get_client()[settings.mongodb_database]
 
 
-def get_session() -> Iterator[Session]:
-    with Session(engine) as session:
-        yield session
+def database_dependency() -> Iterator[Database]:
+    """FastAPI-compatible dependency without owning the process-wide client."""
+    yield get_database()
+
+
+def init_database() -> Database:
+    """Create/update collection validators and indexes, then return the DB.
+
+    This operation is idempotent and is safe to run on every application
+    startup. It intentionally fails fast when MongoDB is unreachable or the
+    deployment user lacks schema-management permissions.
+    """
+    client = get_client()
+    client.admin.command("ping")
+    database = get_database()
+    existing = set(database.list_collection_names())
+
+    for collection_name, json_schema in COLLECTION_SCHEMAS.items():
+        validator = {"$jsonSchema": json_schema}
+        if collection_name not in existing:
+            database.create_collection(
+                collection_name,
+                validator=validator,
+                validationLevel="strict",
+                validationAction="error",
+            )
+        else:
+            database.command(
+                {
+                    "collMod": collection_name,
+                    "validator": validator,
+                    "validationLevel": "strict",
+                    "validationAction": "error",
+                }
+            )
+
+        indexes = COLLECTION_INDEXES.get(collection_name, [])
+        if indexes:
+            database[collection_name].create_indexes(indexes)
+
+    database["schema_meta"].update_one(
+        {"_id": "hazehub"},
+        {
+            "$set": {
+                "version": SCHEMA_VERSION,
+                "collections": sorted(COLLECTION_SCHEMAS),
+                "applied_at": datetime.now(UTC),
+            }
+        },
+        upsert=True,
+    )
+    return database
+
+
+def ensure_schema() -> None:
+    """Run ``init_database`` once per process, skipping when already current.
+
+    Serverless deployments cold-start often; checking ``schema_meta`` first
+    keeps warm-path startups down to a single indexed read instead of a full
+    collMod/createIndexes sweep.
+    """
+    global _schema_checked
+    if _schema_checked:
+        return
+    database = get_database()
+    meta = database["schema_meta"].find_one({"_id": "hazehub"})
+    if not meta or meta.get("version") != SCHEMA_VERSION:
+        init_database()
+    _schema_checked = True
+
+
+def close_database() -> None:
+    global _client, _schema_checked
+    with _client_lock:
+        if _client is not None:
+            _client.close()
+            _client = None
+        _schema_checked = False
+
+
+if __name__ == "__main__":
+    initialized = init_database()
+    print(
+        f"Initialized MongoDB database {initialized.name!r} "
+        f"at schema version {SCHEMA_VERSION}."
+    )
+    close_database()

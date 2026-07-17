@@ -16,7 +16,7 @@ export interface HeatPoint {
 }
 
 export interface ScoutEntry {
-  id?: number;
+  id?: string;
   client_uuid?: string;
   event_key?: string;
   match_number: number;
@@ -85,7 +85,7 @@ export interface FilmEvent {
 }
 
 export interface Bet {
-  id: number;
+  id: string;
   scout_id: string;
   match_key: string;
   match_number: number;
@@ -133,7 +133,7 @@ export interface PicklistItem {
 }
 
 export interface Picklist {
-  id: number;
+  id: string;
   event_key: string;
   owner_id: string;
   owner_name: string;

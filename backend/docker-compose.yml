@@ -1,0 +1,30 @@
+services:
+  mongodb:
+    image: mongo:8.0
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: hazehub
+      MONGO_INITDB_ROOT_PASSWORD: hazehub_dev_password
+    ports:
+      - "27017:27017"
+    volumes:
+      - hazehub_mongodb:/data/db
+    healthcheck:
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --username
+        - hazehub
+        - --password
+        - hazehub_dev_password
+        - --authenticationDatabase
+        - admin
+        - --eval
+        - db.adminCommand('ping').ok
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  hazehub_mongodb:

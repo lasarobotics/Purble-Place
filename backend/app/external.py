@@ -1,77 +1,82 @@
 """The Blue Alliance + Statbotics clients.
 
-All responses are cached in the ``ExternalCache`` table.  Fresh data is
-fetched when the cache is older than ``EXTERNAL_TTL_SECONDS``; if the network
+All responses are cached in the ``external_cache`` collection.  Fresh data is
+fetched when the cache is older than ``external_ttl_seconds``; if the network
 is unavailable we fall back to whatever we cached previously (offline
 resilience for events with flaky connectivity).
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, date, datetime
 from typing import Any, Optional
 
 import httpx
-from sqlmodel import Session
+from pymongo.database import Database
 
 from .config import settings
-from .models import ExternalCache, MatchRecord, TeamCache
+from .models import EventDocument, MatchDocument, TeamCacheDocument
+from .repositories import HazeHubRepository, RepositoryError
+from .views import MatchView
 
 
 def team_key(team_number: int) -> str:
     return f"frc{team_number}"
 
 
-async def _get_json(
-    session: Session,
+def _get_json(
+    db: Database,
     url: str,
     headers: Optional[dict] = None,
     ttl: Optional[int] = None,
 ) -> Optional[Any]:
-    ttl = settings.EXTERNAL_TTL_SECONDS if ttl is None else ttl
-    cached = session.get(ExternalCache, url)
-    now = datetime.now(timezone.utc)
+    ttl = settings.external_ttl_seconds if ttl is None else ttl
+    cached = db.external_cache.find_one({"_id": url})
+    now = datetime.now(UTC)
     if cached is not None:
-        age = (now - cached.fetched_at.replace(tzinfo=timezone.utc)).total_seconds()
-        if age < ttl:
-            return cached.payload
+        fetched_at = cached.get("fetched_at") or datetime(1970, 1, 1, tzinfo=UTC)
+        if fetched_at.tzinfo is None:
+            fetched_at = fetched_at.replace(tzinfo=UTC)
+        if (now - fetched_at).total_seconds() < ttl:
+            return cached.get("payload")
 
-    # A User-Agent is REQUIRED — The Blue Alliance sits behind Cloudflare, which
-    # blocks requests with no UA (HTTP 403, error 1010).
+    # A User-Agent is REQUIRED — The Blue Alliance sits behind Cloudflare,
+    # which blocks requests with no UA (HTTP 403, error 1010).
     req_headers = {"User-Agent": "HazeHub/1.0 (FRC scouting platform)"}
     req_headers.update(headers or {})
 
     try:
-        async with httpx.AsyncClient(timeout=12.0) as client:
-            resp = await client.get(url, headers=req_headers)
+        with httpx.Client(timeout=12.0) as client:
+            resp = client.get(url, headers=req_headers)
         if resp.status_code == 200:
             payload = resp.json()
-            row = cached or ExternalCache(url=url)
-            row.payload = payload
-            row.fetched_at = now
-            session.add(row)
-            session.commit()
+            db.external_cache.replace_one(
+                {"_id": url},
+                {"_id": url, "payload": payload, "fetched_at": now},
+                upsert=True,
+            )
             return payload
         if resp.status_code == 404:
             return None
     except Exception:
         pass  # network down — fall through to stale cache
 
-    return cached.payload if cached is not None else None
+    return cached.get("payload") if cached is not None else None
 
 
-async def tba(session: Session, path: str, ttl: Optional[int] = None) -> Optional[Any]:
-    return await _get_json(
-        session,
-        f"{settings.TBA_BASE}{path}",
-        headers={"accept": "application/json", "X-TBA-Auth-Key": settings.TBA_KEY},
+def tba(db: Database, path: str, ttl: Optional[int] = None) -> Optional[Any]:
+    return _get_json(
+        db,
+        f"{settings.tba_base}{path}",
+        headers={"accept": "application/json", "X-TBA-Auth-Key": settings.tba_key},
         ttl=ttl,
     )
 
 
-async def statbotics(session: Session, path: str, ttl: Optional[int] = None) -> Optional[Any]:
-    return await _get_json(
-        session,
-        f"{settings.STATBOTICS_BASE}{path}",
+def statbotics(db: Database, path: str, ttl: Optional[int] = None) -> Optional[Any]:
+    return _get_json(
+        db,
+        f"{settings.statbotics_base}{path}",
         headers={"accept": "application/json"},
         ttl=ttl,
     )
@@ -80,132 +85,168 @@ async def statbotics(session: Session, path: str, ttl: Optional[int] = None) -> 
 # --------------------------------------------------------------------------- #
 # Higher level helpers                                                         #
 # --------------------------------------------------------------------------- #
-async def sync_event_matches(session: Session, event_key: str) -> list[MatchRecord]:
-    """Pull the match schedule for an event into MatchRecord rows.
+def sync_event_matches(db: Database, event_key: str) -> list[MatchView]:
+    """Pull the match schedule for an event into the matches collection.
 
     Uses the full ``/matches`` endpoint (not ``/simple``) so we also capture
     the YouTube match videos for the Film tab.
     """
-    data = await tba(session, f"/event/{event_key}/matches")
-    await sync_event_info(session, event_key)
-    out: list[MatchRecord] = []
+    repo = HazeHubRepository(db)
+    sync_event_info(db, event_key)
+
+    data = tba(db, f"/event/{event_key}/matches")
+    out: list[MatchView] = []
     if not data:
         return out
+
+    existing = {d["_id"]: d for d in db.matches.find({"event_key": event_key})}
     for m in data:
-        mk = m["key"]
-        existing = _match_by_key(session, mk)
-        rec = existing or MatchRecord(match_key=mk, event_key=event_key)
-        rec.comp_level = m.get("comp_level", "qm")
-        rec.match_number = m.get("match_number", 0)
         alliances = m.get("alliances", {}) or {}
         red = alliances.get("red", {}) or {}
         blue = alliances.get("blue", {}) or {}
-        rec.set_alliances(
-            [int(t[3:]) for t in red.get("team_keys", []) if t.startswith("frc")],
-            [int(t[3:]) for t in blue.get("team_keys", []) if t.startswith("frc")],
-        )
-        rs, bs = red.get("score"), blue.get("score")
-        rec.red_score = rs if rs not in (None, -1) else None
-        rec.blue_score = bs if bs not in (None, -1) else None
-        if rec.red_score is not None and rec.blue_score is not None:
-            if rec.red_score > rec.blue_score:
-                rec.winner = "red"
-            elif rec.blue_score > rec.red_score:
-                rec.winner = "blue"
+        red_teams = [int(t[3:]) for t in red.get("team_keys", []) if t.startswith("frc")]
+        blue_teams = [int(t[3:]) for t in blue.get("team_keys", []) if t.startswith("frc")]
+        if not red_teams or not blue_teams:
+            continue
+
+        def _score(raw: Any) -> Optional[int]:
+            return int(raw) if raw is not None and int(raw) >= 0 else None
+
+        red_score, blue_score = _score(red.get("score")), _score(blue.get("score"))
+        winner = None
+        if red_score is not None and blue_score is not None:
+            if red_score > blue_score:
+                winner = "red"
+            elif blue_score > red_score:
+                winner = "blue"
             else:
-                rec.winner = "tie"
-        rec.predicted_time = m.get("predicted_time") or m.get("time")
-        # Capture the YouTube match video (don't clobber a manual override).
-        if not rec.youtube_key:
+                winner = "tie"
+
+        prev = existing.get(m["key"], {})
+        youtube_key = prev.get("youtube_key") or ""
+        if not youtube_key:
             for v in m.get("videos") or []:
                 if v.get("type") == "youtube" and v.get("key"):
-                    rec.youtube_key = v["key"]
+                    youtube_key = v["key"]
                     break
-        rec.updated_at = datetime.now(timezone.utc)
-        session.add(rec)
-        out.append(rec)
-    session.commit()
+
+        try:
+            document = MatchDocument(
+                _id=m["key"],
+                event_key=event_key,
+                comp_level=m.get("comp_level", "qm"),
+                set_number=int(m.get("set_number") or 1),
+                match_num=int(m.get("match_number") or 0),
+                alliances={
+                    "red": {"teams": red_teams, "score": red_score},
+                    "blue": {"teams": blue_teams, "score": blue_score},
+                },
+                winner=winner,
+                predicted_time=m.get("predicted_time") or m.get("time"),
+                # Preserve app state across schedule refreshes.
+                betting_locked=bool(prev.get("betting_locked", False)),
+                youtube_key=youtube_key,
+                film_summary=prev.get("film_summary") or "",
+                film_events=prev.get("film_events") or [],
+            )
+            out.append(MatchView(repo.upsert_match(document)))
+        except (ValueError, RepositoryError):
+            # One malformed TBA row (odd comp level, surrogate keys, …) must
+            # not sink the whole schedule sync.
+            continue
     return out
 
 
-async def sync_event_info(session: Session, event_key: str) -> None:
-    """Upsert the events row (start_date + name from TBA, best effort)."""
-    from datetime import date as _date
+def sync_event_info(db: Database, event_key: str) -> None:
+    """Upsert the events row (name + dates from TBA, best effort)."""
+    info = tba(db, f"/event/{event_key}") or {}
 
-    from .models import Event
-
-    row = session.get(Event, event_key) or Event(event_key=event_key)
-    info = await tba(session, f"/event/{event_key}")
-    if info:
-        row.name = info.get("name") or row.name
+    def _date(value: Any) -> Optional[date]:
         try:
-            row.start_date = _date.fromisoformat(info["start_date"])
-        except (KeyError, TypeError, ValueError):
-            pass
-    session.add(row)
-    session.commit()
+            return date.fromisoformat(value)
+        except (TypeError, ValueError):
+            return None
+
+    try:
+        HazeHubRepository(db).upsert_event(
+            EventDocument(
+                _id=event_key,
+                name=(info.get("name") or None),
+                start_date=_date(info.get("start_date")),
+                end_date=_date(info.get("end_date")),
+            )
+        )
+    except (ValueError, RepositoryError):
+        pass
 
 
-def _match_by_key(session: Session, mk: str) -> Optional[MatchRecord]:
-    from sqlmodel import select
-
-    return session.exec(select(MatchRecord).where(MatchRecord.match_key == mk)).first()
-
-
-async def sync_team(session: Session, team_number: int, season: Optional[int] = None) -> TeamCache:
+def sync_team(
+    db: Database, team_number: int, season: Optional[int] = None
+) -> Optional[TeamCacheDocument]:
     """Fetch profile, media (avatar + robot photos) and EPA for one team."""
-    season = season or settings.SEASON
-    tc = session.get(TeamCache, team_number) or TeamCache(team_number=team_number)
+    season = season or settings.season
+    prev = db.team_cache.find_one({"_id": int(team_number)}) or {}
 
-    info = await tba(session, f"/team/{team_key(team_number)}", ttl=86400)
+    fields: dict[str, Any] = {
+        "nickname": prev.get("nickname") or "",
+        "name": prev.get("name") or "",
+        "city": prev.get("city") or "",
+        "state": prev.get("state") or "",
+        "country": prev.get("country") or "",
+        "rookie_year": prev.get("rookie_year"),
+        "avatar": prev.get("avatar") or "",
+        "photos": prev.get("photos") or [],
+        "epa": prev.get("epa"),
+    }
+
+    info = tba(db, f"/team/{team_key(team_number)}", ttl=86400)
     if info:
-        tc.nickname = info.get("nickname") or tc.nickname
-        tc.name = info.get("name") or tc.name
-        tc.city = info.get("city") or ""
-        tc.state = info.get("state_prov") or ""
-        tc.country = info.get("country") or ""
-        tc.rookie_year = info.get("rookie_year")
+        fields["nickname"] = info.get("nickname") or fields["nickname"]
+        fields["name"] = info.get("name") or fields["name"]
+        fields["city"] = info.get("city") or ""
+        fields["state"] = info.get("state_prov") or ""
+        fields["country"] = info.get("country") or ""
+        fields["rookie_year"] = info.get("rookie_year")
 
-    media = await tba(session, f"/team/{team_key(team_number)}/media/{season}", ttl=86400)
+    media = tba(db, f"/team/{team_key(team_number)}/media/{season}", ttl=86400)
     if media:
         photos: list[str] = []
         for item in media:
             mtype = item.get("type")
             details = item.get("details") or {}
             if mtype == "avatar" and details.get("base64Image"):
-                tc.avatar = f"data:image/png;base64,{details['base64Image']}"
+                fields["avatar"] = f"data:image/png;base64,{details['base64Image']}"
             else:
                 url = item.get("direct_url") or item.get("view_url")
-                if url and any(
-                    mtype == t for t in ("imgur", "instagram-image", "cdphotothread", "grabcad")
-                ):
+                if url and mtype in ("imgur", "instagram-image", "cdphotothread", "grabcad"):
                     photos.append(url)
         if photos:
-            tc.photos = photos[:8]
+            fields["photos"] = photos[:8]
 
-    sb = await statbotics(session, f"/team_year/{team_number}/{season}", ttl=3600)
+    sb = statbotics(db, f"/team_year/{team_number}/{season}", ttl=3600)
     if sb:
         # Statbotics has shipped two shapes for this field:
         #   v3 (2025):  epa.total_points = {"mean": 55.1, ...}
         #   v3 (2026):  epa.total_points = 112.62
         raw = (sb.get("epa") or {}).get("total_points")
         if isinstance(raw, dict):
-            tc.epa = raw.get("mean")
+            fields["epa"] = raw.get("mean")
         elif isinstance(raw, (int, float)):
-            tc.epa = float(raw)
+            fields["epa"] = float(raw)
         else:
-            tc.epa = None
+            fields["epa"] = None
 
-    tc.updated_at = datetime.now(timezone.utc)
-    session.add(tc)
-    session.commit()
-    session.refresh(tc)
-    return tc
+    try:
+        document = TeamCacheDocument(_id=int(team_number), **fields)
+        HazeHubRepository(db).upsert_team_cache(document)
+        return document
+    except (ValueError, RepositoryError):
+        return None
 
 
-async def match_win_prob(session: Session, match_key: str) -> Optional[float]:
+def match_win_prob(db: Database, match_key: str) -> Optional[float]:
     """Statbotics predicted probability that **red** wins ``match_key``."""
-    sb = await statbotics(session, f"/match/{match_key}", ttl=600)
+    sb = statbotics(db, f"/match/{match_key}", ttl=600)
     if not sb:
         return None
     pred = sb.get("pred") or {}
