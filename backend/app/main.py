@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pymongo.errors import ConfigurationError, PyMongoError
+from pymongo.errors import ConfigurationError, OperationFailure, PyMongoError
 
 from app.config import settings
 from app.database import ensure_schema
@@ -59,7 +59,14 @@ async def mongo_error_handler(request: Request, exc: PyMongoError) -> JSONRespon
     points at localhost) or the Atlas connection string / network access list
     is wrong.
     """
-    if isinstance(exc, ConfigurationError):
+    if isinstance(exc, OperationFailure) and "auth" in str(exc).lower():
+        detail = (
+            f"MongoDB Atlas rejected the credentials for '{settings.mongodb_host}' "
+            "(bad auth). The database user's password doesn't match MONGODB_URI — "
+            "update the URI in Vercel (or reset the user's password in Atlas → "
+            "Database Access), then redeploy."
+        )
+    elif isinstance(exc, ConfigurationError):
         detail = (
             "MongoDB connection string is invalid: "
             f"{exc}. Check the MONGODB_URI project setting."
