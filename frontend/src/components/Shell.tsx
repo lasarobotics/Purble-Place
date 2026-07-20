@@ -28,6 +28,7 @@ const ADMIN_NAV = [
   { href: "/admin/compare", label: "Compare Robots", icon: "scale" },
   { href: "/admin/consensus", label: "Consensus Radar", icon: "radar" },
   { href: "/admin/picklists", label: "All Pick Lists", icon: "folder" },
+  { href: "/admin/system", label: "System Health", icon: "refresh" },
 ];
 
 const MOBILE_NAV = [

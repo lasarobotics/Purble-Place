@@ -22,7 +22,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
-from pymongo.database import Database
+from sqlmodel import Session
 
 from .analytics import (
     NEGATIVE_TAGS,
@@ -46,10 +46,10 @@ def _percentile(vals: list[float], v: float) -> float:
     return below / (len(vals) - 1)
 
 
-def _evidence(db: Database, event_key: str, team: int) -> dict[str, Any]:
-    s = team_summary(db, event_key, team)
-    entries = team_entries(db, event_key, team)
-    field = [team_summary(db, event_key, t) for t in event_teams(db, event_key)]
+def _evidence(session: Session, event_key: str, team: int) -> dict[str, Any]:
+    s = team_summary(session, event_key, team)
+    entries = team_entries(session, event_key, team)
+    field = [team_summary(session, event_key, t) for t in event_teams(session, event_key)]
     field = [f for f in field if f["matches"] > 0]
 
     def pct(key: str) -> float:
@@ -286,8 +286,8 @@ def _claude_insight(ev: dict[str, Any]) -> dict[str, Any] | None:
 # --------------------------------------------------------------------------- #
 # Public API                                                                   #
 # --------------------------------------------------------------------------- #
-def team_insight(db: Database, event_key: str, team: int) -> dict[str, Any]:
-    ev = _evidence(db, event_key, team)
+def team_insight(session: Session, event_key: str, team: int) -> dict[str, Any]:
+    ev = _evidence(session, event_key, team)
     insight = _claude_insight(ev) or _rules_insight(ev)
     return {
         "team": team,

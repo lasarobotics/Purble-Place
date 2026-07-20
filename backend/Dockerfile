@@ -1,8 +1,9 @@
-# HazeHub API — FastAPI + MongoDB (any Docker host; Vercel uses vercel.json services instead).
-FROM python:3.12-slim
+# HazeHub API — FastAPI on Azure Container Apps (or any Docker host).
+FROM python:3.11-slim
 
 WORKDIR /app
 
+# System deps kept minimal; psycopg[binary] ships its own libpq.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1

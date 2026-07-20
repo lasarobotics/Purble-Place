@@ -6,10 +6,23 @@ export function apiBase(): string {
   if (env && env.trim()) return env.trim().replace(/\/$/, "");
   if (typeof window !== "undefined") {
     const h = window.location.hostname;
-    // Deployed somewhere that proxies /api to the backend on the same origin.
+    // Deployed somewhere that proxies /api to the backend on the same origin
+    // (MegaScout behind Nginx, Azure, etc.).
     if (h !== "localhost" && h !== "127.0.0.1") return "";
   }
   return "http://localhost:8000";
+}
+
+// WebSocket URL for the MegaScout realtime hub (/ws). Derives ws/wss from the
+// API base, or from the current origin for same-origin (Nginx) deployments.
+export function wsUrl(): string {
+  const base = apiBase();
+  if (base.startsWith("http")) return base.replace(/^http/, "ws") + "/ws";
+  if (typeof window !== "undefined") {
+    const proto = window.location.protocol === "https:" ? "wss" : "ws";
+    return `${proto}://${window.location.host}/ws`;
+  }
+  return "ws://localhost:8000/ws";
 }
 
 const TOKEN_KEY = "hazehub.token";

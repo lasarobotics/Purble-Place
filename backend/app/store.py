@@ -1,35 +1,36 @@
-"""Tiny key/value settings store on top of the app_settings collection."""
-
+"""Tiny key/value settings store on top of AppSetting."""
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from sqlmodel import Session, select
 
-from pymongo.database import Database
+from .models import AppSetting
 
 DEFAULTS = {
     "current_event": "",
-    "current_match": "0",  # match number currently on the field
+    "current_match": "0",       # match number currently on the field
     "betting_enabled": "1",
 }
 
 
-def get_setting(db: Database, key: str) -> str:
-    doc = db.app_settings.find_one({"_id": key})
-    if doc is None:
+def get_setting(session: Session, key: str) -> str:
+    row = session.get(AppSetting, key)
+    if row is None:
         return DEFAULTS.get(key, "")
-    return str(doc.get("value", ""))
+    return row.value
 
 
-def set_setting(db: Database, key: str, value: str) -> None:
-    db.app_settings.replace_one(
-        {"_id": key},
-        {"_id": key, "value": value, "updated_at": datetime.now(UTC)},
-        upsert=True,
-    )
+def set_setting(session: Session, key: str, value: str) -> None:
+    row = session.get(AppSetting, key)
+    if row is None:
+        row = AppSetting(key=key, value=value)
+    else:
+        row.value = value
+    session.add(row)
+    session.commit()
 
 
-def all_settings(db: Database) -> dict[str, str]:
+def all_settings(session: Session) -> dict[str, str]:
     out = dict(DEFAULTS)
-    for doc in db.app_settings.find({}):
-        out[str(doc["_id"])] = str(doc.get("value", ""))
+    for row in session.exec(select(AppSetting)).all():
+        out[row.key] = row.value
     return out

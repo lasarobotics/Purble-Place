@@ -1,19 +1,14 @@
 "use client";
 import { useEffect, useRef } from "react";
-import { api, getToken } from "./api";
+import { wsUrl, getToken } from "./api";
 
-// Subscribe to live server events (scout_submitted, bet_placed, match_advanced,
-// picklist_changed, ...). Vercel's serverless functions can't hold WebSockets
-// open, so this polls GET /api/events with a cursor every few seconds and
-// feeds the exact same (event, payload) pairs to the bus the old socket did.
-// Polling pauses while the tab is hidden and backs off while offline.
-
-const POLL_MS = 5000;
-
-interface EventFeed {
-  now: string;
-  events: { event: string; payload: any; ts: string }[];
-}
+// Subscribe to the MegaScout live event stream (submission_ack, scout_submitted,
+// bet_placed, match_advanced, picklist_changed, ...) over a WebSocket to the
+// local server's /ws hub. This is the on-prem realtime path from the Strategy
+// Router design: the device gets an immediate acknowledgement that MegaScout
+// has its submission, and every dashboard updates without polling.
+//
+// Auto-reconnects with backoff; reconnects on tab focus / network return.
 
 export function useLiveEvents(onEvent: (event: string, payload: any) => void) {
   const cb = useRef(onEvent);
@@ -21,46 +16,64 @@ export function useLiveEvents(onEvent: (event: string, payload: any) => void) {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    let stopped = false;
-    let cursor = "";
-    let timer: any;
-    let inFlight = false;
+    let ws: WebSocket | null = null;
+    let closed = false;
+    let retry: any;
+    let backoff = 1000;
 
-    const poll = async () => {
-      if (stopped || inFlight) return;
-      if (!getToken()) return;
-      if (document.visibilityState === "hidden") return;
-      if (typeof navigator !== "undefined" && !navigator.onLine) return;
-      inFlight = true;
+    const connect = () => {
+      if (closed || !getToken()) return;
       try {
-        const q = cursor ? `?since=${encodeURIComponent(cursor)}` : "";
-        const feed = await api<EventFeed>(`/api/events${q}`);
-        cursor = feed.now || cursor;
-        for (const e of feed.events || []) {
-          try {
-            cb.current(e.event, e.payload);
-          } catch {}
-        }
+        ws = new WebSocket(wsUrl());
       } catch {
-        // Backend briefly unreachable — the next tick retries.
-      } finally {
-        inFlight = false;
+        schedule();
+        return;
+      }
+      ws.onopen = () => {
+        backoff = 1000; // reset backoff once a connection is established
+      };
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          cb.current(msg.event, msg.payload);
+        } catch {}
+      };
+      ws.onclose = () => {
+        if (!closed) schedule();
+      };
+      ws.onerror = () => {
+        try { ws?.close(); } catch {}
+      };
+    };
+
+    const schedule = () => {
+      clearTimeout(retry);
+      retry = setTimeout(connect, backoff);
+      backoff = Math.min(backoff * 2, 15000); // cap reconnect delay at 15s
+    };
+
+    const kick = () => {
+      // Force an immediate reconnect attempt when the tab/network comes back.
+      if (closed) return;
+      if (!ws || ws.readyState === WebSocket.CLOSED) {
+        backoff = 1000;
+        connect();
       }
     };
 
-    poll();
-    timer = setInterval(poll, POLL_MS);
+    connect();
     const onVisible = () => {
-      if (document.visibilityState === "visible") poll();
+      if (document.visibilityState === "visible") kick();
     };
     document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("online", poll);
+    window.addEventListener("online", kick);
 
     return () => {
-      stopped = true;
-      clearInterval(timer);
+      closed = true;
+      clearTimeout(retry);
       document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("online", poll);
+      window.removeEventListener("online", kick);
+      try { ws?.close(); } catch {}
     };
   }, []);
 }

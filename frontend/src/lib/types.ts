@@ -16,8 +16,13 @@ export interface HeatPoint {
 }
 
 export interface ScoutEntry {
-  id?: string;
+  id?: number;
   client_uuid?: string;
+  submission_id?: string;
+  client_ts?: string;
+  megascout_receipt_ts?: string;
+  azure_receipt_ts?: string | null;
+  cloud_status?: "queued" | "synced" | "failed";
   event_key?: string;
   match_number: number;
   comp_level: string;
@@ -85,7 +90,7 @@ export interface FilmEvent {
 }
 
 export interface Bet {
-  id: string;
+  id: number;
   scout_id: string;
   match_key: string;
   match_number: number;
@@ -133,7 +138,7 @@ export interface PicklistItem {
 }
 
 export interface Picklist {
-  id: string;
+  id: number;
   event_key: string;
   owner_id: string;
   owner_name: string;

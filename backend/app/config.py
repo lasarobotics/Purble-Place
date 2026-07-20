@@ -1,148 +1,153 @@
-"""Environment-backed configuration: MongoDB connection + HazeHub app settings.
-
-Merges the backend-dev database-layer settings (MongoDB) with the application
-settings the API needs (auth, economy, external API keys). Everything has a
-sane local default so `docker compose up -d && uvicorn app.main:app` just
-works; production values come from environment variables (Vercel project
-settings).
 """
+HazeHub configuration.
 
+Detects whether we are running locally or on Azure and configures the
+database / realtime layer accordingly.  Everything has a sane local default
+so the app "just works" with zero setup, but switches to the production
+services automatically when the relevant Azure environment variables appear.
+"""
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
-
-BACKEND_DIR = Path(__file__).resolve().parent.parent
+# Repo paths -----------------------------------------------------------------
+APP_DIR = Path(__file__).resolve().parent
+BACKEND_DIR = APP_DIR.parent
+DATA_DIR = BACKEND_DIR / "data"
+DATA_DIR.mkdir(exist_ok=True)
 
 
 def _load_dotenv() -> None:
-    """Load a small .env file without adding another runtime dependency."""
+    """Minimal .env loader (no dependency). Only sets keys not already set."""
     env_file = BACKEND_DIR / ".env"
     if not env_file.exists():
         return
-
-    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if key:
-            os.environ.setdefault(key, value)
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
 
 
 _load_dotenv()
 
 
-@dataclass(frozen=True, slots=True)
+def _on_azure() -> bool:
+    """True when running inside an Azure-managed runtime."""
+    return any(
+        os.getenv(k)
+        for k in (
+            "WEBSITE_SITE_NAME",        # App Service
+            "CONTAINER_APP_NAME",       # Container Apps
+            "AZURE_FUNCTIONS_ENVIRONMENT",
+            "HAZEHUB_FORCE_AZURE",      # manual override for testing
+        )
+    )
+
+
+def _database_url() -> str:
+    """Pick a database URL.
+
+    Priority:
+      1. Explicit DATABASE_URL (Azure Database for PostgreSQL, etc.)
+      2. Local SQLite file (no setup required)
+    """
+    url = os.getenv("DATABASE_URL", "").strip()
+    if url:
+        # SQLAlchemy expects postgresql+psycopg, normalise common variants.
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql+psycopg://", 1)
+        elif url.startswith("postgresql://") and "+psycopg" not in url:
+            url = url.replace("postgresql://", "postgresql+psycopg://", 1)
+        return url
+    return f"sqlite:///{(DATA_DIR / 'hazehub.db').as_posix()}"
+
+
 class Settings:
-    # MongoDB
-    mongodb_uri: str
-    mongodb_database: str
-    mongodb_timeout_ms: int
+    """Runtime settings, resolved once at import."""
 
     # Identity / branding
-    app_name: str = "HazeHub"
-    brand_color: str = "#663399"
-    season: int = 2026
-    home_teams: tuple[int, ...] = (418, 436)
+    APP_NAME: str = "HazeHub"
+    BRAND_COLOR: str = "#663399"  # Purple Haze
+    SEASON: int = int(os.getenv("HAZEHUB_SEASON", "2026"))
+
+    # Home teams: FRC 418 Purple Haze / FRC 436 Purple Rain
+    HOME_TEAMS: list[int] = [
+        int(t) for t in os.getenv("HAZEHUB_HOME_TEAMS", "418,436").split(",") if t.strip().isdigit()
+    ]
 
     # Auth
-    team_password: str = "HazeRain!"
-    admin_id: str = "admin"
-    secret_key: str = "purple-haze-dev-secret-change-me"
-    token_ttl_hours: int = 24 * 14
+    TEAM_PASSWORD: str = os.getenv("HAZEHUB_TEAM_PASSWORD", "HazeRain!")
+    ADMIN_ID: str = os.getenv("HAZEHUB_ADMIN_ID", "admin")
+    SECRET_KEY: str = os.getenv("HAZEHUB_SECRET", "purple-haze-dev-secret-change-me")
+    TOKEN_TTL_HOURS: int = 24 * 14
 
     # Economy
-    starting_bucks: int = 100
+    STARTING_BUCKS: int = 100
 
-    # External APIs
-    tba_key: str = ""
-    tba_base: str = "https://www.thebluealliance.com/api/v3"
-    statbotics_base: str = "https://api.statbotics.io/v3"
-    external_ttl_seconds: int = 900
+    # External APIs (keys provided by the team)
+    TBA_KEY: str = os.getenv(
+        "TBA_AUTH_KEY",
+        "rZxJQVjP40eTtskoUbT3OWTKEnKNxk8McjB9QqRdU8mT78o8EN3OuzuMppJTADtV",
+    )
+    TBA_BASE: str = "https://www.thebluealliance.com/api/v3"
+    STATBOTICS_BASE: str = "https://api.statbotics.io/v3"
+    EXTERNAL_TTL_SECONDS: int = int(os.getenv("HAZEHUB_CACHE_TTL", "900"))
 
     # Environment
-    is_vercel: bool = False
-    cors_extra: tuple[str, ...] = ()
+    IS_AZURE: bool = _on_azure()
+    DATABASE_URL: str = _database_url()
+
+    # --- MegaScout ↔ Azure synchronization -------------------------------- #
+    # The sync worker POSTs each queued submission to CLOUD_SYNC_URL with
+    # CLOUD_SYNC_KEY as a bearer token. Unset (default) → the worker runs in
+    # "local only" mode: it keeps the outbox durable but doesn't ship, so a
+    # laptop with no uplink still works and nothing is lost.
+    CLOUD_SYNC_URL: str = os.getenv("CLOUD_SYNC_URL", "").strip()
+    CLOUD_SYNC_KEY: str = os.getenv("CLOUD_SYNC_KEY", "").strip()
+    SYNC_INTERVAL_SECONDS: float = float(os.getenv("HAZEHUB_SYNC_INTERVAL", "5"))
+    SYNC_BATCH_SIZE: int = int(os.getenv("HAZEHUB_SYNC_BATCH", "50"))
+    SYNC_MAX_BACKOFF_SECONDS: float = float(os.getenv("HAZEHUB_SYNC_MAX_BACKOFF", "60"))
+
+    # Optional UniFi/gateway stats endpoint for the admin network panel. When
+    # unset, the panel reports network fields as "unavailable" rather than
+    # faking numbers (the physical gateway API isn't reachable in dev).
+    GATEWAY_STATS_URL: str = os.getenv("HAZEHUB_GATEWAY_STATS_URL", "").strip()
 
     @property
-    def mongodb_is_default(self) -> bool:
-        """True when MONGODB_URI was never configured (localhost dev default)."""
-        return "localhost:27017" in self.mongodb_uri
+    def CLOUD_SYNC_ENABLED(self) -> bool:
+        return bool(self.CLOUD_SYNC_URL)
 
     @property
-    def mongodb_host(self) -> str:
-        """Host portion of the Mongo URI with credentials stripped (log-safe)."""
-        uri = self.mongodb_uri
-        after_scheme = uri.split("://", 1)[-1]
-        host = after_scheme.rsplit("@", 1)[-1]
-        return host.split("/", 1)[0].split("?", 1)[0]
+    def IS_MEGASCOUT(self) -> bool:
+        """On-prem MegaScout server (Postgres + always-on) vs a dev SQLite box."""
+        return "postgres" in self.DATABASE_URL or bool(os.getenv("MEGASCOUT"))
 
+    # CORS — local dev front-ends + anything you configure for Azure SWA
     @property
     def cors_origins(self) -> list[str]:
+        extra = os.getenv("HAZEHUB_CORS", "")
         origins = [
             "http://localhost:3000",
             "http://127.0.0.1:3000",
             "http://localhost:3001",
         ]
-        origins.extend(self.cors_extra)
-        # Same-origin deployments (Vercel services) don't need CORS, but a
-        # wildcard keeps split deployments working when nothing is configured.
-        if self.is_vercel and not self.cors_extra:
+        if extra:
+            origins.extend(o.strip() for o in extra.split(",") if o.strip())
+        # Allow all when nothing custom configured on Azure (SWA domains vary)
+        if self.IS_AZURE and not extra:
             origins.append("*")
         return origins
-
-    @classmethod
-    def from_environment(cls) -> "Settings":
-        database_name = os.getenv("MONGODB_DATABASE", "hazehub").strip()
-        if not database_name or any(char in database_name for char in '/\\.$"'):
-            raise ValueError("MONGODB_DATABASE is not a valid MongoDB database name")
-
-        timeout_ms = int(os.getenv("MONGODB_TIMEOUT_MS", "5000"))
-        if timeout_ms < 100:
-            raise ValueError("MONGODB_TIMEOUT_MS must be at least 100")
-
-        home_teams = tuple(
-            int(t)
-            for t in os.getenv("HAZEHUB_HOME_TEAMS", "418,436").split(",")
-            if t.strip().isdigit()
-        )
-        cors_extra = tuple(
-            o.strip() for o in os.getenv("HAZEHUB_CORS", "").split(",") if o.strip()
-        )
-
-        return cls(
-            mongodb_uri=os.getenv(
-                "MONGODB_URI",
-                "mongodb://hazehub:hazehub_dev_password@localhost:27017/"
-                "?authSource=admin",
-            ).strip(),
-            mongodb_database=database_name,
-            mongodb_timeout_ms=timeout_ms,
-            season=int(os.getenv("HAZEHUB_SEASON", "2026")),
-            home_teams=home_teams or (418, 436),
-            team_password=os.getenv("HAZEHUB_TEAM_PASSWORD", "HazeRain!"),
-            admin_id=os.getenv("HAZEHUB_ADMIN_ID", "admin"),
-            secret_key=os.getenv("HAZEHUB_SECRET", "purple-haze-dev-secret-change-me"),
-            starting_bucks=int(os.getenv("HAZEHUB_STARTING_BUCKS", "100")),
-            tba_key=os.getenv(
-                "TBA_AUTH_KEY",
-                "rZxJQVjP40eTtskoUbT3OWTKEnKNxk8McjB9QqRdU8mT78o8EN3OuzuMppJTADtV",
-            ),
-            external_ttl_seconds=int(os.getenv("HAZEHUB_CACHE_TTL", "900")),
-            is_vercel=os.environ.get("VERCEL") == "1",
-            cors_extra=cors_extra,
-        )
 
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings.from_environment()
+    return Settings()
 
 
 settings = get_settings()

@@ -1,26 +1,28 @@
 """Team analytics: summaries, rankings, strength-of-schedule, compare.
 
 These power the admin Team Search / Team Rank / Data Picklist / Compare tabs.
-The math is identical to the original SQL implementation; only the data access
-(MongoDB views) changed.
 """
-
 from __future__ import annotations
 
 import statistics
 from typing import Any, Optional
 
-from pymongo.database import Database
+from sqlmodel import Session, select
 
+from .models import MatchRecord, ScoutEntry, TeamCache
 from .scoring import phase_counts
-from .views import EntryView, get_team_cache, list_entries, list_matches
 
 
 # --------------------------------------------------------------------------- #
 # Per-team aggregation                                                         #
 # --------------------------------------------------------------------------- #
-def team_entries(db: Database, event_key: str, team: int) -> list[EntryView]:
-    return list_entries(db, event_key, team=team)
+def team_entries(session: Session, event_key: str, team: int) -> list[ScoutEntry]:
+    stmt = (
+        select(ScoutEntry)
+        .where(ScoutEntry.event_key == event_key, ScoutEntry.team_number == team)
+        .order_by(ScoutEntry.match_number)
+    )
+    return list(session.exec(stmt).all())
 
 
 def _coeff_var(values: list[float]) -> float:
@@ -33,8 +35,8 @@ def _coeff_var(values: list[float]) -> float:
     return statistics.pstdev(values) / mean
 
 
-def team_summary(db: Database, event_key: str, team: int) -> dict[str, Any]:
-    all_entries = team_entries(db, event_key, team)
+def team_summary(session: Session, event_key: str, team: int) -> dict[str, Any]:
+    all_entries = team_entries(session, event_key, team)
     # No-shows are a reliability signal, not a performance sample.
     entries = [e for e in all_entries if not e.no_show]
     no_shows = len(all_entries) - len(entries)
@@ -65,7 +67,7 @@ def team_summary(db: Database, event_key: str, team: int) -> dict[str, Any]:
             tag_counts[t] = tag_counts.get(t, 0) + 1
     top_tags = sorted(tag_counts.items(), key=lambda kv: -kv[1])
 
-    tc = get_team_cache(db, team)
+    tc = session.get(TeamCache, team)
     return {
         "team": team,
         "nickname": tc.nickname if tc else "",
@@ -91,17 +93,12 @@ def team_summary(db: Database, event_key: str, team: int) -> dict[str, Any]:
     }
 
 
-def event_teams(db: Database, event_key: str) -> list[int]:
-    """All team numbers at this event — the match schedule plus anything
-    scouted (covers offline/pit teams the schedule doesn't know yet)."""
-    teams: set[int] = set(
-        int(t)
-        for t in db.match_scouting.distinct("team_num", {"event_key": event_key})
-    )
-    for m in list_matches(db, event_key):
-        teams.update(m.red)
-        teams.update(m.blue)
-    return sorted(teams)
+def event_teams(session: Session, event_key: str) -> list[int]:
+    """All team numbers seen in scouting for this event."""
+    rows = session.exec(
+        select(ScoutEntry.team_number).where(ScoutEntry.event_key == event_key)
+    ).all()
+    return sorted({int(t) for t in rows})
 
 
 # --------------------------------------------------------------------------- #
@@ -120,9 +117,9 @@ RANK_METRICS = {
 }
 
 
-def rank_teams(db: Database, event_key: str, metric: str = "avg_points") -> list[dict[str, Any]]:
+def rank_teams(session: Session, event_key: str, metric: str = "avg_points") -> list[dict[str, Any]]:
     metric = metric if metric in RANK_METRICS else "avg_points"
-    rows = [team_summary(db, event_key, t) for t in event_teams(db, event_key)]
+    rows = [team_summary(session, event_key, t) for t in event_teams(session, event_key)]
     rows = [r for r in rows if r["matches"] > 0 or metric == "epa"]
     rows.sort(key=lambda r: (r.get(metric) or 0), reverse=True)
     for i, r in enumerate(rows, 1):
@@ -134,10 +131,10 @@ def rank_teams(db: Database, event_key: str, metric: str = "avg_points") -> list
 # Heatmap aggregation                                                          #
 # --------------------------------------------------------------------------- #
 def team_heatmap(
-    db: Database, event_key: str, team: int, phase: Optional[str] = None
+    session: Session, event_key: str, team: int, phase: Optional[str] = None
 ) -> dict[str, Any]:
     points: list[dict[str, Any]] = []
-    for e in team_entries(db, event_key, team):
+    for e in team_entries(session, event_key, team):
         for a in e.heatmap or []:
             if phase and a.get("phase") != phase:
                 continue
@@ -163,16 +160,16 @@ def team_heatmap(
 # --------------------------------------------------------------------------- #
 # Strength-of-schedule "Data Picklist"                                         #
 # --------------------------------------------------------------------------- #
-def _event_epa_map(db: Database, event_key: str) -> dict[int, float]:
+def _event_epa_map(session: Session, event_key: str) -> dict[int, float]:
     out: dict[int, float] = {}
-    for t in event_teams(db, event_key):
-        tc = get_team_cache(db, t)
+    for t in event_teams(session, event_key):
+        tc = session.get(TeamCache, t)
         if tc and tc.epa is not None:
             out[t] = float(tc.epa)
     return out
 
 
-def data_picklist(db: Database, event_key: str) -> dict[str, Any]:
+def data_picklist(session: Session, event_key: str) -> dict[str, Any]:
     """Auto-rank robots by *true* strength.
 
     A team can look good simply because it keeps drawing weak opponents and
@@ -188,9 +185,11 @@ def data_picklist(db: Database, event_key: str) -> dict[str, Any]:
     where sos_z is the schedule term normalised across the event so the
     adjustment is comparable to point swings.
     """
-    teams = event_teams(db, event_key)
-    epa_map = _event_epa_map(db, event_key)
-    matches = list_matches(db, event_key)
+    teams = event_teams(session, event_key)
+    epa_map = _event_epa_map(session, event_key)
+    matches = list(
+        session.exec(select(MatchRecord).where(MatchRecord.event_key == event_key)).all()
+    )
     event_avg_epa = (sum(epa_map.values()) / len(epa_map)) if epa_map else 0.0
 
     # Gather opponents/partners faced per team from the schedule.
@@ -210,7 +209,7 @@ def data_picklist(db: Database, event_key: str) -> dict[str, Any]:
 
     rows: list[dict[str, Any]] = []
     for t in teams:
-        s = team_summary(db, event_key, t)
+        s = team_summary(session, event_key, t)
         if s["matches"] == 0:
             continue
         opp_strength = (sum(opp[t]) / len(opp[t])) if opp[t] else event_avg_epa
@@ -270,10 +269,11 @@ POSITIVE_TAGS = {
 }
 
 
-def scout_disagreements(db: Database, event_key: str) -> dict[str, Any]:
+def scout_disagreements(session: Session, event_key: str) -> dict[str, Any]:
     """Flag teams where the scouting record doesn't agree with itself.
 
-    Two signals:
+    Two signals, per the TideScout-style "separate individual judgment from
+    consensus" idea:
 
       1. **Numeric spread** — the same team+match scouted by 2+ scouts with a
          big point gap means someone missed cycles (or padded them).
@@ -282,8 +282,8 @@ def scout_disagreements(db: Database, event_key: str) -> dict[str, Any]:
          failures) rank low — or vice versa. Those are exactly the teams to
          re-watch on film before locking a picklist.
     """
-    teams = event_teams(db, event_key)
-    summaries = {t: team_summary(db, event_key, t) for t in teams}
+    teams = event_teams(session, event_key)
+    summaries = {t: team_summary(session, event_key, t) for t in teams}
     summaries = {t: s for t, s in summaries.items() if s["matches"] > 0}
     if not summaries:
         return {"event": event_key, "teams": []}
@@ -312,7 +312,7 @@ def scout_disagreements(db: Database, event_key: str) -> dict[str, Any]:
 
     rows: list[dict[str, Any]] = []
     for t, s in summaries.items():
-        entries = team_entries(db, event_key, t)
+        entries = team_entries(session, event_key, t)
 
         # Signal 1: same match, multiple scouts.
         by_match: dict[int, list[Any]] = {}
@@ -385,8 +385,8 @@ def scout_disagreements(db: Database, event_key: str) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # Compare                                                                      #
 # --------------------------------------------------------------------------- #
-def compare_teams(db: Database, event_key: str, teams: list[int]) -> dict[str, Any]:
-    summaries = [team_summary(db, event_key, t) for t in teams]
+def compare_teams(session: Session, event_key: str, teams: list[int]) -> dict[str, Any]:
+    summaries = [team_summary(session, event_key, t) for t in teams]
     metrics = [
         ("avg_points", "Avg points", "high"),
         ("max_points", "Peak points", "high"),
