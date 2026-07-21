@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import settings
 from .database import init_db
 from .realtime import hub
-from .routers import admin, auth, betting, matches, picklists, scouting, sync, system, teams
+from .routers import admin, auth, betting, events, matches, picklists, scouting, sync, system, teams
 from .seed import seed
 
 STATIC_FIELD = Path(__file__).resolve().parent / "static_field"
@@ -19,8 +19,13 @@ STATIC_FIELD = Path(__file__).resolve().parent / "static_field"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
-    seed()
+    # Best effort: a cold start with the database briefly unreachable should
+    # still boot and serve /api/health with a clear diagnostic.
+    try:
+        init_db()
+        seed()
+    except Exception:
+        pass
     yield
 
 
@@ -45,21 +50,44 @@ for r in (
     admin.router,
     sync.router,
     system.router,
+    events.router,
 ):
     app.include_router(r)
 
 
 @app.get("/api/health")
 def health() -> dict:
-    return {
-        "ok": True,
+    db_ok = True
+    try:
+        from sqlalchemy import text
+
+        from .database import engine
+
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception:
+        db_ok = False
+    environment = "vercel" if settings.IS_VERCEL else ("azure" if settings.IS_AZURE else "local")
+    out = {
+        "ok": db_ok,
         "app": settings.APP_NAME,
         "season": settings.SEASON,
-        "environment": "megascout" if settings.IS_MEGASCOUT else ("azure" if settings.IS_AZURE else "local"),
-        "database": "postgres" if "postgres" in settings.DATABASE_URL else "sqlite",
-        "realtime": "websocket (/ws)",
-        "cloud_sync": settings.CLOUD_SYNC_ENABLED,
+        "environment": environment,
+        "database": {
+            "engine": "postgres" if "postgres" in settings.DATABASE_URL else "sqlite",
+            "configured": settings.DATABASE_CONFIGURED,
+            "reachable": db_ok,
+        },
+        "realtime": "websocket (/ws) with polling fallback (/api/events)",
     }
+    if settings.IS_VERCEL and not settings.DATABASE_CONFIGURED:
+        out["warning"] = (
+            "DATABASE_URL is not set — data will NOT persist. Add a cloud "
+            "PostgreSQL connection string (e.g. Neon or Azure Database for "
+            "PostgreSQL) in Vercel → Project → Settings → Environment "
+            "Variables, then redeploy."
+        )
+    return out
 
 
 @app.websocket("/ws")

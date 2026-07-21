@@ -1,6 +1,11 @@
-"""Offline sync: the Chromebook/phone queues entries in IndexedDB while the
-connection is down and flushes them here when it returns.  Everything is keyed
-by ``client_uuid`` so replays never duplicate."""
+"""Batch synchronization + recovery imports.
+
+Devices queue submissions in IndexedDB while offline and flush them here when
+the connection returns; recovery JSONL files from a failed Chromebook replay
+through the same endpoint. Everything is keyed by the submission UUID and the
+payload hash, and the response carries an individual result for every record —
+one bad record never blocks the rest.
+"""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
@@ -9,14 +14,15 @@ from sqlmodel import Session, select
 
 from ..auth import current_scouter
 from ..database import get_session
-from ..models import Scouter, ScoutEntry
-from ..outbox import commit_submission
+from ..models import MatchRecord, Scouter, ScoutEntry
 from ..realtime import emit
 from ..scoring import compute_points
 from ..store import get_setting
-from .scouting import ScoutIn
+from .scouting import ScoutIn, canonical_hash, validate_submission
 
 router = APIRouter(prefix="/api/sync", tags=["sync"])
+
+MAX_BATCH = 50
 
 
 class SyncIn(BaseModel):
@@ -29,40 +35,90 @@ def sync_scout(
     session: Session = Depends(get_session),
     scouter: Scouter = Depends(current_scouter),
 ) -> dict:
-    """Replay the device's IndexedDB queue.
-
-    Idempotent by ``submission_id`` (a.k.a. ``client_uuid``): a record already
-    on MegaScout is reported as a duplicate so the device can clear it, exactly
-    like a fresh submit. Each accepted entry goes through the transactional
-    outbox, so replayed records are queued for Azure too.
-    """
+    results: list[dict] = []
     accepted: list[str] = []
     duplicates: list[str] = []
-    for item in body.entries:
-        key = item.submission_id or item.client_uuid
+    created = 0
+
+    for item in body.entries[:MAX_BATCH]:
+        key = item.submission_id or item.client_uuid or ""
+        result = {"submission_id": key, "status": "created"}
+        results.append(result)
+
+        event_key = (item.event_key or get_setting(session, "current_event")).strip()
+        if not event_key:
+            result.update(status="invalid", error="No event configured")
+            continue
+
+        error = validate_submission(item.model_dump())
+        if error:
+            result.update(status="invalid", error=error)
+            continue
+
+        existing = None
         if key:
             existing = session.exec(
                 select(ScoutEntry).where(
                     (ScoutEntry.submission_id == key) | (ScoutEntry.client_uuid == key)
                 )
             ).first()
-            if existing:
+        if existing is not None:
+            if (
+                item.payload_hash
+                and existing.payload_hash
+                and item.payload_hash != existing.payload_hash
+            ):
+                result.update(
+                    status="conflict",
+                    error="UUID exists with a different payload",
+                )
+            else:
+                result["status"] = "already_exists"
                 duplicates.append(key)
-                continue
-        data = item.model_dump()
-        data["event_key"] = (item.event_key or get_setting(session, "current_event")).strip()
-        data["scout_id"] = scouter.scout_id
-        data["points"] = 0.0 if item.no_show else compute_points(data)
-        entry = ScoutEntry.from_submission(data)
-        scouter.matches_scouted += 1
-        session.add(scouter)
-        commit_submission(session, entry)
+            continue
+
+        try:
+            data = item.model_dump()
+            data["event_key"] = event_key
+            data["scout_id"] = scouter.scout_id
+            data["points"] = 0.0 if item.no_show else compute_points(data)
+            if not data.get("payload_hash"):
+                data["payload_hash"] = canonical_hash(data)
+            entry = ScoutEntry.from_submission(data)
+            session.add(entry)
+            # First scouting on a match closes its betting window (parity with
+            # the single-submit path).
+            match = session.exec(
+                select(MatchRecord).where(
+                    MatchRecord.event_key == event_key,
+                    MatchRecord.comp_level == entry.comp_level,
+                    MatchRecord.match_number == entry.match_number,
+                )
+            ).first()
+            if match and not match.betting_locked:
+                match.betting_locked = True
+                session.add(match)
+            session.commit()
+        except Exception as exc:  # noqa: BLE001 — isolate the bad record
+            session.rollback()
+            result.update(status="invalid", error=str(exc)[:300])
+            continue
+
+        created += 1
         accepted.append(key or entry.submission_id)
-    if accepted:
-        emit("scout_submitted", {"synced": len(accepted)})
+        result["submission_id"] = entry.submission_id
+
+    if created:
+        session.add(scouter)
+        scouter.matches_scouted += created
+        session.commit()
+        emit("scout_submitted", {"synced": created})
+
     return {
         "ok": True,
+        "results": results,
+        # Back-compat fields for the older client sync loop.
         "accepted": [u for u in accepted if u],
-        "accepted_count": len(accepted),
+        "accepted_count": created,
         "duplicates": duplicates,
     }

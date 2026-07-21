@@ -136,16 +136,22 @@ class ScoutEntry(SQLModel, table=True):
         sa_column=Column("submitted_at", DateTime(timezone=True), nullable=False),
     )
 
-    # --- MegaScout submission lifecycle (the standardized envelope) --------- #
-    # client_ts             : when the device created the record (may predate
-    #                         MegaScout receipt by hours if it was offline).
-    # megascout_receipt_ts  : when MegaScout committed it to PostgreSQL.
-    # azure_receipt_ts      : when Azure acknowledged it (set by the sync worker).
-    # cloud_status          : queued / synced / failed — mirrors the outbox.
+    # --- Direct-to-cloud submission envelope --------------------------------- #
+    # This API is the shared source of truth, so committing here IS the cloud
+    # receipt. The device's own state machine tracks queued/acknowledged.
+    # client_ts        : when the device created the record (can predate the
+    #                    cloud receipt by hours if the device was offline).
+    # azure_received_at: when this API committed the record.
+    # payload_hash     : SHA-256 of the canonical payload — same UUID with a
+    #                    different hash is a 409 conflict, never an overwrite.
+    # supersedes_submission_id: corrections create a NEW record pointing at the
+    #                    original; acknowledged records are never edited.
     client_ts: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
-    megascout_receipt_ts: datetime = Field(default_factory=_now, sa_column=Column(DateTime(timezone=True), nullable=False))
-    azure_receipt_ts: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
-    cloud_status: str = Field(default="queued", index=True)  # queued / synced / failed
+    azure_received_at: datetime = Field(default_factory=_now, sa_column=Column(DateTime(timezone=True), nullable=False))
+    payload_hash: str = Field(default="", index=True)
+    schema_version: int = 1
+    server_version: int = 1
+    supersedes_submission_id: Optional[str] = Field(default=None, index=True)
 
     # Derived scoring proxy, cached on insert so analytics stay cheap.
     points: float = Field(default=0.0, sa_column=Column("points", Float))
@@ -215,10 +221,10 @@ class ScoutEntry(SQLModel, table=True):
         return str(self._d("failure_details", "") or "")
 
     def envelope(self) -> dict[str, Any]:
-        """The standardized submission envelope shipped to Azure.
+        """The standardized submission envelope (the sync/recovery contract).
 
-        Exactly the fields the MegaScout design fixes as the sync contract:
-        submission id, identity, and the three lifecycle timestamps + status.
+        These are the exact fields a JSONL recovery export line carries:
+        submission id, identity, payload, hash, and lifecycle timestamps.
         """
         return {
             "submission_id": self.submission_id,
@@ -233,9 +239,12 @@ class ScoutEntry(SQLModel, table=True):
             "no_show": self.no_show,
             "notes": self.notes,
             "points": self.points,
+            "payload_hash": self.payload_hash,
+            "schema_version": self.schema_version,
+            "supersedes_submission_id": self.supersedes_submission_id,
             "client_ts": self.client_ts.isoformat() if self.client_ts else None,
-            "megascout_receipt_ts": self.megascout_receipt_ts.isoformat()
-            if self.megascout_receipt_ts
+            "azure_received_at": self.azure_received_at.isoformat()
+            if self.azure_received_at
             else None,
         }
 
@@ -254,6 +263,9 @@ class ScoutEntry(SQLModel, table=True):
             client_uuid=sub.get("client_uuid") or submission_id,
             submission_id=submission_id,
             client_ts=client_ts,
+            payload_hash=str(sub.get("payload_hash") or ""),
+            schema_version=int(sub.get("schema_version") or 1),
+            supersedes_submission_id=sub.get("supersedes_submission_id") or None,
             event_key=sub["event_key"],
             comp_level=sub.get("comp_level", "qm"),
             match_number=int(sub["match_number"]),
@@ -400,52 +412,19 @@ class ExternalCache(SQLModel, table=True):
 
 
 # --------------------------------------------------------------------------- #
-# Transactional outbox — the MegaScout → Azure durable sync queue              #
+# Activity feed — realtime change events, polled by clients                    #
 # --------------------------------------------------------------------------- #
-class OutboxRecord(SQLModel, table=True):
-    """One durable "please ship this to Azure" instruction.
+class Activity(SQLModel, table=True):
+    """One realtime change event (scout_submitted, bet_placed, …).
 
-    Written in the SAME database transaction as the scouting record it refers
-    to (see ``repositories.commit_submission``), so a record can never exist in
-    PostgreSQL without also being queued for cloud sync. Rows are never deleted
-    — a shipped row is marked ``sent`` and kept as an audit trail.
+    Serverless hosts can't hold WebSockets open, so clients poll
+    ``GET /api/events?since=<cursor>`` and replay these rows onto the same
+    client-side bus the LAN WebSocket feeds. Rows are tiny and pruned lazily.
     """
 
-    __tablename__ = "sync_outbox"
+    __tablename__ = "activity"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    # Idempotency key — matches ScoutEntry.submission_id and the Azure record.
-    submission_id: str = Field(sa_column=Column(String, unique=True, index=True, nullable=False))
-    aggregate_type: str = "match_scouting"
-    aggregate_id: str = ""  # ScoutEntry.id as a string, once known
-
-    # Denormalized identity so the health panel can answer "oldest queued
-    # record (with match #)" and "missing match submissions" without a join.
-    event_key: str = Field(default="", index=True)
-    match_number: int = 0
-    team_number: int = 0
-    scout_id: str = ""
-
-    # The exact envelope POSTed to Azure.
+    event: str = Field(index=True)
     payload: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
-
-    status: str = Field(default="queued", index=True)  # queued / sent / failed
-    attempts: int = 0
-    last_error: str = Field(default="", sa_column=Column(Text))
-
-    client_ts: Optional[datetime] = None
-    created_at: datetime = Field(default_factory=_now, index=True)  # MegaScout receipt
-    next_attempt_at: datetime = Field(default_factory=_now, index=True)
-    azure_receipt_ts: Optional[datetime] = None
-
-
-class WorkerHeartbeat(SQLModel, table=True):
-    """Liveness + last-run stats for the Azure sync worker, for the health panel."""
-
-    __tablename__ = "worker_heartbeat"
-
-    name: str = Field(default="azure_sync", primary_key=True)
-    last_beat: datetime = Field(default_factory=_now)
-    last_synced: int = 0
-    last_error: str = Field(default="", sa_column=Column(Text))
-    cloud_reachable: bool = True
+    ts: datetime = Field(default_factory=_now, index=True)

@@ -1,9 +1,17 @@
-"""Match scouting + pit scouting."""
+"""Match scouting + pit scouting.
+
+Submissions follow the direct-to-cloud contract: the device assigns a UUID and
+a SHA-256 payload hash; the server commits exactly once, returns the original
+acknowledgement for identical retries, and 409s a UUID reused with a different
+payload (corrections must be new records that supersede the original).
+"""
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
@@ -11,12 +19,53 @@ from ..auth import current_scouter
 from ..database import get_session
 from ..external import sync_team
 from ..models import MatchRecord, PitEntry, Scouter, ScoutEntry, TeamCache
-from ..outbox import commit_submission
 from ..realtime import emit
 from ..scoring import compute_points
 from ..store import get_setting
 
 router = APIRouter(prefix="/api/scout", tags=["scouting"])
+
+# Fields that define the observation itself (identity + payload). The server
+# hashes these for clients that didn't send a hash of their own.
+_HASHED_FIELDS = (
+    "event_key", "match_number", "comp_level", "team_number", "alliance",
+    "station", "heatmap", "auto_leave", "auto_climb", "climb", "climb_seconds",
+    "tags", "played_defense", "defense_rating", "defense_on",
+    "successful_stops", "driver_skill", "speed_rating", "fouls",
+    "failure", "failure_details", "no_show", "notes",
+)
+
+
+def canonical_hash(data: dict[str, Any]) -> str:
+    """SHA-256 of the canonical (sorted-keys) JSON of the observation."""
+    subset = {k: data.get(k) for k in _HASHED_FIELDS}
+    canonical = json.dumps(subset, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def validate_submission(data: dict[str, Any]) -> str | None:
+    """Field validation shared by the single and batch paths.
+
+    Returns an error string (or None). Kept out of the Pydantic model on
+    purpose: one invalid record in a batch must fail individually, not 422 the
+    whole request.
+    """
+    try:
+        if int(data.get("match_number") or 0) < 1:
+            return "match_number must be at least 1"
+        if int(data.get("team_number") or 0) < 1:
+            return "team_number must be at least 1"
+        if not 1 <= int(data.get("station") or 1) <= 3:
+            return "station must be 1-3"
+    except (TypeError, ValueError):
+        return "match_number/team_number/station must be integers"
+    if data.get("alliance") not in ("red", "blue"):
+        return "alliance must be red or blue"
+    if data.get("comp_level") not in ("qm", "qf", "sf", "f"):
+        return "comp_level must be qm/qf/sf/f"
+    if len(str(data.get("notes") or "")) > 5000:
+        return "notes over maximum length (5000)"
+    return None
 
 
 class ScoutIn(BaseModel):
@@ -25,8 +74,13 @@ class ScoutIn(BaseModel):
     # client_uuid, then a server-generated UUID, for older clients).
     submission_id: Optional[str] = None
     # When the device created the record (ISO 8601). Preserved through sync so
-    # Azure keeps the true observation time even for records synced hours late.
+    # the cloud keeps the true observation time even for records synced late.
     client_ts: Optional[str] = None
+    # SHA-256 of the canonical payload, computed on the device.
+    payload_hash: Optional[str] = None
+    schema_version: int = 1
+    # Corrections: a new UUID that supersedes an acknowledged record.
+    supersedes_submission_id: Optional[str] = None
     event_key: Optional[str] = None
     match_number: int
     comp_level: str = "qm"
@@ -85,12 +139,16 @@ def _entry_dict(e: ScoutEntry) -> dict:
         "notes": e.notes,
         "points": e.points,
         "created_at": e.created_at.isoformat(),
-        # MegaScout submission envelope / lifecycle.
+        # Direct-to-cloud submission envelope. A record in this API *is* in
+        # the cloud, so its status is always "synced" from the server's view;
+        # the device's own queue tracks anything not yet committed here.
         "submission_id": e.submission_id,
         "client_ts": e.client_ts.isoformat() if e.client_ts else None,
-        "megascout_receipt_ts": e.megascout_receipt_ts.isoformat() if e.megascout_receipt_ts else None,
-        "azure_receipt_ts": e.azure_receipt_ts.isoformat() if e.azure_receipt_ts else None,
-        "cloud_status": e.cloud_status,
+        "azure_received_at": e.azure_received_at.isoformat() if e.azure_received_at else None,
+        "payload_hash": e.payload_hash,
+        "schema_version": e.schema_version,
+        "supersedes_submission_id": e.supersedes_submission_id,
+        "cloud_status": "synced",
     }
 
 
@@ -102,12 +160,31 @@ async def submit_scout(
 ) -> dict:
     event_key = (body.event_key or get_setting(session, "current_event")).strip()
 
-    # Idempotency: re-syncing the same offline entry must not duplicate.
-    if body.client_uuid:
+    error = validate_submission(body.model_dump())
+    if error:
+        raise HTTPException(status_code=422, detail=error)
+
+    # Direct-to-cloud idempotency (PUT semantics on the submission UUID):
+    #   same UUID + same payload hash      → return the original acknowledgement
+    #   same UUID + different payload hash → 409, never overwrite
+    key = body.submission_id or body.client_uuid
+    if key:
         existing = session.exec(
-            select(ScoutEntry).where(ScoutEntry.client_uuid == body.client_uuid)
+            select(ScoutEntry).where(
+                (ScoutEntry.submission_id == key) | (ScoutEntry.client_uuid == key)
+            )
         ).first()
         if existing:
+            if (
+                body.payload_hash
+                and existing.payload_hash
+                and body.payload_hash != existing.payload_hash
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Submission UUID exists with a different payload — "
+                    "submit a correction instead of overwriting",
+                )
             return {"ok": True, "duplicate": True, "entry": _entry_dict(existing)}
 
     data = body.model_dump()
@@ -115,6 +192,10 @@ async def submit_scout(
     data["scout_id"] = scouter.scout_id
     # A no-show robot scores nothing regardless of stray taps.
     data["points"] = 0.0 if body.no_show else compute_points(data)
+    if not data.get("payload_hash"):
+        # Older clients don't hash; compute one server-side so later retries
+        # and recovery imports can still be conflict-checked.
+        data["payload_hash"] = canonical_hash(data)
 
     entry = ScoutEntry.from_submission(data)
 
@@ -132,9 +213,9 @@ async def submit_scout(
         match.betting_locked = True
         session.add(match)
 
-    # The record + its Azure outbox row commit in one transaction. After this
-    # returns the submission is durably on MegaScout and queued for the cloud.
-    commit_submission(session, entry)
+    session.add(entry)
+    session.commit()
+    session.refresh(entry)
 
     # Warm the team cache the first time we see a team (best effort).
     if session.get(TeamCache, body.team_number) is None:
@@ -143,13 +224,12 @@ async def submit_scout(
         except Exception:
             pass
 
-    # WebSocket acknowledgement: tell the device MegaScout has the record
-    # (cloud_status is still "queued" until the sync worker ships it), and
-    # nudge every dashboard to refetch.
+    # Acknowledgement: the record is committed to the shared database — the
+    # device can mark it "acknowledged"; every dashboard refetches.
     emit("submission_ack", {
         "submission_id": entry.submission_id,
         "id": entry.id,
-        "cloud_status": entry.cloud_status,
+        "azure_received_at": entry.azure_received_at.isoformat(),
     })
     emit("scout_submitted", {"team": entry.team_number, "match": entry.match_number, "bets_locked": bool(match)})
     return {"ok": True, "duplicate": False, "entry": _entry_dict(entry)}

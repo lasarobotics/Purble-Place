@@ -20,8 +20,10 @@ export interface ScoutEntry {
   client_uuid?: string;
   submission_id?: string;
   client_ts?: string;
-  megascout_receipt_ts?: string;
-  azure_receipt_ts?: string | null;
+  payload_hash?: string;
+  schema_version?: number;
+  supersedes_submission_id?: string | null;
+  azure_received_at?: string | null;
   cloud_status?: "queued" | "synced" | "failed";
   event_key?: string;
   match_number: number;

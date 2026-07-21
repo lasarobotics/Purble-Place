@@ -15,8 +15,12 @@ from pathlib import Path
 # Repo paths -----------------------------------------------------------------
 APP_DIR = Path(__file__).resolve().parent
 BACKEND_DIR = APP_DIR.parent
-DATA_DIR = BACKEND_DIR / "data"
-DATA_DIR.mkdir(exist_ok=True)
+
+# Vercel's filesystem is read-only except /tmp; keep the SQLite fallback there
+# (per-instance scratch only — production must set DATABASE_URL to Postgres).
+IS_VERCEL = os.environ.get("VERCEL") == "1"
+DATA_DIR = Path("/tmp/data") if IS_VERCEL else BACKEND_DIR / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _load_dotenv() -> None:
@@ -101,18 +105,13 @@ class Settings:
 
     # Environment
     IS_AZURE: bool = _on_azure()
+    IS_VERCEL: bool = IS_VERCEL
     DATABASE_URL: str = _database_url()
 
-    # --- MegaScout ↔ Azure synchronization -------------------------------- #
-    # The sync worker POSTs each queued submission to CLOUD_SYNC_URL with
-    # CLOUD_SYNC_KEY as a bearer token. Unset (default) → the worker runs in
-    # "local only" mode: it keeps the outbox durable but doesn't ship, so a
-    # laptop with no uplink still works and nothing is lost.
-    CLOUD_SYNC_URL: str = os.getenv("CLOUD_SYNC_URL", "").strip()
-    CLOUD_SYNC_KEY: str = os.getenv("CLOUD_SYNC_KEY", "").strip()
-    SYNC_INTERVAL_SECONDS: float = float(os.getenv("HAZEHUB_SYNC_INTERVAL", "5"))
-    SYNC_BATCH_SIZE: int = int(os.getenv("HAZEHUB_SYNC_BATCH", "50"))
-    SYNC_MAX_BACKOFF_SECONDS: float = float(os.getenv("HAZEHUB_SYNC_MAX_BACKOFF", "60"))
+    # Direct-to-cloud design: this API *is* the shared source of truth.
+    # Devices keep their own IndexedDB queues and sync straight here over
+    # HTTPS with UUID + payload-hash idempotency. There is no MegaScout middle
+    # tier, no outbox, and no sync worker.
 
     # Optional UniFi/gateway stats endpoint for the admin network panel. When
     # unset, the panel reports network fields as "unavailable" rather than
@@ -120,15 +119,11 @@ class Settings:
     GATEWAY_STATS_URL: str = os.getenv("HAZEHUB_GATEWAY_STATS_URL", "").strip()
 
     @property
-    def CLOUD_SYNC_ENABLED(self) -> bool:
-        return bool(self.CLOUD_SYNC_URL)
+    def DATABASE_CONFIGURED(self) -> bool:
+        """True when a real (non-SQLite-fallback) database URL is set."""
+        return not self.DATABASE_URL.startswith("sqlite")
 
-    @property
-    def IS_MEGASCOUT(self) -> bool:
-        """On-prem MegaScout server (Postgres + always-on) vs a dev SQLite box."""
-        return "postgres" in self.DATABASE_URL or bool(os.getenv("MEGASCOUT"))
-
-    # CORS — local dev front-ends + anything you configure for Azure SWA
+    # CORS — local dev front-ends + anything you configure for cloud hosts
     @property
     def cors_origins(self) -> list[str]:
         extra = os.getenv("HAZEHUB_CORS", "")
@@ -139,8 +134,9 @@ class Settings:
         ]
         if extra:
             origins.extend(o.strip() for o in extra.split(",") if o.strip())
-        # Allow all when nothing custom configured on Azure (SWA domains vary)
-        if self.IS_AZURE and not extra:
+        # Same-origin on Vercel services needs no CORS; the wildcard keeps any
+        # split deployment working when nothing custom is configured.
+        if (self.IS_AZURE or self.IS_VERCEL) and not extra:
             origins.append("*")
         return origins
 

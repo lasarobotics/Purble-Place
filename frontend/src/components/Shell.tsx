@@ -6,7 +6,7 @@ import { useAuth } from "@/lib/auth";
 import { useLiveEvents } from "@/lib/ws";
 import { emitBus } from "@/lib/bus";
 import { flushQueue } from "@/lib/sync";
-import { pendingCount } from "@/lib/db";
+import { pendingCount, requestPersistentStorage } from "@/lib/db";
 import { Loading } from "./ui";
 import { Icon } from "./icons";
 
@@ -17,6 +17,7 @@ const MAIN_NAV = [
   { href: "/film", label: "Film", icon: "film" },
   { href: "/betting", label: "Betting", icon: "coins" },
   { href: "/picklists", label: "Picklists", icon: "list" },
+  { href: "/status", label: "Device Status", icon: "refresh" },
   { href: "/account", label: "Account", icon: "user" },
 ];
 
@@ -51,6 +52,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
   }, [loading, session, router]);
 
   useLiveEvents((event, payload) => emitBus(event, payload));
+
+  // Ask the browser to protect IndexedDB from automatic eviction — queued
+  // scouting records must survive restarts (best effort; result on /status).
+  useEffect(() => {
+    requestPersistentStorage();
+  }, []);
 
   useEffect(() => {
     const upd = () => setOnline(navigator.onLine);

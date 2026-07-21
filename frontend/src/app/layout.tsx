@@ -1,21 +1,13 @@
 import "./globals.css";
 import type { Metadata, Viewport } from "next";
-import { Atkinson_Hyperlegible, Chakra_Petch } from "next/font/google";
+import { Inter } from "next/font/google";
 import { Providers } from "./providers";
 
-// Night Pit type pairing: Chakra Petch (squared, technical) carries headers
-// and labels; Atkinson Hyperlegible keeps body text readable on dark screens
-// in bright arenas. Numerals stay on the system mono stack (globals.css).
-const chakra = Chakra_Petch({
+// One quiet family, weight contrast does the work. Numerals stay on the
+// system mono stack (globals.css) for tabular data.
+const inter = Inter({
   subsets: ["latin"],
-  weight: ["500", "600", "700"],
-  variable: "--font-chakra",
-  display: "swap",
-});
-const atkinson = Atkinson_Hyperlegible({
-  subsets: ["latin"],
-  weight: ["400", "700"],
-  variable: "--font-atkinson",
+  variable: "--font-inter",
   display: "swap",
 });
 
@@ -25,7 +17,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#0b0910",
+  themeColor: "#0e0d12",
   width: "device-width",
   initialScale: 1,
   maximumScale: 5,
@@ -33,7 +25,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${chakra.variable} ${atkinson.variable}`}>
+    <html lang="en" className={inter.variable}>
       <body>
         <Providers>{children}</Providers>
       </body>

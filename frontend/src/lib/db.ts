@@ -1,22 +1,67 @@
-// Offline queue backed by IndexedDB (Dexie). When the network is down the
-// scout form writes here; sync.ts flushes to the backend when we're back
-// online and deletes the local copy on success.
+// Local-first storage (Dexie / IndexedDB) — the device's database of record.
+//
+// Every submission is saved here BEFORE any network request, keeps its UUID
+// and payload hash for its whole life, and remains stored through the event
+// even after the cloud acknowledges it (recovery layer #1). sync.ts drives
+// the syncStatus state machine over these rows.
 import Dexie, { Table } from "dexie";
 import type { ScoutEntry } from "./types";
 
+export type SyncStatus =
+  | "queued"
+  | "sending"
+  | "acknowledged"
+  | "retry_wait"
+  | "invalid"
+  | "auth_required"
+  | "conflict";
+
 export interface PendingScout extends ScoutEntry {
-  client_uuid: string;
+  client_uuid: string;          // legacy name — equals submission_id
+  submission_id?: string;
+  payload_hash?: string;
+  client_ts?: string;
   queued_at: number;
+  sync_status?: SyncStatus;
+  attempt_count?: number;
+  last_attempt_at?: number | null;
+  next_attempt_at?: number | null;
+  last_error?: string | null;
+  azure_received_at?: string | null;
+}
+
+interface Setting {
+  key: string;
+  value: string;
 }
 
 class HazeDB extends Dexie {
   pendingScouts!: Table<PendingScout, string>;
+  settings!: Table<Setting, string>;
 
   constructor() {
     super("hazehub");
     this.version(1).stores({
       pendingScouts: "client_uuid, team_number, match_number, queued_at",
     });
+    // v2: submission lifecycle fields + device settings. Existing rows are
+    // upgraded in place as plain queued records.
+    this.version(2)
+      .stores({
+        pendingScouts:
+          "client_uuid, team_number, match_number, queued_at, sync_status, next_attempt_at",
+        settings: "key",
+      })
+      .upgrade(async (tx) => {
+        await tx
+          .table("pendingScouts")
+          .toCollection()
+          .modify((row: PendingScout) => {
+            row.submission_id = row.submission_id || row.client_uuid;
+            row.sync_status = row.sync_status || "queued";
+            row.attempt_count = row.attempt_count ?? 0;
+          });
+      });
   }
 }
 
@@ -31,15 +76,116 @@ export function uuid(): string {
   return "id-" + Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
+const UNSYNCED: SyncStatus[] = ["queued", "sending", "retry_wait"];
+
 export async function queueScout(entry: PendingScout) {
-  await db().pendingScouts.put(entry);
+  await db().pendingScouts.put({
+    sync_status: "queued",
+    attempt_count: 0,
+    last_attempt_at: null,
+    next_attempt_at: null,
+    last_error: null,
+    azure_received_at: null,
+    ...entry,
+    submission_id: entry.submission_id || entry.client_uuid,
+  });
 }
+
+/** Records still owed to the cloud (queued / sending / waiting to retry). */
 export async function pendingScouts(): Promise<PendingScout[]> {
+  const rows = await db().pendingScouts.orderBy("queued_at").toArray();
+  return rows.filter((r) => UNSYNCED.includes(r.sync_status || "queued"));
+}
+
+export async function allLocalScouts(): Promise<PendingScout[]> {
   return db().pendingScouts.orderBy("queued_at").toArray();
 }
-export async function removePending(uuids: string[]) {
-  if (uuids.length) await db().pendingScouts.bulkDelete(uuids);
+
+/** Cloud confirmed these — keep the rows (recovery layer), flip the status. */
+export async function markAcknowledged(uuids: string[], receivedAt?: string) {
+  if (!uuids.length) return;
+  await db()
+    .pendingScouts.where("client_uuid")
+    .anyOf(uuids)
+    .modify({
+      sync_status: "acknowledged",
+      last_error: null,
+      azure_received_at: receivedAt || new Date().toISOString(),
+    });
 }
+
+export async function markStatus(uuid: string, status: SyncStatus, error?: string) {
+  await db().pendingScouts.update(uuid, {
+    sync_status: status,
+    last_error: error || null,
+  });
+}
+
+export async function markRetry(uuid: string, attemptCount: number, nextAt: number, error?: string) {
+  await db().pendingScouts.update(uuid, {
+    sync_status: "retry_wait",
+    attempt_count: attemptCount,
+    last_attempt_at: Date.now(),
+    next_attempt_at: nextAt,
+    last_error: error || null,
+  });
+}
+
+// Kept for compatibility: "removing" pending records now means acknowledging
+// them — local copies survive the event per the recovery design.
+export async function removePending(uuids: string[]) {
+  await markAcknowledged(uuids);
+}
+
 export async function pendingCount(): Promise<number> {
-  return db().pendingScouts.count();
+  return (await pendingScouts()).length;
+}
+
+export interface QueueStats {
+  total: number;
+  queued: number;
+  acknowledged: number;
+  invalid: number;
+  conflict: number;
+  oldestQueued: PendingScout | null;
+  lastAcknowledgedAt: string | null;
+}
+
+export async function queueStats(): Promise<QueueStats> {
+  const rows = await allLocalScouts();
+  const un = rows.filter((r) => UNSYNCED.includes(r.sync_status || "queued"));
+  const acked = rows.filter((r) => r.sync_status === "acknowledged");
+  const lastAck = acked
+    .map((r) => r.azure_received_at || "")
+    .filter(Boolean)
+    .sort()
+    .pop();
+  return {
+    total: rows.length,
+    queued: un.length,
+    acknowledged: acked.length,
+    invalid: rows.filter((r) => r.sync_status === "invalid").length,
+    conflict: rows.filter((r) => r.sync_status === "conflict").length,
+    oldestQueued: un[0] || null,
+    lastAcknowledgedAt: lastAck || null,
+  };
+}
+
+// ---- Device identity + persistent storage (device setup) ------------------
+export async function getDeviceId(): Promise<string> {
+  const existing = await db().settings.get("deviceId");
+  if (existing) return existing.value;
+  const id = uuid();
+  await db().settings.put({ key: "deviceId", value: id });
+  return id;
+}
+
+export async function requestPersistentStorage(): Promise<boolean> {
+  try {
+    if (typeof navigator === "undefined" || !navigator.storage?.persist) return false;
+    if (await navigator.storage.persisted()) return true;
+    return await navigator.storage.persist();
+  } catch {
+    return false;
+  }
 }

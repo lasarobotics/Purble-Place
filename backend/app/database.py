@@ -36,12 +36,14 @@ def init_db() -> None:
 # (Empty after the 2027-schema rebuild — tables were renamed, so old dev DBs
 # should be regenerated with `python -m app.demo_data`.)
 _NEW_COLUMNS: list[tuple[str, str, str]] = [
-    # MegaScout submission envelope, added to an existing match_scouting table.
+    # Direct-to-cloud submission envelope, added to an existing table.
     ("match_scouting", "submission_id", "VARCHAR"),
     ("match_scouting", "client_ts", "TIMESTAMP"),
-    ("match_scouting", "megascout_receipt_ts", "TIMESTAMP"),
-    ("match_scouting", "azure_receipt_ts", "TIMESTAMP"),
-    ("match_scouting", "cloud_status", "VARCHAR"),
+    ("match_scouting", "azure_received_at", "TIMESTAMP"),
+    ("match_scouting", "payload_hash", "VARCHAR"),
+    ("match_scouting", "schema_version", "INTEGER"),
+    ("match_scouting", "server_version", "INTEGER"),
+    ("match_scouting", "supersedes_submission_id", "VARCHAR"),
 ]
 
 

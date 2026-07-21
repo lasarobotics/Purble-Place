@@ -2,8 +2,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import { useToast } from "@/lib/toast";
-import { queueScout, uuid } from "@/lib/db";
-import { flushQueue } from "@/lib/sync";
+import { markAcknowledged, markStatus, queueScout, uuid } from "@/lib/db";
+import { flushQueue, payloadHash } from "@/lib/sync";
 import type { HeatPoint, MatchRec, ScoutEntry } from "@/lib/types";
 import { FieldInput } from "@/components/Field";
 import { Segmented, Stepper, Rating, TeamIdentity } from "@/components/ui";
@@ -117,18 +117,34 @@ export default function ScoutPage() {
   async function submit() {
     if (!f.team_number) return toast("Enter the team number first", "err");
     setBusy(true);
-    const entry: ScoutEntry = { ...f, client_uuid: uuid() };
+    // Direct-to-cloud envelope: the UUID + hash are assigned on the device
+    // and stay with this observation through retries, recovery, and the cloud.
+    const submissionId = uuid();
+    const entry: ScoutEntry = {
+      ...f,
+      client_uuid: submissionId,
+      submission_id: submissionId,
+      client_ts: new Date().toISOString(),
+      payload_hash: await payloadHash(f as any),
+    };
     rememberStation(f.alliance, f.station);
+    // Save locally FIRST — the record must survive even if the request dies.
+    await queueScout({ ...entry, client_uuid: submissionId, queued_at: Date.now() });
     try {
       const res = await api<{ entry: ScoutEntry }>("/api/scout", { method: "POST", body: entry });
-      toast(f.no_show ? `No-show recorded for ${f.team_number}` : `Saved team ${f.team_number} · ${res.entry.points} pts`, "ok");
+      await markAcknowledged([submissionId], res.entry.azure_received_at || undefined);
+      toast(f.no_show ? `No-show recorded for ${f.team_number}` : `Confirmed · team ${f.team_number} · ${res.entry.points} pts`, "ok");
       resetForNext();
     } catch (err: any) {
-      // Offline or server error → keep it locally and sync later.
-      await queueScout({ ...entry, client_uuid: entry.client_uuid!, queued_at: Date.now() });
-      toast("Saved offline — will sync when connected", "info");
+      if (err?.status === 409) {
+        await markStatus(submissionId, "conflict", err.message);
+        toast("Conflict — this submission UUID already exists with different data", "err");
+      } else {
+        // Offline or server error → already saved locally, sync later.
+        toast("Saved locally — will sync when connected", "info");
+        flushQueue();
+      }
       resetForNext();
-      flushQueue();
     } finally {
       setBusy(false);
     }
