@@ -2,35 +2,34 @@
 from __future__ import annotations
 
 import math
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlmodel import Session, select
 
+from .. import repo
 from ..auth import current_scouter
 from ..betting_logic import odds_for, payout_for
-from ..database import get_session
 from ..external import match_win_prob
-from ..models import Bet, MatchRecord, Scouter, TeamCache
+from ..models import Bet, MatchRecord, Scouter
 from ..realtime import emit
-from ..store import get_setting
+from .matches import teams_payload
 
 router = APIRouter(prefix="/api/betting", tags=["betting"])
 
 
-def _match(session: Session, match_key: str) -> Optional[MatchRecord]:
-    return session.exec(
-        select(MatchRecord).where(MatchRecord.match_key == match_key)
-    ).first()
+def _match(match_key: str) -> Optional[MatchRecord]:
+    return repo.match_by_key(match_key)
 
 
-def _epa_prob(session: Session, m: MatchRecord) -> float:
+def _epa_prob(m: MatchRecord) -> float:
     """Fallback red-win probability from team EPAs (logistic on EPA diff)."""
+
     def alliance_epa(teams: list[int]) -> float:
         total = 0.0
         for t in teams:
-            tc = session.get(TeamCache, t)
+            tc = repo.team(t)
             total += (tc.epa or 0.0) if tc else 0.0
         return total
 
@@ -38,60 +37,45 @@ def _epa_prob(session: Session, m: MatchRecord) -> float:
     return 1.0 / (1.0 + math.pow(10, -(red - blue) / 30.0))
 
 
-async def _teams_payload(session: Session, numbers: list[int]) -> list[dict]:
-    out = []
-    for n in numbers:
-        tc = session.get(TeamCache, n)
-        out.append(
-            {
-                "team_number": tc.team_number if tc else n,
-                "nickname": tc.nickname if tc else "",
-                "avatar": tc.avatar if tc else "",
-                "photos": tc.photos if tc else [],
-                "epa": tc.epa if tc else None,
-            }
-        )
-    return out
-
-
-async def _win_probs(session: Session, m: MatchRecord) -> dict:
-    red = await match_win_prob(session, m.match_key)
+async def _win_probs(m: MatchRecord) -> dict:
+    red = await match_win_prob(m.match_key)
     source = "statbotics"
     if red is None:
-        red = _epa_prob(session, m)
+        red = _epa_prob(m)
         source = "epa"
     red = max(0.01, min(0.99, red))
     return {"red": red, "blue": 1 - red, "source": source}
 
 
-def _is_locked(session: Session, m: MatchRecord) -> bool:
-    if get_setting(session, "betting_enabled") != "1":
+def _betting_enabled() -> bool:
+    return repo.setting("betting_enabled") == "1"
+
+
+def _is_locked(m: MatchRecord) -> bool:
+    if not _betting_enabled():
         return True
-    if m.betting_locked or m.winner is not None:
-        return True
-    return False
+    return bool(m.betting_locked or m.winner is not None)
 
 
 @router.get("/odds")
 async def odds(
     match_key: str,
-    session: Session = Depends(get_session),
     _: Scouter = Depends(current_scouter),
 ) -> dict:
-    m = _match(session, match_key)
+    m = _match(match_key)
     if not m:
         raise HTTPException(status_code=404, detail="Match not found")
-    probs = await _win_probs(session, m)
+    probs = await _win_probs(m)
     return {
         "match_key": m.match_key,
         "match_number": m.match_number,
         "comp_level": m.comp_level,
         "red": m.red,
         "blue": m.blue,
-        "red_teams": await _teams_payload(session, m.red),
-        "blue_teams": await _teams_payload(session, m.blue),
-        "locked": _is_locked(session, m),
-        "betting_enabled": get_setting(session, "betting_enabled") == "1",
+        "red_teams": teams_payload(m.red),
+        "blue_teams": teams_payload(m.blue),
+        "locked": _is_locked(m),
+        "betting_enabled": _betting_enabled(),
         "source": probs["source"],
         "red_odds": {**odds_for(probs["red"])},
         "blue_odds": {**odds_for(probs["blue"])},
@@ -107,7 +91,6 @@ class BetIn(BaseModel):
 @router.post("/place")
 async def place_bet(
     body: BetIn,
-    session: Session = Depends(get_session),
     scouter: Scouter = Depends(current_scouter),
 ) -> dict:
     if body.pick not in ("red", "blue"):
@@ -117,18 +100,20 @@ async def place_bet(
     if body.wager > scouter.bucks:
         raise HTTPException(status_code=400, detail="Not enough Purple Bucks")
 
-    m = _match(session, body.match_key)
+    m = _match(body.match_key)
     if not m:
         raise HTTPException(status_code=404, detail="Match not found")
-    if _is_locked(session, m):
+    if _is_locked(m):
         raise HTTPException(status_code=400, detail="Betting is closed for this match")
 
-    probs = await _win_probs(session, m)
+    probs = await _win_probs(m)
     p = probs[body.pick]
     o = odds_for(p)
     potential = payout_for(body.wager, o["multiplier"])
 
-    # Escrow the wager immediately.
+    # Escrow the wager immediately. Two documents, written directly (not
+    # coalesced) — a balance the user can see must be durable before the
+    # response returns.
     scouter.bucks -= body.wager
     bet = Bet(
         scout_id=scouter.scout_id,
@@ -142,10 +127,8 @@ async def place_bet(
         multiplier=o["multiplier"],
         potential_payout=potential,
     )
-    session.add(bet)
-    session.add(scouter)
-    session.commit()
-    session.refresh(bet)
+    repo.save_bet(bet)
+    repo.save_scouter(scouter)
 
     emit("bet_placed", {"scout": scouter.scout_id, "match": m.match_number})
     return {"ok": True, "bucks": scouter.bucks, "bet": _bet_dict(bet)}
@@ -170,25 +153,19 @@ def _bet_dict(b: Bet) -> dict:
 
 
 @router.get("/mine")
-def my_bets(
-    session: Session = Depends(get_session),
-    scouter: Scouter = Depends(current_scouter),
-) -> dict:
-    rows = session.exec(
-        select(Bet).where(Bet.scout_id == scouter.scout_id).order_by(Bet.id.desc())
-    ).all()
+def my_bets(scouter: Scouter = Depends(current_scouter)) -> dict:
+    rows = repo.bets_by_scout().get(scouter.scout_id, [])
+    rows = sorted(rows, key=lambda b: b.id, reverse=True)
     return {"bucks": scouter.bucks, "bets": [_bet_dict(b) for b in rows]}
 
 
 @router.get("/leaderboard")
-def leaderboard(
-    session: Session = Depends(get_session),
-    _: Scouter = Depends(current_scouter),
-) -> list[dict]:
-    rows = session.exec(select(Scouter)).all()
+def leaderboard(_: Scouter = Depends(current_scouter)) -> list[dict]:
+    # One grouped pass over the bets (memoised) instead of a per-scouter query.
+    by_scout = repo.bets_by_scout()
     board = []
-    for s in rows:
-        bets = session.exec(select(Bet).where(Bet.scout_id == s.scout_id)).all()
+    for s in repo.scouters():
+        bets = by_scout.get(s.scout_id, [])
         won = sum(1 for b in bets if b.status == "won")
         settled = sum(1 for b in bets if b.status in ("won", "lost"))
         board.append(
@@ -208,18 +185,25 @@ def leaderboard(
     return board
 
 
-def resolve_match_bets(session: Session, m: MatchRecord) -> int:
-    """Settle all open bets on a finished match. Returns number settled."""
+def resolve_match_bets(m: MatchRecord) -> int:
+    """Settle all open bets on a finished match. Returns number settled.
+
+    Bets and the scouters they pay out to are collected first and written in
+    two batched commits, so settling a full match costs a handful of
+    operations instead of one write per bet plus one per balance.
+    """
     if m.winner is None:
         return 0
-    open_bets = session.exec(
-        select(Bet).where(Bet.match_key == m.match_key, Bet.status == "open")
-    ).all()
-    from datetime import datetime, timezone
+    open_bets = repo.open_bets_for_match(m.match_key)
+    if not open_bets:
+        return 0
 
-    settled = 0
+    now = datetime.now(timezone.utc)
+    touched: dict[str, Scouter] = {}
     for b in open_bets:
-        scouter = session.get(Scouter, b.scout_id)
+        scouter = touched.get(b.scout_id) or repo.scouter(b.scout_id)
+        if scouter is not None:
+            touched[b.scout_id] = scouter
         if m.winner == "tie":
             b.status = "refunded"
             b.payout = b.wager
@@ -233,12 +217,11 @@ def resolve_match_bets(session: Session, m: MatchRecord) -> int:
         else:
             b.status = "lost"
             b.payout = 0
-        b.resolved_at = datetime.now(timezone.utc)
-        session.add(b)
-        if scouter:
-            session.add(scouter)
-        settled += 1
-    session.commit()
-    if settled:
-        emit("bets_resolved", {"match": m.match_number, "winner": m.winner})
-    return settled
+        b.resolved_at = now
+
+    repo.save_bets(open_bets)
+    if touched:
+        repo.save_scouters(list(touched.values()))
+
+    emit("bets_resolved", {"match": m.match_number, "winner": m.winner})
+    return len(open_bets)

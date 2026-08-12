@@ -1,28 +1,35 @@
 """Cloud dashboard + reconciliation — the admin System Health panel.
 
 The direct-to-cloud design means this API can only see what devices have
-managed to sync. So beyond database health, the panel focuses on the two
+managed to sync. So beyond datastore health, the panel focuses on the two
 questions that matter at an event:
 
 1. **Reconciliation** — for every played match, compare the schedule (six
    robots) against received submissions: missing, duplicates, wrong-team.
 2. **Staleness** — scouts/devices that have not checked in recently may still
    hold unsynchronized records in IndexedDB.
+
+Plus, since the migration to Firestore, a third: **quota**. The panel reports
+the day's document operations against the free-tier allowance so a problem is
+visible hours before it becomes an outage.
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Optional
 
 import httpx
 from fastapi import APIRouter, Depends
-from sqlalchemy import text
-from sqlmodel import Session, func, select
+from pydantic import BaseModel
 
+from .. import repo
 from ..auth import require_admin
 from ..config import settings
-from ..database import engine, get_session
-from ..models import MatchRecord, Scouter, ScoutEntry
-from ..store import get_setting
+from ..external import cache_stats as external_cache_stats
+from ..firestore_db import guard
+from ..firestore_db import status as firestore_status
+from ..models import Device, NetworkStatus, OutboxRecord, Scouter, ScoutEntry
+from ..realtime import buffered_count, hub
 
 router = APIRouter(prefix="/api/admin", tags=["system"])
 
@@ -37,33 +44,7 @@ def _aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-def _db_status() -> dict:
-    dialect = "postgres" if "postgres" in settings.DATABASE_URL else "sqlite"
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        reachable = True
-        error = ""
-    except Exception as exc:  # noqa: BLE001
-        reachable = False
-        error = f"{type(exc).__name__}: {exc}"
-    out = {
-        "engine": dialect,
-        "reachable": reachable,
-        "configured": settings.DATABASE_CONFIGURED,
-    }
-    if error:
-        out["error"] = error
-    if settings.IS_VERCEL and not settings.DATABASE_CONFIGURED:
-        out["warning"] = (
-            "DATABASE_URL is not set — this deployment is using per-instance "
-            "SQLite scratch space and WILL NOT retain data. Point DATABASE_URL "
-            "at a cloud PostgreSQL (Neon / Azure Database for PostgreSQL)."
-        )
-    return out
-
-
-def _reconciliation(session: Session, event_key: str, current_match: int) -> dict:
+def _reconciliation(event_key: str, current_match: int) -> dict:
     """Schedule vs received submissions for played qual matches."""
     if not event_key or current_match <= 0:
         return {
@@ -76,25 +57,14 @@ def _reconciliation(session: Session, event_key: str, current_match: int) -> dic
 
     matches = {
         int(m.match_number): m
-        for m in session.exec(
-            select(MatchRecord).where(
-                MatchRecord.event_key == event_key,
-                MatchRecord.comp_level == "qm",
-            )
-        ).all()
-        if 0 < m.match_number <= current_match
+        for m in repo.matches_for_event(event_key)
+        if m.comp_level == "qm" and 0 < m.match_number <= current_match
     }
-    entries = session.exec(
-        select(ScoutEntry).where(
-            ScoutEntry.event_key == event_key,
-            ScoutEntry.comp_level == "qm",
-        )
-    ).all()
-    entries = [e for e in entries if e.match_number in matches]
 
     by_match: dict[int, list[ScoutEntry]] = {n: [] for n in matches}
-    for e in entries:
-        by_match[e.match_number].append(e)
+    for e in repo.scouting_for_event(event_key):
+        if e.comp_level == "qm" and e.match_number in by_match:
+            by_match[e.match_number].append(e)
 
     missing = [n for n, group in sorted(by_match.items()) if not group]
 
@@ -128,12 +98,18 @@ def _reconciliation(session: Session, event_key: str, current_match: int) -> dic
     }
 
 
-def _scout_activity(session: Session) -> list[dict]:
-    """Per-scout check-in freshness. A silent scout may hold unsynced records."""
+def _scout_activity() -> list[dict]:
+    """Per-scout check-in freshness. A silent scout may hold unsynced records.
+
+    ``last_seen`` comes from the in-memory presence map, which is updated on
+    every authenticated request and persisted to Firestore at most hourly —
+    live freshness without a write per request.
+    """
     now = _now()
     out = []
-    for s in session.exec(select(Scouter)).all():
-        last_seen = _aware(s.last_seen) if s.last_seen else None
+    for s in repo.scouters():
+        seen = repo.last_seen(s)
+        last_seen = _aware(seen) if seen else None
         age = (now - last_seen).total_seconds() if last_seen else None
         out.append(
             {
@@ -141,6 +117,29 @@ def _scout_activity(session: Session) -> list[dict]:
                 "display_name": s.display_name or s.scout_id,
                 "matches_scouted": s.matches_scouted,
                 "last_seen": last_seen.isoformat() if last_seen else None,
+                "seconds_since_seen": round(age, 0) if age is not None else None,
+                "potentially_stale": bool(age is not None and age > STALE_AFTER_SECONDS),
+            }
+        )
+    out.sort(key=lambda r: (r["seconds_since_seen"] is None, -(r["seconds_since_seen"] or 0)))
+    return out
+
+
+def _device_activity() -> list[dict]:
+    now = _now()
+    out = []
+    for d in repo.devices():
+        seen = _aware(d.last_seen_at) if d.last_seen_at else None
+        age = (now - seen).total_seconds() if seen else None
+        out.append(
+            {
+                "device_id": d.device_id,
+                "role": d.role,
+                "vlan_port": d.vlan_port,
+                "battery_pct": d.battery_pct,
+                "unsynced_count": d.unsynced_count,
+                "scout_id": d.scout_id,
+                "last_seen_at": seen.isoformat() if seen else None,
                 "seconds_since_seen": round(age, 0) if age is not None else None,
                 "potentially_stale": bool(age is not None and age > STALE_AFTER_SECONDS),
             }
@@ -157,32 +156,112 @@ def _network_status() -> dict:
     try:
         with httpx.Client(timeout=4.0) as client:
             data = client.get(settings.GATEWAY_STATS_URL).json()
-        return {
+        out = {
             "available": True,
             "carrier": data.get("carrier"),
             "signal_quality": data.get("signal_quality") or data.get("rssi"),
             "packet_loss": data.get("packet_loss"),
         }
+        # Snapshot to the network_status collection, throttled to 1 per 5 min.
+        repo.record_network_status(
+            NetworkStatus(
+                active_carrier=out["carrier"] or "",
+                signal_quality=out["signal_quality"],
+                packet_loss=out["packet_loss"],
+                firestore_status="reachable" if repo.cache_stats().get("ready") else "degraded",
+                unsynced_count=sum(d.unsynced_count for d in repo.devices()),
+            )
+        )
+        return out
     except Exception as exc:  # noqa: BLE001
         return {"available": False, "reason": f"{type(exc).__name__}: {exc}", **fields}
 
 
 @router.get("/system-health")
-def system_health(
-    session: Session = Depends(get_session),
-    _: Scouter = Depends(require_admin),
-) -> dict:
-    event_key = get_setting(session, "current_event")
-    current_match = int(get_setting(session, "current_match") or 0)
-    total_entries = int(session.exec(select(func.count()).select_from(ScoutEntry)).one())
+def system_health(_: Scouter = Depends(require_admin)) -> dict:
+    event_key = repo.current_event()
+    current_match = int(repo.setting("current_match") or 0)
 
     return {
         "generated_at": _now().isoformat(),
-        "environment": "vercel" if settings.IS_VERCEL else ("azure" if settings.IS_AZURE else "local"),
+        "environment": settings.ENVIRONMENT,
         "event": {"current_event": event_key, "current_match": current_match},
-        "database": _db_status(),
-        "records": {"scouting_total": total_entries},
-        "reconciliation": _reconciliation(session, event_key, current_match),
-        "scouts": _scout_activity(session),
+        "database": firestore_status(),
+        "quota": guard.snapshot(),
+        "cache": repo.cache_stats(),
+        "external_cache": external_cache_stats(),
+        "realtime": {
+            "websocket_clients": hub.client_count(),
+            "buffered_events": buffered_count(),
+        },
+        "records": {"scouting_total": repo.scouting_total()},
+        "reconciliation": _reconciliation(event_key, current_match),
+        "scouts": _scout_activity(),
+        "devices": _device_activity(),
         "network": _network_status(),
     }
+
+
+# --------------------------------------------------------------------------- #
+# Device check-in                                                              #
+# --------------------------------------------------------------------------- #
+class DeviceIn(BaseModel):
+    device_id: str
+    role: str = "scouting"
+    vlan_port: Optional[int] = None
+    battery_pct: Optional[int] = None
+    unsynced_count: int = 0
+
+
+@router.post("/device-checkin")
+def device_checkin(
+    body: DeviceIn,
+    scouter: Scouter = Depends(require_admin),
+) -> dict:
+    """Record a device heartbeat (battery, VLAN port, queue depth).
+
+    Throttled to one Firestore write per device per two minutes — devices can
+    call this as often as they like.
+    """
+    repo.record_device(
+        Device(
+            device_id=body.device_id,
+            role=body.role,
+            vlan_port=body.vlan_port,
+            battery_pct=body.battery_pct,
+            unsynced_count=body.unsynced_count,
+            scout_id=scouter.scout_id,
+        )
+    )
+    return {"ok": True}
+
+
+class OutboxFailureIn(BaseModel):
+    submission_id: str
+    device_id: str = ""
+    attempt_count: int = 0
+    error: str = ""
+
+
+@router.post("/outbox-failure")
+def report_outbox_failure(
+    body: OutboxFailureIn,
+    _: Scouter = Depends(require_admin),
+) -> dict:
+    """Record a submission a device gave up on, so it can be chased later.
+
+    Only terminal failures are stored — mirroring the live queue would cost a
+    write per state transition per submission for data that is already on the
+    device.
+    """
+    repo.record_outbox_failure(
+        OutboxRecord(
+            submission_id=body.submission_id,
+            device_id=body.device_id,
+            attempt_count=body.attempt_count,
+            error=body.error,
+            status="failed",
+            last_attempt_at=_now(),
+        )
+    )
+    return {"ok": True}

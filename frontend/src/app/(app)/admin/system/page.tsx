@@ -8,7 +8,18 @@ interface Health {
   generated_at: string;
   environment: string;
   event: { current_event: string; current_match: number };
-  database: { engine: string; reachable: boolean; configured: boolean; error?: string; warning?: string };
+  database: { engine: string; reachable: boolean; configured: boolean; project_id?: string; emulator?: boolean; error?: string; warning?: string };
+  quota: {
+    quota_day: string;
+    resets_at: string;
+    process_uptime_hours: number;
+    operations: Record<
+      string,
+      { used: number; budget: number; free_tier_limit: number; pct_of_budget: number; projected_12h: number; shed: number }
+    >;
+  };
+  cache: { backend: string; cached_total: number; documents: Record<string, number>; pending_writes: number; listen_mode: boolean };
+  realtime: { websocket_clients: number; buffered_events: number };
   records: { scouting_total: number };
   reconciliation: {
     checked_matches: number;
@@ -72,14 +83,20 @@ export default function SystemHealthPage() {
   const rec = h.reconciliation;
   const issues = rec.missing.count + rec.duplicates.count + rec.wrong_team.count;
   const stale = h.scouts.filter((s) => s.potentially_stale);
+  const quota = h.quota?.operations ?? {};
+  // Worst-case share of the day's free-tier allowance, projected over 12 hours.
+  const quotaPct = Math.max(
+    0,
+    ...Object.values(quota).map((o) => (o.projected_12h / Math.max(1, o.free_tier_limit)) * 100)
+  );
 
   return (
     <div>
       <div className="page-title"><h1>System Health</h1></div>
       <p className="page-sub">
-        Cloud database, reconciliation against the match schedule, and scout
-        check-ins. Devices that go quiet may still hold unsynced records —
-        chase them before shutting anything down.
+        Firestore usage against the daily free tier, reconciliation against the
+        match schedule, and scout check-ins. Devices that go quiet may still
+        hold unsynced records — chase them before shutting anything down.
       </p>
 
       {h.database.warning && (
@@ -101,12 +118,55 @@ export default function SystemHealthPage() {
           <h3>Database</h3>
           <p style={{ margin: 0 }}>
             <Light ok={dbOk} />
-            <b>{dbOk ? "Connected" : "Unreachable"}</b> · {h.database.engine} · {h.environment}
+            <b>{dbOk ? "Connected" : "Unreachable"}</b> · {h.database.engine}
+            {h.database.project_id ? ` · ${h.database.project_id}` : ""} · {h.environment}
+          </p>
+          <p className="faint" style={{ marginTop: 6 }}>
+            {h.cache.cached_total.toLocaleString()} documents cached in memory
+            {h.cache.pending_writes > 0 ? ` · ${h.cache.pending_writes} writes queued` : ""}
+            {" · "}{h.realtime.websocket_clients} live connection(s)
           </p>
           {!h.database.configured && (
-            <p className="faint" style={{ marginTop: 6 }}>Running on the local SQLite fallback.</p>
+            <p className="faint" style={{ marginTop: 6 }}>
+              Not connected to Firestore — using the local development store. See instructions.txt.
+            </p>
           )}
           {h.database.error && <p className="faint" style={{ marginTop: 6 }}>{h.database.error}</p>}
+        </div>
+
+        <div className="card">
+          <h3>Firestore Quota (today)</h3>
+          <p style={{ margin: "0 0 8px" }}>
+            <Light ok={quotaPct < 60} warn={quotaPct < 100} />
+            <b>
+              {quotaPct < 60
+                ? "Comfortably inside the free tier"
+                : quotaPct < 100
+                  ? "Approaching the daily free allowance"
+                  : "Projected to exceed the daily free allowance"}
+            </b>
+          </p>
+          <div className="table-wrap">
+            <table className="data">
+              <thead>
+                <tr><th>Operation</th><th>Used</th><th>Projected 12h</th><th>Free/day</th></tr>
+              </thead>
+              <tbody>
+                {["read", "write", "delete"].map((k) => (
+                  <tr key={k}>
+                    <td>{k}s</td>
+                    <td className="num">{(quota[k]?.used ?? 0).toLocaleString()}</td>
+                    <td className="num">{(quota[k]?.projected_12h ?? 0).toLocaleString()}</td>
+                    <td className="num">{(quota[k]?.free_tier_limit ?? 0).toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="faint" style={{ marginTop: 6 }}>
+            Counted by this instance since it started ({h.quota?.process_uptime_hours}h ago).
+            Google&apos;s allowance resets at {h.quota?.resets_at}.
+          </p>
         </div>
 
         <div className="card">

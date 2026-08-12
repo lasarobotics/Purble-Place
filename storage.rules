@@ -1,0 +1,18 @@
+rules_version = '2';
+
+// HazeHub Cloud Storage rules.
+//
+// Storage is optional and only used for robot photos that are too large to
+// live inside a Firestore document (Firestore caps a document at 1 MiB;
+// HazeHub refuses a pit photo over 700 KiB and points here instead).
+//
+// As with Firestore, all client access is denied: uploads go through the
+// HazeHub API using the Admin SDK, which bypasses these rules.
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

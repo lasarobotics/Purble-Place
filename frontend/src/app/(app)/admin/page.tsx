@@ -7,7 +7,15 @@ import { matchLabel } from "@/lib/format";
 import type { Bet, MatchRec } from "@/lib/types";
 import { Loading, Stat, Stepper, TeamIdentity } from "@/components/ui";
 
-interface AdminSettings { current_event: string; current_match: number; betting_enabled: boolean; season: number; is_azure: boolean; }
+// environment: "cloud-run" | "firebase" | "emulator" | "local"
+interface AdminSettings { current_event: string; current_match: number; betting_enabled: boolean; season: number; environment: string; }
+
+const ENV_LABEL: Record<string, string> = {
+  "cloud-run": "Firebase",
+  firebase: "Firebase",
+  emulator: "Emulator",
+  local: "Local",
+};
 interface ScouterRow { scout_id: string; display_name: string; is_admin: boolean; bucks: number; matches_scouted: number; }
 interface AdminBet extends Bet { scout_name?: string; }
 
@@ -93,7 +101,9 @@ export default function AdminDashboard() {
   return (
     <div>
       <div className="page-title"><h1>Admin Dashboard</h1>
-        <span className={`badge ${s.is_azure ? "blue" : "muted"}`}>{s.is_azure ? "Azure" : "Local"} · {s.season}</span>
+        <span className={`badge ${s.environment === "cloud-run" || s.environment === "firebase" ? "blue" : "muted"}`}>
+          {ENV_LABEL[s.environment] || s.environment} · {s.season}
+        </span>
       </div>
       <p className="page-sub">Control the event, match flow, betting and scouts.</p>
 

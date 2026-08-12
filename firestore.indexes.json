@@ -1,0 +1,75 @@
+{
+  "indexes": [],
+  "fieldOverrides": [
+    {
+      "collectionGroup": "match_scouting",
+      "fieldPath": "data",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "match_scouting",
+      "fieldPath": "comments",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "match_scouting",
+      "fieldPath": "payload_hash",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "matches",
+      "fieldPath": "film_events",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "matches",
+      "fieldPath": "film_summary",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "matches",
+      "fieldPath": "youtube_key",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "picklists",
+      "fieldPath": "items",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "team_cache",
+      "fieldPath": "avatar",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "team_cache",
+      "fieldPath": "photos",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "team_cache",
+      "fieldPath": "record",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "pit_scouting",
+      "fieldPath": "robot_photo",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "pit_scouting",
+      "fieldPath": "capabilities",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "pit_scouting",
+      "fieldPath": "notes",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "network_status",
+      "fieldPath": "packet_loss",
+      "indexes": []
+    }
+  ]
+}

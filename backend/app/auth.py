@@ -4,7 +4,16 @@ The team password is the same for everyone (HazeRain!).  The Scouter ID
 identifies the user and ``admin`` is privileged.  Accounts are auto-provisioned
 on first successful sign-in (just like the old PurpleScout betting accounts).
 
-Tokens are stateless HMAC-signed blobs — no extra dependency required.
+Tokens are stateless HMAC-signed blobs — no extra dependency required, and no
+datastore round trip to validate one.
+
+Note on Firebase Auth: HazeHub deliberately does **not** use it. Sixty people
+share one team password and sign in as "1".."60" on borrowed Chromebooks;
+Firebase Auth would mean 60 real accounts to provision and reset, and its
+tokens would still have to be mapped onto scouter IDs. Firestore is reached
+only by this service through the Admin SDK, so the security rules deny all
+client access outright (see ``firestore.rules``) and this token is the only
+credential in play.
 """
 from __future__ import annotations
 
@@ -17,17 +26,15 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import Depends, Header, HTTPException, status
-from sqlmodel import Session, func, select
 
+from . import repo, schema
 from .config import settings
-from .database import get_session
 from .models import Scouter
 
 
-def next_s_number(session: Session) -> int:
-    """Sequential scout number (s_number is unique in the scouters table)."""
-    highest = session.exec(select(func.max(Scouter.s_number))).one()
-    return int(highest or 0) + 1
+def next_s_number() -> int:
+    """Sequential scout number (unique across the scouters collection)."""
+    return repo.next_s_number()
 
 
 def _sign(data: bytes) -> str:
@@ -58,7 +65,7 @@ def decode_token(token: str) -> Optional[dict]:
         return None
     try:
         body = json.loads(_b64decode(raw))
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None
     if body.get("exp", 0) < time.time():
         return None
@@ -66,36 +73,41 @@ def decode_token(token: str) -> Optional[dict]:
 
 
 def normalize_id(scout_id: str) -> str:
-    return scout_id.strip()
+    """Trim and validate a scouter ID.
+
+    The ID becomes a Firestore document ID, so it has to satisfy Firestore's
+    rules (no ``/``, not ``.``/``..``, not ``__*__``, ≤1500 bytes) — checked
+    here so a bad login fails with a 400 rather than an opaque write error.
+    """
+    try:
+        return schema.safe_doc_id(scout_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid Scouter ID: {exc}") from exc
 
 
 def verify_team_password(password: str) -> bool:
-    return password == settings.TEAM_PASSWORD
+    return hmac.compare_digest(password or "", settings.TEAM_PASSWORD)
 
 
-def get_or_create_scouter(session: Session, scout_id: str) -> Scouter:
+def get_or_create_scouter(scout_id: str) -> Scouter:
     scout_id = normalize_id(scout_id)
-    scouter = session.get(Scouter, scout_id)
+    scouter = repo.scouter(scout_id)
     if scouter is None:
         scouter = Scouter(
             scout_id=scout_id,
-            s_number=next_s_number(session),
+            s_number=next_s_number(),
             display_name=scout_id,
             is_admin=(scout_id.lower() == settings.ADMIN_ID.lower()),
             bucks=settings.STARTING_BUCKS,
         )
     scouter.last_seen = datetime.now(timezone.utc)
-    session.add(scouter)
-    session.commit()
-    session.refresh(scouter)
+    repo.save_scouter(scouter)
+    repo.touch_presence(scouter.scout_id)
     return scouter
 
 
 # --- FastAPI dependencies --------------------------------------------------- #
-def current_scouter(
-    authorization: str = Header(default=""),
-    session: Session = Depends(get_session),
-) -> Scouter:
+def current_scouter(authorization: str = Header(default="")) -> Scouter:
     token = authorization.removeprefix("Bearer ").strip()
     body = decode_token(token)
     if not body:
@@ -103,9 +115,12 @@ def current_scouter(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not signed in",
         )
-    scouter = session.get(Scouter, body["sub"])
+    scouter = repo.scouter(body["sub"])
     if scouter is None:
         raise HTTPException(status_code=401, detail="Unknown scouter")
+    # Presence is tracked in memory and persisted at most hourly — see
+    # repo.touch_presence. Doing it on every request costs nothing.
+    repo.touch_presence(scouter.scout_id)
     return scouter
 
 

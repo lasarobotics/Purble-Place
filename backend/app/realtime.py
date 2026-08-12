@@ -2,26 +2,41 @@
 
 ``emit`` does two things for every change event:
 
-1. Broadcasts to any connected ``/ws`` clients (works locally and on
-   always-on hosts; free instant updates on the event LAN).
-2. Appends an ``activity`` row so serverless deployments (Vercel cannot hold
-   a WebSocket open) can serve ``GET /api/events?since=<cursor>`` and clients
-   poll the exact same (event, payload) pairs.
+1. Broadcasts to any connected ``/ws`` clients. Cloud Run holds WebSockets
+   open (up to its request timeout), so this is the normal path.
+2. Appends to an in-process ring buffer so clients that cannot hold a socket
+   open can poll ``GET /api/events?since=<cursor>`` and replay the same
+   ``(event, payload)`` pairs onto the same client-side bus.
 
-The frontend tries the WebSocket first and falls back to polling, so one
-client build works against both hosting models.
+Why the feed is not stored in Firestore
+---------------------------------------
+It used to be an ``activity`` table. In Firestore that would be one document
+write per change plus one delete per expiry — roughly 4,000 write operations
+and 4,000 deletes on a competition day, about 40% of the free daily
+allowance, spent on data with a two-hour lifespan that nothing reads after
+the fact. The feed is ephemeral by definition, so it lives in RAM: 60 clients
+polling it costs nothing at all.
+
+The trade-off is that the feed is per-instance, which is fine because the
+write-through cache already requires the service to run as a single instance
+(``--max-instances=1``). A client that reconnects to a fresh instance simply
+starts from an empty cursor and refetches, exactly as it does today after a
+deploy.
 """
 from __future__ import annotations
 
 import asyncio
 import json
+import threading
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import WebSocket
-from sqlmodel import Session, select
 
 MAX_EVENTS = 100
+#: Ring size. Two hours of events at competition pace is a few hundred rows.
+RING_SIZE = 1000
 RETENTION = timedelta(hours=2)
 
 
@@ -40,19 +55,22 @@ class Hub:
             self._clients.discard(ws)
 
     async def broadcast(self, event: str, payload: Any = None) -> None:
-        message = json.dumps({"event": event, "payload": payload})
+        message = json.dumps({"event": event, "payload": payload}, default=str)
         async with self._lock:
             targets = list(self._clients)
         dead: list[WebSocket] = []
         for ws in targets:
             try:
                 await ws.send_text(message)
-            except Exception:
+            except Exception:  # noqa: BLE001
                 dead.append(ws)
         if dead:
             async with self._lock:
                 for ws in dead:
                     self._clients.discard(ws)
+
+    def client_count(self) -> int:
+        return len(self._clients)
 
 
 hub = Hub()
@@ -62,26 +80,24 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _record(event: str, payload: Any) -> None:
-    """Persist the event for pollers. Best-effort: realtime must never fail a
-    write, and each emit is rare enough that a short-lived session is fine."""
-    from .database import engine
-    from .models import Activity
+# --------------------------------------------------------------------------- #
+# In-memory activity ring                                                      #
+# --------------------------------------------------------------------------- #
+_ring: deque[dict[str, Any]] = deque(maxlen=RING_SIZE)
+_ring_lock = threading.Lock()
 
-    try:
-        with Session(engine) as session:
-            session.add(Activity(event=event, payload=payload or {}))
-            # Lazy pruning keeps the table tiny without a background job.
-            cutoff = _now() - RETENTION
-            for stale in session.exec(select(Activity).where(Activity.ts < cutoff)).all():
-                session.delete(stale)
-            session.commit()
-    except Exception:
-        pass
+
+def _record(event: str, payload: Any) -> None:
+    row = {"event": event, "payload": payload or {}, "ts": _now()}
+    cutoff = _now() - RETENTION
+    with _ring_lock:
+        _ring.append(row)
+        while _ring and _ring[0]["ts"] < cutoff:
+            _ring.popleft()
 
 
 def emit(event: str, payload: Any = None) -> None:
-    """Fire-and-forget broadcast usable from sync request handlers."""
+    """Fire-and-forget broadcast, usable from sync request handlers."""
     _record(event, payload)
     try:
         loop = asyncio.get_running_loop()
@@ -114,26 +130,29 @@ def _parse_cursor(since_iso: str) -> datetime | None:
     return since
 
 
-def events_since(session: Session, since_iso: str | None) -> dict[str, Any]:
-    """Events newer than the ``since`` cursor plus a fresh cursor.
+def events_since(since_iso: str | None) -> dict[str, Any]:
+    """Events newer than the ``since`` cursor, plus a fresh cursor.
 
     The first poll (no cursor) returns no events — clients only care about
     changes that happen after they connect.
     """
-    from .models import Activity
-
     now = _now()
     events: list[dict[str, Any]] = []
     since = _parse_cursor(since_iso) if since_iso else None
     if since is not None:
         newest = since
-        rows = session.exec(
-            select(Activity).where(Activity.ts > since).order_by(Activity.ts).limit(MAX_EVENTS)
-        ).all()
+        with _ring_lock:
+            rows = [r for r in _ring if r["ts"] > since][:MAX_EVENTS]
         for row in rows:
-            ts = row.ts if row.ts.tzinfo else row.ts.replace(tzinfo=timezone.utc)
-            newest = max(newest, ts)
-            events.append({"event": row.event, "payload": row.payload, "ts": _iso(ts)})
+            newest = max(newest, row["ts"])
+            events.append(
+                {"event": row["event"], "payload": row["payload"], "ts": _iso(row["ts"])}
+            )
         if events:
             now = newest
     return {"now": _iso(now), "events": events}
+
+
+def buffered_count() -> int:
+    with _ring_lock:
+        return len(_ring)

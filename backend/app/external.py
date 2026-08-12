@@ -1,39 +1,63 @@
 """The Blue Alliance + Statbotics clients.
 
-All responses are cached in the ``ExternalCache`` table.  Fresh data is
-fetched when the cache is older than ``EXTERNAL_TTL_SECONDS``; if the network
-is unavailable we fall back to whatever we cached previously (offline
-resilience for events with flaky connectivity).
+Responses are cached **in process** with a TTL and a stale-fallback, so a
+flaky venue connection never breaks a page. The cache is deliberately not
+persisted to Firestore: it would be a document write per upstream response
+(hundreds a day) to duplicate data that already lands in the ``matches`` and
+``team_cache`` collections, which *are* durable. A restart just refetches
+from TBA, which is free and fast.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import threading
+import time
+from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 import httpx
-from sqlmodel import Session
 
+from . import repo
 from .config import settings
-from .models import ExternalCache, MatchRecord, TeamCache
+from .models import Event, MatchRecord, TeamCache
+from .schema import match_id
+
+# url -> (payload, fetched_at_monotonic)
+_cache: dict[str, tuple[Any, float]] = {}
+_cache_lock = threading.Lock()
+#: Bound the cache so a long event can't grow it without limit.
+MAX_CACHE_ENTRIES = 2000
 
 
 def team_key(team_number: int) -> str:
     return f"frc{team_number}"
 
 
+def _cache_get(url: str) -> tuple[Optional[Any], float]:
+    with _cache_lock:
+        hit = _cache.get(url)
+    if hit is None:
+        return None, 0.0
+    payload, fetched = hit
+    return payload, time.monotonic() - fetched
+
+
+def _cache_put(url: str, payload: Any) -> None:
+    with _cache_lock:
+        if len(_cache) >= MAX_CACHE_ENTRIES:
+            oldest = min(_cache, key=lambda k: _cache[k][1])
+            _cache.pop(oldest, None)
+        _cache[url] = (payload, time.monotonic())
+
+
 async def _get_json(
-    session: Session,
     url: str,
     headers: Optional[dict] = None,
     ttl: Optional[int] = None,
 ) -> Optional[Any]:
     ttl = settings.EXTERNAL_TTL_SECONDS if ttl is None else ttl
-    cached = session.get(ExternalCache, url)
-    now = datetime.now(timezone.utc)
-    if cached is not None:
-        age = (now - cached.fetched_at.replace(tzinfo=timezone.utc)).total_seconds()
-        if age < ttl:
-            return cached.payload
+    cached, age = _cache_get(url)
+    if cached is not None and age < ttl:
+        return cached
 
     # A User-Agent is REQUIRED — The Blue Alliance sits behind Cloudflare, which
     # blocks requests with no UA (HTTP 403, error 1010).
@@ -45,32 +69,26 @@ async def _get_json(
             resp = await client.get(url, headers=req_headers)
         if resp.status_code == 200:
             payload = resp.json()
-            row = cached or ExternalCache(url=url)
-            row.payload = payload
-            row.fetched_at = now
-            session.add(row)
-            session.commit()
+            _cache_put(url, payload)
             return payload
         if resp.status_code == 404:
             return None
-    except Exception:
-        pass  # network down — fall through to stale cache
+    except Exception:  # noqa: BLE001 — network down; fall through to stale cache
+        pass
 
-    return cached.payload if cached is not None else None
+    return cached
 
 
-async def tba(session: Session, path: str, ttl: Optional[int] = None) -> Optional[Any]:
+async def tba(path: str, ttl: Optional[int] = None) -> Optional[Any]:
     return await _get_json(
-        session,
         f"{settings.TBA_BASE}{path}",
         headers={"accept": "application/json", "X-TBA-Auth-Key": settings.TBA_KEY},
         ttl=ttl,
     )
 
 
-async def statbotics(session: Session, path: str, ttl: Optional[int] = None) -> Optional[Any]:
+async def statbotics(path: str, ttl: Optional[int] = None) -> Optional[Any]:
     return await _get_json(
-        session,
         f"{settings.STATBOTICS_BASE}{path}",
         headers={"accept": "application/json"},
         ttl=ttl,
@@ -80,23 +98,32 @@ async def statbotics(session: Session, path: str, ttl: Optional[int] = None) -> 
 # --------------------------------------------------------------------------- #
 # Higher level helpers                                                         #
 # --------------------------------------------------------------------------- #
-async def sync_event_matches(session: Session, event_key: str) -> list[MatchRecord]:
-    """Pull the match schedule for an event into MatchRecord rows.
+async def sync_event_matches(event_key: str) -> list[MatchRecord]:
+    """Pull the match schedule for an event into ``matches`` documents.
 
     Uses the full ``/matches`` endpoint (not ``/simple``) so we also capture
     the YouTube match videos for the Film tab.
+
+    This runs every time an admin advances the current match, so it is written
+    to be nearly free: the rows are diffed against the cached copies and
+    ``repo.save_matches`` only commits the ones that actually changed. A
+    typical advance writes 1–2 documents instead of the whole 120-match
+    schedule.
     """
-    data = await tba(session, f"/event/{event_key}/matches")
-    await sync_event_info(session, event_key)
-    out: list[MatchRecord] = []
+    data = await tba(f"/event/{event_key}/matches")
+    await sync_event_info(event_key)
     if not data:
-        return out
+        return repo.matches_for_event(event_key)
+
+    out: list[MatchRecord] = []
     for m in data:
-        mk = m["key"]
-        existing = _match_by_key(session, mk)
-        rec = existing or MatchRecord(match_key=mk, event_key=event_key)
-        rec.comp_level = m.get("comp_level", "qm")
-        rec.match_number = m.get("match_number", 0)
+        comp_level = m.get("comp_level", "qm")
+        match_number = int(m.get("match_number", 0) or 0)
+        mk = m.get("key") or match_id(event_key, comp_level, match_number)
+        rec = repo.match_by_key(mk) or MatchRecord(match_key=mk, event_key=event_key)
+        rec.event_key = event_key
+        rec.comp_level = comp_level
+        rec.match_number = match_number
         alliances = m.get("alliances", {}) or {}
         red = alliances.get("red", {}) or {}
         blue = alliances.get("blue", {}) or {}
@@ -121,43 +148,31 @@ async def sync_event_matches(session: Session, event_key: str) -> list[MatchReco
                 if v.get("type") == "youtube" and v.get("key"):
                     rec.youtube_key = v["key"]
                     break
-        rec.updated_at = datetime.now(timezone.utc)
-        session.add(rec)
         out.append(rec)
-    session.commit()
+
+    repo.save_matches(out)
     return out
 
 
-async def sync_event_info(session: Session, event_key: str) -> None:
-    """Upsert the events row (start_date + name from TBA, best effort)."""
-    from datetime import date as _date
-
-    from .models import Event
-
-    row = session.get(Event, event_key) or Event(event_key=event_key)
-    info = await tba(session, f"/event/{event_key}")
+async def sync_event_info(event_key: str) -> None:
+    """Upsert the events document (start_date + name from TBA, best effort)."""
+    row = repo.event(event_key) or Event(event_key=event_key)
+    info = await tba(f"/event/{event_key}")
     if info:
         row.name = info.get("name") or row.name
         try:
-            row.start_date = _date.fromisoformat(info["start_date"])
+            row.start_date = date.fromisoformat(info["start_date"])
         except (KeyError, TypeError, ValueError):
             pass
-    session.add(row)
-    session.commit()
+    repo.save_event(row)
 
 
-def _match_by_key(session: Session, mk: str) -> Optional[MatchRecord]:
-    from sqlmodel import select
-
-    return session.exec(select(MatchRecord).where(MatchRecord.match_key == mk)).first()
-
-
-async def sync_team(session: Session, team_number: int, season: Optional[int] = None) -> TeamCache:
+async def sync_team(team_number: int, season: Optional[int] = None) -> TeamCache:
     """Fetch profile, media (avatar + robot photos) and EPA for one team."""
     season = season or settings.SEASON
-    tc = session.get(TeamCache, team_number) or TeamCache(team_number=team_number)
+    tc = repo.team(team_number) or TeamCache(team_number=team_number)
 
-    info = await tba(session, f"/team/{team_key(team_number)}", ttl=86400)
+    info = await tba(f"/team/{team_key(team_number)}", ttl=86400)
     if info:
         tc.nickname = info.get("nickname") or tc.nickname
         tc.name = info.get("name") or tc.name
@@ -166,7 +181,7 @@ async def sync_team(session: Session, team_number: int, season: Optional[int] = 
         tc.country = info.get("country") or ""
         tc.rookie_year = info.get("rookie_year")
 
-    media = await tba(session, f"/team/{team_key(team_number)}/media/{season}", ttl=86400)
+    media = await tba(f"/team/{team_key(team_number)}/media/{season}", ttl=86400)
     if media:
         photos: list[str] = []
         for item in media:
@@ -183,7 +198,7 @@ async def sync_team(session: Session, team_number: int, season: Optional[int] = 
         if photos:
             tc.photos = photos[:8]
 
-    sb = await statbotics(session, f"/team_year/{team_number}/{season}", ttl=3600)
+    sb = await statbotics(f"/team_year/{team_number}/{season}", ttl=3600)
     if sb:
         # Statbotics has shipped two shapes for this field:
         #   v3 (2025):  epa.total_points = {"mean": 55.1, ...}
@@ -197,15 +212,13 @@ async def sync_team(session: Session, team_number: int, season: Optional[int] = 
             tc.epa = None
 
     tc.updated_at = datetime.now(timezone.utc)
-    session.add(tc)
-    session.commit()
-    session.refresh(tc)
+    repo.save_team(tc)
     return tc
 
 
-async def match_win_prob(session: Session, match_key: str) -> Optional[float]:
+async def match_win_prob(match_key: str) -> Optional[float]:
     """Statbotics predicted probability that **red** wins ``match_key``."""
-    sb = await statbotics(session, f"/match/{match_key}", ttl=600)
+    sb = await statbotics(f"/match/{match_key}", ttl=600)
     if not sb:
         return None
     pred = sb.get("pred") or {}
@@ -216,3 +229,8 @@ async def match_win_prob(session: Session, match_key: str) -> Optional[float]:
         return float(prob)
     except (TypeError, ValueError):
         return None
+
+
+def cache_stats() -> dict[str, Any]:
+    with _cache_lock:
+        return {"entries": len(_cache), "max_entries": MAX_CACHE_ENTRIES}

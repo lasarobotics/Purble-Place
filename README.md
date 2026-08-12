@@ -5,8 +5,12 @@
 HazeHub replaces a local PurpleScout setup with a single web app that runs anywhere:
 collect match & pit scouting, build collaborative picklists, review film against the
 data, bet Purple Bucks on matches, and let strategy auto-rank robots by *true* strength.
-It runs locally today on SQLite and **automatically switches to Azure** (PostgreSQL +
-Container Apps) when the Azure environment variables are present.
+
+The database is **Cloud Firestore** (Firebase project `hazehub-8a941`, free Spark
+plan). The server — web app and API in one process — runs on the team's own scouting
+laptop, which is what keeps the project off the paid plan and keeps the app fast when
+venue wifi isn't. It's built to keep a 60-person, 12-hour competition day inside
+Firestore's free daily allowance. **Setup walkthrough: [instructions.txt](instructions.txt).**
 
 ---
 
@@ -56,29 +60,35 @@ Container Apps) when the Azure environment variables are present.
 - **All Pick Lists** — every picklist made across the team in one place.
 
 Live updates (new scouting, bets, picklist edits, match changes) push to every connected
-device over WebSockets — the local stand-in for Azure SignalR.
+device over WebSockets, with a polled fallback on the same client-side bus.
 
 ---
 
 ## 🚀 Quick start (Windows)
 
 ```powershell
-# 1. One-time setup: installs everything + seeds a demo event
+# 1. One-time setup: Python env, npm install, demo event
 ./setup.ps1
 
-# 2. Launch backend + frontend (each in its own window)
+# 2a. Development — hot-reloading frontend on :3000, API on :8000
 ./start.ps1
+
+# 2b. Event day — one process serving the app + API on :8000 for everyone
+./run-server.ps1 -OpenFirewall
 ```
 
-Then open **http://localhost:3000** and sign in:
+`start.ps1` opens **http://localhost:3000**. `run-server.ps1` prints the LAN address
+the tablets should use, e.g. **http://192.168.1.47:8000**. Sign in:
 
 | ID | Password | Role |
 |----|----------|------|
 | `admin` | `HazeRain!` | Administrator |
 | `1`, `2`, `3` | `HazeRain!` | Scouts |
 
-The setup seeds a full demo event (`2026haze`: 12 teams, 18 matches, scouting data, bets
-and picklists) so every screen has data immediately.
+Setup seeds a full demo event (`2026haze`: 12 teams, 18 matches, scouting data, bets
+and picklists) so every screen has data immediately. Until you point it at Firebase,
+data goes to a local JSON file and `/api/health` says so — see
+[instructions.txt](instructions.txt) to connect Firestore.
 
 ### Manual start (any OS)
 
@@ -96,64 +106,112 @@ npm install
 npm run dev
 ```
 
+For the single-process event build, build the frontend first — the backend serves
+`frontend/out` at `/` whenever it exists:
+
+```bash
+cd frontend && NEXT_PUBLIC_API_URL= HAZEHUB_STATIC_EXPORT=1 npm run build && cd ..
+cd backend && uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
 ---
 
 ## 🏗️ Architecture
 
 ```
-Chromebook / phone ──► Next.js (TypeScript)  ──►  FastAPI (Python)  ──►  SQLite / PostgreSQL
-   IndexedDB (Dexie)      Purple Haze UI           SQLModel + ORM         (local / Azure)
-   offline queue          WebSocket live           TBA + Statbotics
-                                                    Purple Bucks odds engine
+Chromebook / phone ──► Next.js (TypeScript) ──► FastAPI (Python) ──► Cloud Firestore
+   IndexedDB (Dexie)     Firebase Hosting        Cloud Run              (the database)
+   offline queue         /api/** + /ws rewrite   in-memory read cache
+                                                 TBA + Statbotics
+                                                 Purple Bucks odds engine
 ```
 
-| Layer | Local (now) | Azure (production) |
-|-------|-------------|--------------------|
-| Frontend | `next dev` | Static export → **Azure Static Web Apps** |
-| Backend | `uvicorn` | **Azure Container Apps** (FastAPI, WebSocket ingress) |
-| Database | SQLite file | **Azure Database for PostgreSQL** |
-| Realtime | WebSocket (`/ws`) | same code / swap to **Azure SignalR** |
+| Layer | Local dev | Production |
+|-------|-----------|------------|
+| Frontend | `next dev` | Static export → **Firebase Hosting** |
+| Backend | `uvicorn` | **Cloud Run** (FastAPI, WebSocket ingress, 1 instance) |
+| Database | Firestore emulator, or a JSON file | **Cloud Firestore** |
+| Realtime | WebSocket (`/ws`) | same, with an in-process polled fallback |
 | Offline | Dexie / IndexedDB | same |
 
-### Docker (mirrors the Azure topology)
+### Staying inside Firestore's quotas
 
-With Docker installed, one command runs the production stack — PostgreSQL +
-FastAPI + Next.js — exactly like it runs on Azure:
+Firestore's free allowance is 50,000 document reads a day. Sixty people using
+the app for twelve hours, each device polling for live updates, would exhaust
+that within minutes if every device read Firestore directly. So they don't:
+
+- **Reads are served from RAM.** The API loads the event into memory once at
+  startup and serves every HTTP GET from a dictionary. Steady-state reads are
+  effectively zero.
+- **Writes are dirty-checked.** Saving an unchanged document costs nothing —
+  which is why re-syncing a 120-match schedule on every match advance writes
+  one or two documents, not 120.
+- **Counters are coalesced** and bulk work is **batched** below Firestore's
+  500-operations-per-commit limit.
+- **The live-updates feed is in-process**, not a Firestore collection: it
+  would otherwise cost thousands of writes and deletes a day for data with a
+  two-hour lifespan.
+- Big JSON fields (heatmaps, picklist items, avatars) are **exempt from
+  indexing**, and every document is size-checked against the 1 MiB limit
+  before a write is attempted.
+
+A measured 12-hour day with 60 people, 100 matches and ~750 submissions comes
+in around 5–10% of the free tier. `GET /api/admin/firestore-usage` (and the
+admin System page) shows live usage against the allowance.
+
+Because the cache is authoritative, the API **must run as a single instance**
+(`--max-instances=1`). Set `HAZEHUB_FIRESTORE_LISTEN=1` to switch to Firestore
+snapshot listeners if you ever need to scale out — correct under concurrency,
+but it costs a read per change.
+
+### Docker (mirrors the production topology)
+
+With Docker installed, one command runs the whole stack — Firestore emulator +
+FastAPI + Next.js:
 
 ```bash
 docker compose up --build
-# web -> http://localhost:3000   api -> http://localhost:8000/docs
+# web -> http://localhost:3000   api -> http://localhost:8000/docs   db UI -> :4000
 ```
 
-Images: [backend/Dockerfile](backend/Dockerfile) (uvicorn, port 8000) and
+Images: [backend/Dockerfile](backend/Dockerfile) (uvicorn) and
 [frontend/Dockerfile](frontend/Dockerfile) (Next.js standalone, port 3000 —
 pass `--build-arg NEXT_PUBLIC_API_URL=<api url>` since `NEXT_PUBLIC_*` is
 inlined at build time).
 
-### Deploy to Azure Container Apps
+### Deploy to Firebase
 
 ```powershell
-az login
-az extension add --name containerapp --upgrade
-./deploy/azure-containerapps.ps1
+firebase login
+gcloud auth login
+./deploy/firebase.ps1 -ProjectId your-firebase-project
 ```
 
-The script ([deploy/azure-containerapps.ps1](deploy/azure-containerapps.ps1))
-provisions the resource group, container registry, **Azure Database for
-PostgreSQL**, the Container Apps environment, and both apps — building the
-images in the cloud with `az acr build`, so you don't need Docker locally.
-Re-run it to ship updates. It prints the live web/API URLs and the generated
-Postgres password when it finishes.
+The script ([deploy/firebase.ps1](deploy/firebase.ps1)) enables the Google
+Cloud APIs, deploys the Firestore rules and index policy, builds and deploys
+the API to Cloud Run, builds the static frontend and publishes Hosting. Re-run
+it to ship updates. Full walkthrough — including the Firebase project, billing
+plan, database region and quota monitoring — in
+**[instructions.txt](instructions.txt)**.
 
-### How the Azure switch works
-The backend reads its environment at startup (`backend/app/config.py`):
-- If `DATABASE_URL` is set (e.g. an Azure Postgres connection string) it uses
-  PostgreSQL via `psycopg`; otherwise it uses a local SQLite file — **no code change**.
-- It detects Azure via `WEBSITE_SITE_NAME` / `CONTAINER_APP_NAME` and relaxes CORS for
-  Static Web Apps. The health endpoint (`/api/health`) reports the active environment.
+### How the environment switch works
+The backend resolves its datastore at startup (`backend/app/config.py`,
+`backend/app/cache.py`):
+- `FIRESTORE_EMULATOR_HOST` set → the local Firestore emulator, no credentials.
+- `FIREBASE_PROJECT_ID` set (or running on Cloud Run, where it is discovered
+  automatically) → Cloud Firestore.
+- Neither → a JSON file under `backend/data/`, so a fresh clone runs offline.
+  `/api/health` says so loudly.
 
-The frontend reads `NEXT_PUBLIC_API_URL` (defaults to `http://localhost:8000`). For Azure,
-set it to your Container Apps URL and build with `HAZEHUB_STATIC_EXPORT=1 npm run build`.
+The frontend reads `NEXT_PUBLIC_API_URL` (defaults to `http://localhost:8000`).
+Leave it **empty** for Firebase Hosting: `/api/**` and `/ws` are rewritten to
+Cloud Run, so the app is single-origin with no CORS.
+
+### Security model
+Firestore is reached only by this API, through the Firebase Admin SDK.
+`firestore.rules` therefore denies every client read and write — no browser
+ever holds a Firestore credential. Scouters sign in with a shared team
+password and get an HMAC token; the API enforces the admin-only routes.
 
 ---
 
