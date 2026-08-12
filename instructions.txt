@@ -471,6 +471,10 @@ Seed demo data on any of the three:
        cd backend
        .venv\Scripts\python -m app.demo_data
 
+   This refuses to run against the live hazehub-8a941 database on purpose —
+   demo data does not belong in the database you compete with. Point at the
+   emulator, or use app.load_event for a real event.
+
 Run the tests:
 
        cd backend

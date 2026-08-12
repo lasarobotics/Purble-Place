@@ -9,11 +9,14 @@ event costs roughly 250 Firestore write operations in a handful of commits.
 """
 from __future__ import annotations
 
+import os
 import random
+import sys
 from datetime import datetime, timezone
 
 from . import repo
 from .cache import store
+from .config import settings
 from .database import close_db, init_db
 from .models import Event, MatchRecord, Picklist, PitEntry, ScoutEntry, TeamCache
 from .scoring import compute_points
@@ -66,7 +69,39 @@ def _heatmap(skill: float, bias: float = 1.0) -> list[dict]:
     return pts
 
 
+def confirm_target() -> bool:
+    """Refuse to seed a real Firestore database without an explicit go-ahead.
+
+    ``setup.ps1`` calls this module, and once ``.env`` points at the live
+    project that would push ~250 fake documents into the database the team
+    competes with. The emulator and the local dev store are fair game.
+    """
+    if settings.ENVIRONMENT not in ("firebase", "cloud-run"):
+        return True
+    if os.getenv("HAZEHUB_ALLOW_DEMO_ON_FIRESTORE") == "1":
+        return True
+    print(
+        f"Refusing to seed demo data into the live Firestore project "
+        f"'{settings.FIREBASE_PROJECT_ID}'.\n"
+        "\n"
+        "This would write ~250 fake documents (event 2026haze) to the database\n"
+        "your team competes with, and count against the daily write quota.\n"
+        "\n"
+        "  To seed a local sandbox instead, point at the emulator:\n"
+        "      $env:FIRESTORE_EMULATOR_HOST = '127.0.0.1:8080'\n"
+        "\n"
+        "  To load a REAL event into Firestore, use:\n"
+        "      python -m app.load_event 2026txman\n"
+        "\n"
+        "  If you really do want demo data in this project:\n"
+        "      $env:HAZEHUB_ALLOW_DEMO_ON_FIRESTORE = '1'"
+    )
+    return False
+
+
 def generate() -> None:
+    if not confirm_target():
+        return
     init_db()
     seed()
 
