@@ -66,7 +66,7 @@ body {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   min-height: 100vh;
-  overflow-x: hidden;
+  overflow-x: clip;
   font-size: 15px;
   line-height: 1.5;
 }
@@ -981,8 +981,14 @@ table.data td.num { text-align: right; font-family: var(--font-num); font-varian
 }
 
 /* Nothing should be able to push the page sideways. A single wide table
-   or long team name used to make the whole app scroll horizontally. */
-html, body { overflow-x: hidden; }
+   or long team name used to make the whole app scroll horizontally.
+   
+   `clip`, not `hidden`. Per spec, an `overflow` of anything but `visible` on
+   one axis forces the other axis to compute as `auto`, which turns html and
+   body into scroll containers and breaks `position: sticky` on the sidebar:
+   it scrolled away with the page instead of staying put. `clip` does not
+   create a scroll container, so sticky keeps resolving against the viewport. */
+html, body { overflow-x: clip; }
 .content { min-width: 0; }
 .card, .grid, .row { min-width: 0; }
 .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -1102,4 +1108,49 @@ html, body { overflow-x: hidden; }
 /* Desktop keeps the sidebar, so neither the sheet nor its trigger exist. */
 @media (min-width: 861px) {
   .more-tab, .nav-sheet-back { display: none; }
+}
+
+/* ============================================================ *
+ * Desktop sidebar: pinned, with its own scroll
+ * ------------------------------------------------------------
+ * An admin has thirteen nav items plus the account footer, which
+ * overflows a short laptop screen. The column scrolls on its own
+ * rather than riding the page, so Sign out and the nav are always
+ * one glance away no matter how far down the content you are.
+ * ============================================================ */
+@media (min-width: 861px) {
+  /* Fixed rather than sticky. Sticky is bounded by its containing block, so
+     at the very bottom of a long page the column drifted a few pixels as
+     .shell ran out. Taking it out of flow removes that class of bug entirely;
+     .main gets a matching left margin to sit beside it. */
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: var(--nav-w);
+    height: 100dvh;
+    overflow-y: auto;
+    overscroll-behavior: contain; /* don't hand the scroll back to the page */
+    z-index: 40;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  .main { margin-left: var(--nav-w); }
+  .sidebar::-webkit-scrollbar { width: 8px; }
+  .sidebar::-webkit-scrollbar-track { background: transparent; }
+  .sidebar::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 4px;
+  }
+  .sidebar:hover::-webkit-scrollbar-thumb { background: var(--line); }
+
+  /* The footer sits at the bottom of the nav, and stays visible while the
+     links above it scroll. */
+  .sidebar-foot {
+    position: sticky;
+    bottom: 0;
+    margin-top: auto;
+    padding-top: 12px;
+    background: var(--bg-2);
+  }
 }
