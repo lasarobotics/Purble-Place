@@ -1,0 +1,70 @@
+# Render Blueprint — deploys HazeHub as one always-on web service.
+#
+# In the Render dashboard:  New +  ->  Blueprint  ->  pick this repository.
+# Render reads this file, builds the root Dockerfile (web app + API in one
+# image) and starts it. Then set the two secret env vars marked `sync: false`
+# below — see instructions.txt, "HOSTING ON RENDER".
+#
+# Why a container and not serverless: HazeHub keeps the whole event in memory
+# and serves reads from RAM, which is what holds it inside Firestore's free
+# 50,000-reads-a-day allowance. That only works in a long-lived process with
+# a single writer, so this service must stay at ONE instance.
+
+services:
+  - type: web
+    name: hazehub
+    runtime: docker
+    # The image needs both halves of the repo, so the context is the root.
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    region: oregon
+    branch: main
+    healthCheckPath: /api/health
+
+    # ONE instance, always. Two instances would each hold their own copy of
+    # the write-through cache and drift apart, and would double the
+    # cold-start reads. Do not raise this without reading backend/app/cache.py.
+    numInstances: 1
+
+    envVars:
+      # --- Firestore ---------------------------------------------------------
+      - key: FIREBASE_PROJECT_ID
+        value: hazehub-8a941
+
+      # The service-account JSON, pasted whole. Render has no filesystem to
+      # mount a key file onto, so firestore_db.py accepts the JSON inline.
+      # Set this in the dashboard: Environment -> Add Environment Variable ->
+      # paste the entire contents of the key file as the value.
+      - key: FIREBASE_SERVICE_ACCOUNT
+        sync: false
+
+      # --- Secrets (set these in the dashboard, never in this file) ----------
+      - key: HAZEHUB_TEAM_PASSWORD
+        sync: false
+      - key: HAZEHUB_SECRET
+        generateValue: true      # Render generates a strong random value once
+      - key: TBA_AUTH_KEY
+        sync: false
+
+      # --- App ---------------------------------------------------------------
+      - key: HAZEHUB_SEASON
+        value: "2026"
+      - key: HAZEHUB_HOME_TEAMS
+        value: "418,436"
+
+      # Snapshot listeners cost one Firestore read per change and are only
+      # needed with more than one writer. Leave off.
+      - key: HAZEHUB_FIRESTORE_LISTEN
+        value: "0"
+
+      # Daily document-operation budgets, deliberately under the free tier
+      # (50k / 20k / 20k). When one is hit, HazeHub sheds optional work —
+      # presence timestamps, device heartbeats — and never blocks a scouting
+      # submission.
+      - key: HAZEHUB_READ_BUDGET
+        value: "45000"
+      - key: HAZEHUB_WRITE_BUDGET
+        value: "18000"
+      - key: HAZEHUB_DELETE_BUDGET
+        value: "18000"

@@ -164,35 +164,47 @@ Because the cache is authoritative, the API **must run as a single instance**
 snapshot listeners if you ever need to scale out — correct under concurrency,
 but it costs a read per change.
 
-### Docker (mirrors the production topology)
+### One container, whole app
 
-With Docker installed, one command runs the whole stack — Firestore emulator +
-FastAPI + Next.js:
+The root [Dockerfile](Dockerfile) builds the web app and copies it in next to
+the API, so a single image serves both on one origin. That is what deploys to
+Render — and what you can run anywhere else:
+
+```bash
+docker build -t hazehub .
+docker run -p 8000:8000 -e FIREBASE_PROJECT_ID=hazehub-8a941 \
+  -e FIREBASE_SERVICE_ACCOUNT="$(cat key.json)" hazehub
+```
+
+For local development against a Firestore emulator instead:
 
 ```bash
 docker compose up --build
 # web -> http://localhost:3000   api -> http://localhost:8000/docs   db UI -> :4000
 ```
 
-Images: [backend/Dockerfile](backend/Dockerfile) (uvicorn) and
-[frontend/Dockerfile](frontend/Dockerfile) (Next.js standalone, port 3000 —
-pass `--build-arg NEXT_PUBLIC_API_URL=<api url>` since `NEXT_PUBLIC_*` is
-inlined at build time).
+### Deploying
 
-### Deploy to Firebase
+| Target | Plan | Notes |
+|--------|------|-------|
+| **Scouting laptop** | free | `./run-server.ps1` — LAN only, survives a dead venue uplink |
+| **Render** | free | [render.yaml](render.yaml) blueprint, public HTTPS URL, sleeps when idle |
+| Cloud Run + Hosting | Blaze | [deploy/cloud-run-optional.ps1](deploy/cloud-run-optional.ps1), ~$3–5/mo |
+
+Firestore rules and the index policy are the only things pushed to Firebase:
 
 ```powershell
 firebase login
-gcloud auth login
-./deploy/firebase.ps1 -ProjectId your-firebase-project
+./deploy/firestore.ps1
 ```
 
-The script ([deploy/firebase.ps1](deploy/firebase.ps1)) enables the Google
-Cloud APIs, deploys the Firestore rules and index policy, builds and deploys
-the API to Cloud Run, builds the static frontend and publishes Hosting. Re-run
-it to ship updates. Full walkthrough — including the Firebase project, billing
-plan, database region and quota monitoring — in
-**[instructions.txt](instructions.txt)**.
+Full walkthrough — Firebase project, database region, service-account key,
+Render setup and quota monitoring — in **[instructions.txt](instructions.txt)**.
+
+> **Not Vercel.** Vercel runs Python as short-lived serverless functions; every
+> cold instance would re-read the event from Firestore and blow past the free
+> read quota several times over. HazeHub needs a container host, not a
+> function host.
 
 ### How the environment switch works
 The backend resolves its datastore at startup (`backend/app/config.py`,

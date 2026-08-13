@@ -46,8 +46,13 @@ WHY THE LAPTOP, AND WHY THAT MEANS SPARK STAYS FREE
   only part that needs internet, and it catches up on its own.
 
   What you give up: someone must run the laptop, and people off the venue
-  wifi cannot reach the app. If you ever want the always-on cloud version,
-  deploy/cloud-run-optional.ps1 does it — but that needs Blaze.
+  wifi cannot reach the app.
+
+  WANT A PUBLIC URL TOO? See APPENDIX B — the same app deploys to Render as
+  one container, giving you an https:// address that works from anywhere,
+  while Firebase stays on Spark. Many teams run both: Render for the public
+  link between events, the laptop on competition day when venue wifi is the
+  bottleneck. Read the note in Appendix B about running both at once first.
 
 WHY THERE IS A SERVER AT ALL, RATHER THAN FIRESTORE IN THE BROWSER
 
@@ -482,12 +487,106 @@ Run the tests:
 
 
 -------------------------------------------------------------------------------
-APPENDIX B: IF YOU EVER WANT THE ALWAYS-ON CLOUD VERSION
+APPENDIX B: A PUBLIC URL — HOSTING ON RENDER
 -------------------------------------------------------------------------------
 
-This needs the Blaze (pay-as-you-go) plan, because Cloud Run does. Firestore
-usage still fits the free allowances; the cost is the always-warm Cloud Run
-instance, a few dollars a month.
+The laptop setup above is LAN-only: great at a venue, useless from home. If
+you want a real https:// address that works from anywhere, deploy the same
+app to Render. Firebase stays on Spark — Render talks to Firestore with the
+same service-account key your laptop uses.
+
+The whole app ships as ONE container: the root Dockerfile builds the web app
+and copies it in next to the API, so a single service serves both. There is
+no separate frontend deployment and no CORS to configure.
+
+  ** Why not Vercel: Vercel runs Python as short-lived serverless functions.
+     HazeHub stays inside Firestore's free quota by loading the event into
+     memory once and serving reads from RAM — which needs a long-lived
+     process. On serverless every cold instance re-reads the event, and 60
+     users over a day would blow past 50,000 reads several times over. Use a
+     container host (Render, Fly, Railway, Cloud Run), not a function host. **
+
+SETUP
+
+  1. Push this repository to GitHub if it is not there already, and merge to
+     the branch you want deployed.
+
+     ** render.yaml says `branch: main`. If you deploy from a different
+        branch, change that line first or Render will build the wrong code. **
+
+  2. https://dashboard.render.com  ->  New +  ->  Blueprint
+     Connect the repository and pick it. Render reads render.yaml, sees the
+     Docker service and offers to create it.
+
+  3. Render will prompt for the values marked `sync: false`. Set:
+
+     FIREBASE_SERVICE_ACCOUNT
+         The ENTIRE contents of the service-account JSON from step 5, pasted
+         as one value. Render has no filesystem to put a key file on, so the
+         app accepts the JSON inline as well as a path.
+
+     HAZEHUB_TEAM_PASSWORD
+         The shared sign-in password.
+
+     TBA_AUTH_KEY
+         Your Blue Alliance key.
+
+     HAZEHUB_SECRET is generated for you.
+     FIREBASE_PROJECT_ID is already set to hazehub-8a941 in render.yaml.
+
+  4. Deploy. The first build takes several minutes (it compiles the web app
+     and installs Python dependencies). When it finishes you get a URL like
+     https://hazehub.onrender.com
+
+  5. Check https://<your-url>/api/health — you want "engine": "firestore",
+     "project_id": "hazehub-8a941", "reachable": true.
+
+THINGS TO KNOW ABOUT THE FREE PLAN
+
+  * Free web services SPIN DOWN after about 15 minutes with no traffic. The
+    next request wakes them, which takes ~30-60 seconds AND re-reads the
+    event from Firestore (a couple of thousand reads). During a competition
+    day there is constant traffic so it stays awake; overnight it will sleep,
+    which is fine. If the wake-up delay bothers you, the paid Starter plan
+    (~$7/month) stays warm.
+  * Free plans include a fixed pool of instance-hours per month — enough for
+    one always-on service, not two. Check Render's current terms.
+  * numInstances MUST stay at 1. Two instances would each keep their own copy
+    of the in-memory cache, drift apart, and double the cold-start reads.
+    Read backend/app/cache.py before changing it.
+
+RUNNING BOTH RENDER AND THE LAPTOP
+
+  You can. They share one Firestore database, so scouting submitted to either
+  ends up in the same place. But they will NOT see each other's changes live
+  — each keeps its own in-memory cache — so a match locked on one appears
+  unlocked on the other until it reloads.
+
+  Pick one as the real server for an event. If you want both to stay in sync,
+  set HAZEHUB_FIRESTORE_LISTEN=1 on both; they then watch Firestore for
+  changes, at a cost of one document read per change.
+
+  A reasonable pattern: Render for the public URL between events, the laptop
+  on competition day when venue wifi is the bottleneck.
+
+TESTING THE CONTAINER LOCALLY (needs Docker)
+
+    docker build -t hazehub .
+    docker run -p 8000:8000 \
+        -e FIREBASE_PROJECT_ID=hazehub-8a941 \
+        -e FIREBASE_SERVICE_ACCOUNT="$(cat /path/to/key.json)" \
+        -e HAZEHUB_TEAM_PASSWORD=YourPassword \
+        hazehub
+
+
+-------------------------------------------------------------------------------
+APPENDIX B2: THE OTHER CLOUD OPTION — FIREBASE HOSTING + CLOUD RUN
+-------------------------------------------------------------------------------
+
+Only worth it if you want everything inside Firebase. It needs the Blaze
+(pay-as-you-go) plan, because Cloud Run does. Firestore usage still fits the
+free allowances; the cost is the always-warm Cloud Run instance, a few
+dollars a month.
 
   1. Firebase console -> gear -> Usage and billing -> Modify plan -> Blaze.
      Set a budget alert (Google Cloud console -> Billing -> Budgets & alerts,
@@ -575,6 +674,8 @@ Event-day server            ./run-server.ps1
   ...with firewall rule     ./run-server.ps1 -OpenFirewall     (as Administrator)
   ...after a code change    ./run-server.ps1 -Rebuild
 Deploy Firestore rules      ./deploy/firestore.ps1
+Public URL (Render)         push to main; Render auto-deploys (Appendix B)
+Build the container         docker build -t hazehub .
 Health check                http://localhost:8000/api/health
 Quota usage                 Admin -> System   (or /api/admin/firestore-usage)
 Dev mode with hot reload    ./start.ps1
