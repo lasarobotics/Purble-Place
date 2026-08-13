@@ -57,7 +57,7 @@ export default function AdminDashboard() {
     try {
       const r = await api<{ matches: number; bets_settled?: number }>("/api/admin/event", { method: "POST", body: { event_key: event.trim() } });
       if (r.matches === 0) {
-        toast("Event set, but TBA returned no schedule — check the key (e.g. 2026txaus), or the schedule isn't published yet", "err");
+        toast("Event set, but TBA returned no schedule, check the key (e.g. 2026txaus), or the schedule isn't published yet", "err");
       } else {
         toast(`Event set · ${r.matches} matches loaded`, "ok");
       }
@@ -108,8 +108,8 @@ export default function AdminDashboard() {
       <p className="page-sub">Control the event, match flow, betting and scouts.</p>
 
       <div className="grid cols-4" style={{ marginBottom: 18 }}>
-        <Stat label="Event" value={s.current_event || "—"} />
-        <Stat label="Current Match" value={s.current_match || "—"} accent />
+        <Stat label="Event" value={s.current_event || "-"} />
+        <Stat label="Current Match" value={s.current_match || "-"} accent />
         <Stat label="Open Bets" value={bets.filter((b) => b.status === "open").length} />
         <Stat label="Betting" value={s.betting_enabled ? "ON" : "OFF"} />
       </div>
@@ -177,7 +177,7 @@ export default function AdminDashboard() {
                       ))}
                     </div>
                   </td>
-                  <td>{m.winner ? <span className={`badge ${m.winner === "red" ? "red" : m.winner === "blue" ? "blue" : "muted"}`}>{m.winner}</span> : <span className="faint">—</span>}</td>
+                  <td>{m.winner ? <span className={`badge ${m.winner === "red" ? "red" : m.winner === "blue" ? "blue" : "muted"}`}>{m.winner}</span> : <span className="faint">-</span>}</td>
                   <td>
                     <span className={`badge ${m.betting_locked || m.winner ? "amber" : "green"}`}>
                       {m.winner ? "settled" : m.betting_locked ? "locked by scouting" : "open"}

@@ -1,11 +1,11 @@
-// Local-first storage (Dexie / IndexedDB) — the device's database of record.
+// Local-first storage (Dexie / IndexedDB), the device's database of record.
 //
 // Every submission is saved here BEFORE any network request, keeps its UUID
 // and payload hash for its whole life, and remains stored through the event
 // even after the cloud acknowledges it (recovery layer #1). sync.ts drives
 // the syncStatus state machine over these rows.
 import Dexie, { Table } from "dexie";
-import type { ScoutEntry } from "./types";
+import type { MatchRec, ScoutEntry } from "./types";
 
 export type SyncStatus =
   | "queued"
@@ -17,7 +17,7 @@ export type SyncStatus =
   | "conflict";
 
 export interface PendingScout extends ScoutEntry {
-  client_uuid: string;          // legacy name — equals submission_id
+  client_uuid: string;          // legacy name, equals submission_id
   submission_id?: string;
   payload_hash?: string;
   client_ts?: string;
@@ -35,9 +35,15 @@ interface Setting {
   value: string;
 }
 
+/** One cached match, keyed by match_key, plus when we last saw it. */
+export interface CachedMatch extends MatchRec {
+  cached_at: number;
+}
+
 class HazeDB extends Dexie {
   pendingScouts!: Table<PendingScout, string>;
   settings!: Table<Setting, string>;
+  schedule!: Table<CachedMatch, string>;
 
   constructor() {
     super("hazehub");
@@ -62,6 +68,14 @@ class HazeDB extends Dexie {
             row.attempt_count = row.attempt_count ?? 0;
           });
       });
+    // v3: the match schedule, cached on the device. Venue wifi drops, and a
+    // scout who cannot see which robot they are watching cannot scout.
+    this.version(3).stores({
+      pendingScouts:
+        "client_uuid, team_number, match_number, queued_at, sync_status, next_attempt_at",
+      settings: "key",
+      schedule: "match_key, event_key, match_number, comp_level",
+    });
   }
 }
 
@@ -101,7 +115,7 @@ export async function allLocalScouts(): Promise<PendingScout[]> {
   return db().pendingScouts.orderBy("queued_at").toArray();
 }
 
-/** Cloud confirmed these — keep the rows (recovery layer), flip the status. */
+/** Cloud confirmed these, keep the rows (recovery layer), flip the status. */
 export async function markAcknowledged(uuids: string[], receivedAt?: string) {
   if (!uuids.length) return;
   await db()
@@ -132,7 +146,7 @@ export async function markRetry(uuid: string, attemptCount: number, nextAt: numb
 }
 
 // Kept for compatibility: "removing" pending records now means acknowledging
-// them — local copies survive the event per the recovery design.
+// them, local copies survive the event per the recovery design.
 export async function removePending(uuids: string[]) {
   await markAcknowledged(uuids);
 }
@@ -169,6 +183,63 @@ export async function queueStats(): Promise<QueueStats> {
     oldestQueued: un[0] || null,
     lastAcknowledgedAt: lastAck || null,
   };
+}
+
+// ---- Offline match schedule ------------------------------------------------
+// The schedule is small, changes rarely, and is useless to fetch when the
+// venue wifi is gone. It is written to IndexedDB every time we successfully
+// load it, so a device that drops offline still knows which robot each scout
+// is watching. Scores change over the day, so the cache is replaced wholesale
+// rather than merged.
+
+const SCHEDULE_EVENT_KEY = "scheduleEvent";
+const SCHEDULE_SAVED_KEY = "scheduleSavedAt";
+
+export async function cacheSchedule(eventKey: string, matches: MatchRec[]) {
+  if (!matches.length) return;
+  const now = Date.now();
+  const rows: CachedMatch[] = matches.map((m) => ({ ...m, cached_at: now }));
+  await db().transaction("rw", db().schedule, db().settings, async () => {
+    const stale = await db().schedule.where("event_key").notEqual(eventKey).primaryKeys();
+    if (stale.length) await db().schedule.bulkDelete(stale as string[]);
+    await db().schedule.bulkPut(rows);
+    await db().settings.put({ key: SCHEDULE_EVENT_KEY, value: eventKey });
+    await db().settings.put({ key: SCHEDULE_SAVED_KEY, value: String(now) });
+  });
+}
+
+export async function cachedSchedule(eventKey?: string): Promise<MatchRec[]> {
+  const rows = eventKey
+    ? await db().schedule.where("event_key").equals(eventKey).toArray()
+    : await db().schedule.toArray();
+  const order: Record<string, number> = { qm: 0, ef: 1, qf: 2, sf: 3, f: 4 };
+  return rows.sort(
+    (a, b) =>
+      (order[a.comp_level] ?? 9) - (order[b.comp_level] ?? 9) ||
+      a.match_number - b.match_number
+  );
+}
+
+export async function cachedScheduleInfo(): Promise<{
+  event: string;
+  savedAt: number | null;
+  count: number;
+}> {
+  const [ev, saved, count] = await Promise.all([
+    db().settings.get(SCHEDULE_EVENT_KEY),
+    db().settings.get(SCHEDULE_SAVED_KEY),
+    db().schedule.count(),
+  ]);
+  return {
+    event: ev?.value || "",
+    savedAt: saved ? Number(saved.value) : null,
+    count,
+  };
+}
+
+/** The teams on the field for one match, straight from the offline cache. */
+export async function cachedMatch(matchKey: string): Promise<MatchRec | undefined> {
+  return db().schedule.get(matchKey);
 }
 
 // ---- Device identity + persistent storage (device setup) ------------------

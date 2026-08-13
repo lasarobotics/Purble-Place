@@ -12,7 +12,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "HazeHub — FRC Scouting",
+  title: "HazeHub. FRC Scouting",
   description: "Purple Haze scouting, strategy & picklist hub for FRC.",
 };
 

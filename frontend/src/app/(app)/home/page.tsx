@@ -61,7 +61,7 @@ export default function HomePage() {
           {cur?.event ? <>Live at <b>{cur.event}</b></> : "No event set yet"}
         </p>
         <h1 className="hero-title">
-          Hey {firstName} —{" "}
+          Hey {firstName}. {" "}
           {nextMatch
             ? <>let&apos;s scout <span className="haze-text">{matchLabel(nextMatch.comp_level, nextMatch.match_number)}</span></>
             : <>ready when <span className="haze-text">the schedule is</span></>}
@@ -110,7 +110,7 @@ export default function HomePage() {
               <MatchPreview m={nextMatch} onExpand={setExpand} />
             </>
           ) : (
-            <p className="muted" style={{ margin: 0 }}>Schedule not published yet — check back soon.</p>
+            <p className="muted" style={{ margin: 0 }}>Schedule not published yet, check back soon.</p>
           )}
         </div>
 
@@ -126,7 +126,7 @@ export default function HomePage() {
                     <td><span className={r.rank <= 3 ? `rank-chip ${["gold", "silver", "bronze"][r.rank - 1]}` : "rank-chip"}>{r.rank}</span></td>
                     <td>{r.display_name}</td>
                     <td className="num mono">{r.bucks}</td>
-                    <td className="num mono">{r.bets ? pct(r.win_rate) : "—"}</td>
+                    <td className="num mono">{r.bets ? pct(r.win_rate) : "-"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -135,7 +135,7 @@ export default function HomePage() {
         </div>
       </div>
 
-      {/* My open bets — only when there are any */}
+      {/* My open bets, only when there are any */}
       {openBets.length > 0 && (
         <div className="card" style={{ marginTop: 16 }}>
           <div className="card-h"><h3>My Open Bets</h3><Link href="/betting" className="btn sm ghost">Betting →</Link></div>
@@ -179,7 +179,7 @@ function AllianceMini({ teams, color, onExpand }: { teams: Team[]; color: "red" 
           <div style={{ minWidth: 0 }}>
             <div className="tnum">{t.team_number}</div>
             <div className="tname" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {t.nickname || "—"}
+              {t.nickname || "-"}
             </div>
           </div>
           {t.epa != null && <span className="badge haze" style={{ marginLeft: "auto" }}>{num(t.epa, 0)}</span>}

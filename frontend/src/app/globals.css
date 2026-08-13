@@ -1,9 +1,9 @@
 /* ===========================================================================
-   HazeHub — "Quiet Carbon" design system, v5
+   HazeHub. "Quiet Carbon" design system, v5
    Flat, calm, precise. Near-black surfaces with a slight violet warmth, one
    restrained purple accent, hairline borders, pill primaries, a single type
    family carried by weight contrast. No gradients, no glows, no patterns,
-   no blur — elevation comes from surface steps and hairlines.
+   no blur, elevation comes from surface steps and hairlines.
    Vanilla CSS. Same class contract as every previous theme.
 
    Palette
@@ -14,7 +14,7 @@
      red #E5484D · blue #4C8DFF · green #30A46C · amber #D4A72C
    =========================================================================== */
 :root {
-  /* Brand accent (legacy var names kept — components reference them). */
+  /* Brand accent (legacy var names kept, components reference them). */
   --haze: #8b5cf6;             /* primary interactive purple */
   --haze-bright: #9d78f2;
   --haze-glow: #a78bfa;        /* readable violet text on carbon */
@@ -368,7 +368,7 @@ table.data td.num { text-align: right; font-family: var(--font-num); font-varian
 }
 .avatar.sm { width: 30px; height: 30px; border-radius: 8px; }
 .avatar.lg { width: 64px; height: 64px; border-radius: 14px; }
-/* Home teams — FRC 418 Purple Haze / FRC 436 Purple Rain */
+/* Home teams. FRC 418 Purple Haze / FRC 436 Purple Rain */
 .avatar.home { outline: 2px solid var(--haze); outline-offset: 1px; }
 .team-chip {
   display: flex; align-items: center; gap: 10px; padding: 8px 10px;
@@ -551,7 +551,7 @@ table.data td.num { text-align: right; font-family: var(--font-num); font-varian
   border: 1px solid var(--border);
 }
 
-/* film review — video-grounded scouting (timestamped key events) */
+/* film review, video-grounded scouting (timestamped key events) */
 .film-events { display: grid; gap: 8px; }
 .film-event {
   display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: start;
@@ -714,3 +714,143 @@ table.data td.num { text-align: right; font-family: var(--font-num); font-varian
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ============================================================ *
+ * Picklist board: ranked list on the left, team pool on the right
+ * ============================================================ */
+.picklist-board {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 320px);
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .picklist-board { grid-template-columns: 1fr; }
+  .picklist-pool { order: -1; }
+}
+
+.picklist-ranked, .picklist-pool {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px;
+}
+
+.pick-order { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
+
+.pick-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: "rank team move" "note note note";
+  gap: 8px 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-2);
+}
+.pick-row[draggable="true"] { cursor: grab; }
+.pick-row[draggable="true"]:active { cursor: grabbing; }
+.pick-row .rank-chip { grid-area: rank; }
+.pick-row .team-click { grid-area: team; }
+.pick-row .pick-move { grid-area: move; }
+.pick-row .pick-note { grid-area: note; }
+.pick-row.drop-target { border-color: var(--haze); box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.35); }
+
+.pick-row.drop-tail {
+  display: block;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.8rem;
+  border-style: dashed;
+  padding: 14px;
+}
+
+.pick-note {
+  width: 100%;
+  resize: vertical;
+  min-height: 42px;
+  font: inherit;
+  font-size: 0.82rem;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+.pick-note:read-only { opacity: 0.75; }
+
+.pool-search {
+  width: 100%;
+  margin: 10px 0;
+  padding: 9px 11px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+.pool-list { display: grid; gap: 6px; max-height: 62vh; overflow-y: auto; padding-right: 4px; }
+.pool-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+.pool-row[draggable="true"] { cursor: grab; }
+.grow { flex: 1; min-width: 0; }
+
+/* ============================================================ *
+ * Picklist meeting mode
+ * ============================================================ */
+.meeting section { margin-bottom: 22px; }
+.meeting h2 { font-size: 1.05rem; margin: 0 0 10px; }
+.meeting-master { border-color: var(--haze); }
+.scouter-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 8px;
+}
+.list-card-items { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+.list-card-items li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.list-card.sm { font-size: 0.76rem; padding: 8px; }
+.list-card.sm .list-card-items { gap: 3px; }
+.rank-chip.sm { min-width: 18px; height: 18px; font-size: 0.66rem; }
+.pick-why { flex-basis: 100%; color: var(--muted); font-size: 0.76rem; padding-left: 30px; }
+
+/* ============================================================ *
+ * Expandable, zoomable scoring map
+ * ============================================================ */
+.field-zoom-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 4, 12, 0.82);
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.field-zoom {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 16px;
+  width: min(1200px, 96vw);
+  max-height: 94vh;
+  overflow: auto;
+}
+.field-zoom-stage {
+  overflow: hidden;
+  border-radius: 12px;
+  touch-action: none;
+  margin-top: 10px;
+}
+.heatmap-controls .seg button { font-size: 0.76rem; }
+
+.consensus-numbers { margin-top: 10px; }
+.consensus-numbers summary { cursor: pointer; font-size: 0.8rem; }
+.consensus-numbers[open] summary { margin-bottom: 8px; }

@@ -1,10 +1,23 @@
+export type Role = "scouter" | "strategy" | "admin" | "picklist";
+
 export interface Session {
   token: string;
   scout_id: string;
+  role: Role;
+  /** True for strategy and admin. Kept as the shorthand most screens use. */
   is_admin: boolean;
+  /** Picklist meeting account: picklists and team data only. */
+  picklist_only: boolean;
   display_name: string;
   bucks: number;
 }
+
+export const ROLE_LABEL: Record<Role, string> = {
+  scouter: "Scouter",
+  strategy: "Strategy",
+  admin: "Admin",
+  picklist: "Picklist Meeting",
+};
 
 export interface HeatPoint {
   x: number; // 0..1
@@ -13,6 +26,11 @@ export interface HeatPoint {
   result: "made" | "missed";
   value?: number;
   match?: number;
+  /** Where the robot started. Set on aggregated heatmaps so the map can be
+   *  split by driver station, which is what tells a near-side-only scorer
+   *  apart from one that scores from anywhere. */
+  alliance?: "red" | "blue";
+  station?: number;
 }
 
 export interface ScoutEntry {
@@ -114,6 +132,8 @@ export interface Odds {
   red: number[];
   blue: number[];
   locked: boolean;
+  /** Plain-language reason betting is closed, empty when it is open. */
+  lock_reason?: string;
   betting_enabled: boolean;
   source: string;
   red_teams?: Team[];
@@ -135,19 +155,39 @@ export interface LeaderRow {
 
 export interface PicklistItem {
   team: number;
-  tier: "first" | "second" | "third" | "dnp";
+  team_num?: number;
+  rank?: number;
+  tier?: string;
+  /** Why this team is ranked here. note, comments and justification are the
+   *  same value under three names, kept in step by the server. */
   note?: string;
+  comments?: string;
+  justification?: string;
 }
+
+/** 1 = first pick, 2 = second pick. Everyone keeps one list of each. */
+export type PickRound = 1 | 2;
 
 export interface Picklist {
   id: number;
   event_key: string;
   owner_id: string;
   owner_name: string;
+  owner_role: Role | "master";
+  /** 0 master, 1 strategy and admin, 2 scouter. Lower shows first. */
+  priority: number;
   name: string;
   is_master: boolean;
+  pick_round: PickRound;
   items: PicklistItem[];
   updated_at: string;
+}
+
+export interface MeetingPicklists {
+  event: string;
+  master: Picklist[];
+  strategy: Picklist[];
+  scouter: Picklist[];
 }
 
 export interface InsightBullet {

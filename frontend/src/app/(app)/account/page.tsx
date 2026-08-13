@@ -72,7 +72,7 @@ export default function AccountPage() {
                       <td>{matchLabel(e.comp_level, e.match_number)}</td>
                       <td><TeamIdentity team={teams[e.team_number] || { team_number: e.team_number, nickname: "" }} showNickname={false} /></td>
                       <td className="num mono">{e.points}</td>
-                      <td className="faint">{e.created_at ? timeAgo(e.created_at) : "—"}</td>
+                      <td className="faint">{e.created_at ? timeAgo(e.created_at) : "-"}</td>
                     </tr>
                   ))}
                 </tbody>

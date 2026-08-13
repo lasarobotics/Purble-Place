@@ -22,7 +22,7 @@ export default function DataPicklistPage() {
   return (
     <div>
       <div className="page-title"><h1>Data Picklist</h1></div>
-      <p className="page-sub">Ranked by true strength — consistency and schedule adjusted.</p>
+      <p className="page-sub">Ranked by true strength, consistency and schedule adjusted.</p>
 
       <div className="card">
         <div className="table-wrap">

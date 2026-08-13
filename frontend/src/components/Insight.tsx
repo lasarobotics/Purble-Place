@@ -12,7 +12,7 @@ const VERDICT_META: Record<TeamInsight["verdict"], { label: string; cls: string 
   unknown: { label: "Not enough data", cls: "muted" },
 };
 
-/** Haze Intel — AI-assisted summary where every bullet carries its evidence. */
+/** Haze Intel. AI-assisted summary where every bullet carries its evidence. */
 export function HazeIntel({ teamNumber }: { teamNumber: number }) {
   const [insight, setInsight] = useState<TeamInsight | null>(null);
   const [error, setError] = useState(false);

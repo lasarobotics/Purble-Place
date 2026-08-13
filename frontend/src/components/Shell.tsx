@@ -9,15 +9,23 @@ import { flushQueue } from "@/lib/sync";
 import { pendingCount, requestPersistentStorage } from "@/lib/db";
 import { Loading } from "./ui";
 import { Icon } from "./icons";
+import { ROLE_LABEL } from "@/lib/types";
 
 const MAIN_NAV = [
   { href: "/home", label: "Home", icon: "home" },
   { href: "/scout", label: "Scout", icon: "clipboard" },
   { href: "/prematch", label: "Pre-Match", icon: "bot" },
-  { href: "/film", label: "Film", icon: "film" },
   { href: "/betting", label: "Betting", icon: "coins" },
   { href: "/picklists", label: "Picklists", icon: "list" },
   { href: "/status", label: "Device Status", icon: "refresh" },
+  { href: "/account", label: "Account", icon: "user" },
+];
+
+// The picklist meeting account reaches exactly two screens. Everything else
+// is hidden here and refused by the server, so a mis-tap on a shared screen
+// cannot advance the match or settle bets.
+const PICKLIST_NAV = [
+  { href: "/meeting", label: "Picklist Meeting", icon: "folder" },
   { href: "/account", label: "Account", icon: "user" },
 ];
 
@@ -28,6 +36,9 @@ const ADMIN_NAV = [
   { href: "/admin/data-picklist", label: "Data Picklist", icon: "trend" },
   { href: "/admin/compare", label: "Compare Robots", icon: "scale" },
   { href: "/admin/consensus", label: "Consensus Radar", icon: "radar" },
+  // Film review is a strategy tool, not something a scout needs mid-match.
+  { href: "/film", label: "Film Review", icon: "film" },
+  { href: "/meeting", label: "Picklist Meeting", icon: "folder" },
   { href: "/admin/picklists", label: "All Pick Lists", icon: "folder" },
   { href: "/admin/system", label: "System Health", icon: "refresh" },
 ];
@@ -36,7 +47,7 @@ const MOBILE_NAV = [
   { href: "/home", label: "Home", icon: "home" },
   { href: "/scout", label: "Scout", icon: "clipboard" },
   { href: "/prematch", label: "Match", icon: "bot" },
-  { href: "/film", label: "Film", icon: "film" },
+  { href: "/picklists", label: "Picks", icon: "list" },
   { href: "/betting", label: "Bets", icon: "coins" },
 ];
 
@@ -51,9 +62,18 @@ export function Shell({ children }: { children: React.ReactNode }) {
     if (!loading && !session) router.replace("/login");
   }, [loading, session, router]);
 
+  // Keep a picklist meeting account inside the two screens it is for. The
+  // server rejects the rest anyway; this stops the account from landing on a
+  // page of permission errors.
+  useEffect(() => {
+    if (!session?.picklist_only) return;
+    const allowed = ["/meeting", "/account"];
+    if (!allowed.some((prefix) => pathname.startsWith(prefix))) router.replace("/meeting");
+  }, [session, pathname, router]);
+
   useLiveEvents((event, payload) => emitBus(event, payload));
 
-  // Ask the browser to protect IndexedDB from automatic eviction — queued
+  // Ask the browser to protect IndexedDB from automatic eviction, queued
   // scouting records must survive restarts (best effort; result on /status).
   useEffect(() => {
     requestPersistentStorage();
@@ -95,9 +115,13 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
   const isActive = (href: string) =>
     href === "/admin" ? pathname === "/admin" : pathname.startsWith(href);
-  const mobileNav = session.is_admin
-    ? [...MOBILE_NAV.slice(0, 4), { href: "/admin", label: "Admin", icon: "sliders" }]
-    : MOBILE_NAV;
+  const picklistOnly = session.picklist_only;
+  const mainNav = picklistOnly ? PICKLIST_NAV : MAIN_NAV;
+  const mobileNav = picklistOnly
+    ? PICKLIST_NAV
+    : session.is_admin
+      ? [...MOBILE_NAV.slice(0, 4), { href: "/admin", label: "Admin", icon: "sliders" }]
+      : MOBILE_NAV;
 
   return (
     <div className="shell">
@@ -106,15 +130,15 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <span className="logo" />
           <span className="name">Haze<b>Hub</b></span>
         </Link>
-        <div className="nav-section">Scouting</div>
-        {MAIN_NAV.map((n) => (
+        <div className="nav-section">{picklistOnly ? "Picklist Meeting" : "Scouting"}</div>
+        {mainNav.map((n) => (
           <Link key={n.href} href={n.href} className={"nav-link" + (isActive(n.href) ? " active" : "")}>
             <span className="ico"><Icon name={n.icon} /></span> {n.label}
           </Link>
         ))}
         {session.is_admin && (
           <>
-            <div className="nav-section">Admin · Strategy</div>
+            <div className="nav-section">Strategy</div>
             {ADMIN_NAV.map((n) => (
               <Link key={n.href} href={n.href} className={"nav-link" + (isActive(n.href) ? " active" : "")}>
                 <span className="ico"><Icon name={n.icon} /></span> {n.label}
@@ -128,7 +152,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <div>
               <div style={{ fontWeight: 700 }}>{session.display_name}</div>
               <div className="faint" style={{ fontSize: "0.75rem" }}>
-                {session.is_admin ? "Administrator" : "Scout"}
+                {ROLE_LABEL[session.role] || "Scouter"}
               </div>
             </div>
             <button className="btn sm ghost" onClick={logout}>Sign out</button>
@@ -151,13 +175,13 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 <Icon name="refresh" size={12} /> {pending} queued
               </span>
             )}
-            <span className="badge muted" title={online ? "Online" : "Offline — saving locally"}>
+            <span className="badge muted" title={online ? "Online" : "Offline, saving locally"}>
               <span className={"dot " + (online ? "green" : "red")} /> {online ? "Live" : "Offline"}
             </span>
             <span className="badge haze">{session.bucks} PB</span>
           </div>
         </header>
-        {!online && <div className="offline-bar">Offline — your scouting is saved on this device and will sync automatically.</div>}
+        {!online && <div className="offline-bar">Offline, your scouting is saved on this device and will sync automatically.</div>}
         <main className="content">{children}</main>
       </div>
 

@@ -117,7 +117,7 @@ const ICONS: Record<string, React.ReactNode> = {
   ],
 };
 
-// Legacy call sites pass emoji or loose names — map them onto real icons.
+// Legacy call sites pass emoji or loose names, map them onto real icons.
 const ALIASES: Record<string, string> = {
   "🏠": "home", "📋": "clipboard", "🤖": "bot", "🎥": "film", "🎬": "film",
   "🎲": "dice", "📝": "list", "👤": "user", "⚙️": "sliders", "🔎": "search",

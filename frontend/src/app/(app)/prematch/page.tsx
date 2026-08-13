@@ -106,7 +106,7 @@ function Alliance({ teams, color, onExpand }: { teams: Team[]; color: "red" | "b
                 <span className="tnum" style={{ fontSize: "1.1rem" }}>{t.team_number}</span>
                 {t.epa != null && <span className="badge haze">EPA {num(t.epa, 0)}</span>}
               </div>
-              <div className="tname">{t.nickname || "—"}</div>
+              <div className="tname">{t.nickname || "-"}</div>
             </div>
             <span className="badge muted">{t.photos?.length ? `${t.photos.length} photos` : "tap"}</span>
           </div>

@@ -5,7 +5,7 @@ import { api } from "@/lib/api";
 import type { Team } from "@/lib/types";
 import { Icon } from "./icons";
 
-// FRC 418 Purple Haze · FRC 436 Purple Rain — highlighted across the app.
+// FRC 418 Purple Haze · FRC 436 Purple Rain, highlighted across the app.
 export const HOME_TEAMS = [418, 436];
 
 type AvatarTeam = Pick<Team, "team_number"> & Partial<Omit<Team, "team_number">>;

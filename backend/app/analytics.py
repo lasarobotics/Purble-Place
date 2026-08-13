@@ -163,7 +163,9 @@ def team_heatmap(
 ) -> dict[str, Any]:
     def build() -> dict[str, Any]:
         points: list[dict[str, Any]] = []
+        by_station: dict[str, dict[str, int]] = {}
         for e in team_entries(event_key, team):
+            slot = f"{e.alliance}{e.station}"
             for a in e.heatmap or []:
                 if phase and a.get("phase") != phase:
                     continue
@@ -174,8 +176,17 @@ def team_heatmap(
                         "phase": a.get("phase"),
                         "result": a.get("result"),
                         "match": e.match_number,
+                        # Carried through so the map can be split by driver
+                        # station: where a robot starts changes which side of
+                        # the field it can reach.
+                        "alliance": e.alliance,
+                        "station": e.station,
                     }
                 )
+                bucket = by_station.setdefault(slot, {"total": 0, "made": 0})
+                bucket["total"] += 1
+                if a.get("result") == "made":
+                    bucket["made"] += 1
         made = sum(1 for p in points if p["result"] == "made")
         return {
             "team": team,
@@ -183,6 +194,15 @@ def team_heatmap(
             "total": len(points),
             "made": made,
             "accuracy": round(made / len(points), 3) if points else 0.0,
+            "by_station": [
+                {
+                    "station": slot,
+                    "total": v["total"],
+                    "made": v["made"],
+                    "accuracy": round(v["made"] / v["total"], 3) if v["total"] else 0.0,
+                }
+                for slot, v in sorted(by_station.items())
+            ],
         }
 
     return repo.memoized(f"heatmap:{event_key}:{team}:{phase or 'all'}", _DEPS, build)

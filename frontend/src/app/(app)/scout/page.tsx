@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
+import { loadSchedule, type ScheduleSource } from "@/lib/schedule";
 import { useToast } from "@/lib/toast";
 import { markAcknowledged, markStatus, queueScout, uuid } from "@/lib/db";
 import { flushQueue, payloadHash } from "@/lib/sync";
@@ -11,7 +12,7 @@ import { matchLabel } from "@/lib/format";
 
 const STATION_KEY = "hazehub.station";
 
-// Structured qualitative tags — one tap each, aggregated per team so picklist
+// Structured qualitative tags, one tap each, aggregated per team so picklist
 // meetings see *what kind* of robot this is (TideScout-style qual insights).
 const QUICK_TAGS: { tag: string; tone: "good" | "bad" }[] = [
   { tag: "Fast cycles", tone: "good" },
@@ -74,6 +75,8 @@ export default function ScoutPage() {
   const toast = useToast();
   const [f, setF] = useState<ScoutEntry>(blank());
   const [matches, setMatches] = useState<MatchRec[]>([]);
+  const [scheduleSource, setScheduleSource] = useState<ScheduleSource>("none");
+  const [scheduleSavedAt, setScheduleSavedAt] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const set = <K extends keyof ScoutEntry>(k: K, v: ScoutEntry[K]) => setF((p) => ({ ...p, [k]: v }));
 
@@ -86,7 +89,16 @@ export default function ScoutPage() {
     api<{ alliance: "red" | "blue"; station: number }>("/api/scout/last-assignment")
       .then((a) => setF((p) => ({ ...p, alliance: a.alliance, station: a.station })))
       .catch(() => {});
-    api<{ matches: MatchRec[] }>("/api/matches?include_teams=true").then((r) => setMatches(r.matches)).catch(() => {});
+    // The schedule comes from the network when it can, and from IndexedDB
+    // when it cannot. A scout who lost wifi still needs to know which robot
+    // they are watching, which is the whole job.
+    loadSchedule()
+      .then((r) => {
+        setMatches(r.matches);
+        setScheduleSource(r.source);
+        setScheduleSavedAt(r.savedAt);
+      })
+      .catch(() => {});
   }, []);
 
   const scheduledTeam = useMemo(() => {
@@ -128,7 +140,7 @@ export default function ScoutPage() {
       payload_hash: await payloadHash(f as any),
     };
     rememberStation(f.alliance, f.station);
-    // Save locally FIRST — the record must survive even if the request dies.
+    // Save locally FIRST, the record must survive even if the request dies.
     await queueScout({ ...entry, client_uuid: submissionId, queued_at: Date.now() });
     try {
       const res = await api<{ entry: ScoutEntry }>("/api/scout", { method: "POST", body: entry });
@@ -138,10 +150,10 @@ export default function ScoutPage() {
     } catch (err: any) {
       if (err?.status === 409) {
         await markStatus(submissionId, "conflict", err.message);
-        toast("Conflict — this submission UUID already exists with different data", "err");
+        toast("Conflict, this submission UUID already exists with different data", "err");
       } else {
         // Offline or server error → already saved locally, sync later.
-        toast("Saved locally — will sync when connected", "info");
+        toast("Saved locally, will sync when connected", "info");
         flushQueue();
       }
       resetForNext();
@@ -166,7 +178,23 @@ export default function ScoutPage() {
       <div className="page-title"><h1>Scout a Match</h1></div>
       <p className="page-sub">Top to bottom, done in a minute.</p>
 
-      {/* 1 — who are you watching */}
+      {scheduleSource === "cache" && (
+        <div className="card tight" style={{ borderColor: "var(--amber)", marginBottom: 12 }}>
+          <span className="dot amber" style={{ marginRight: 8 }} />
+          Using the schedule saved on this device
+          {scheduleSavedAt ? ` from ${new Date(scheduleSavedAt).toLocaleTimeString()}` : ""}.
+          Team numbers still fill in. It will refresh when the connection returns.
+        </div>
+      )}
+      {scheduleSource === "none" && (
+        <div className="card tight" style={{ borderColor: "var(--red)", marginBottom: 12 }}>
+          <span className="dot red" style={{ marginRight: 8 }} />
+          No schedule on this device yet. Type the team number in by hand, and open
+          this page once while online so the schedule is saved for later.
+        </div>
+      )}
+
+      {/* 1, who are you watching */}
       <Step n={1} title="Your robot" hint="The team number fills in from the schedule.">
         <div className="slot-grid">
           <label className="field" style={{ margin: 0 }}>
@@ -232,13 +260,13 @@ export default function ScoutPage() {
       {f.no_show ? (
         <div className="card step-card noshow-note">
           <p style={{ margin: 0 }}>
-            That's all we need — hit <b>Submit</b> below. The no-show is tracked as a
+            That's all we need, hit <b>Submit</b> below. The no-show is tracked as a
             reliability flag and won't drag down the team's scoring averages.
           </p>
         </div>
       ) : (
         <>
-          {/* 2 — score the match */}
+          {/* 2, score the match */}
           <Step n={2} title="Score the match" hint="Tap the field where each attempt happened. Switch Auto/Teleop and Made/Missed as you go.">
             <FieldInput points={f.heatmap} onChange={(pts: HeatPoint[]) => set("heatmap", pts)} />
             <div className="row" style={{ gap: 10, marginTop: 14 }}>
@@ -251,7 +279,7 @@ export default function ScoutPage() {
             </div>
           </Step>
 
-          {/* 3 — endgame */}
+          {/* 3, endgame */}
           <Step n={3} title="Endgame climb">
             <Segmented
               options={[
@@ -265,8 +293,8 @@ export default function ScoutPage() {
             />
           </Step>
 
-          {/* 4 — how did they look */}
-          <Step n={4} title="How did they look?" hint="Gut ratings — 3 is average.">
+          {/* 4, how did they look */}
+          <Step n={4} title="How did they look?" hint="Gut ratings. 3 is average.">
             <div className="rate-row">
               <span>Driver skill</span>
               <Rating value={f.driver_skill} onChange={(v) => set("driver_skill", v)} />
@@ -296,8 +324,8 @@ export default function ScoutPage() {
             )}
           </Step>
 
-          {/* 5 — quick tags */}
-          <Step n={5} title="Quick tags" hint="Tap anything you saw — these build the team's profile.">
+          {/* 5, quick tags */}
+          <Step n={5} title="Quick tags" hint="Tap anything you saw, these build the team's profile.">
             <div className="tag-list">
               {QUICK_TAGS.map(({ tag, tone }) => {
                 const on = f.tags.includes(tag);
@@ -315,8 +343,8 @@ export default function ScoutPage() {
             </div>
           </Step>
 
-          {/* 6 — problems + notes */}
-          <Step n={6} title="Problems &amp; notes" hint="Only if something happened — otherwise skip straight to Submit.">
+          {/* 6, problems + notes */}
+          <Step n={6} title="Problems &amp; notes" hint="Only if something happened, otherwise skip straight to Submit.">
             <div className="rate-row">
               <span>Fouls</span>
               <Stepper value={f.fouls} onChange={(v) => set("fouls", v)} />

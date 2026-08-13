@@ -6,6 +6,7 @@ import type { Team, TeamSummary, HeatPoint } from "@/lib/types";
 import { Loading, Empty, Stat, TeamIdentity } from "@/components/ui";
 import { FieldHeatmap } from "@/components/Field";
 import { LineChart } from "@/components/Chart";
+import { HazeIntel } from "@/components/Insight";
 
 interface TeamReport {
   id: number;
@@ -39,7 +40,8 @@ export default function TeamSearchPage() {
   const [summary, setSummary] = useState<TeamSummary | null>(null);
   const [heat, setHeat] = useState<{ points: HeatPoint[]; total: number; made: number; accuracy: number } | null>(null);
   const [reports, setReports] = useState<TeamReport[]>([]);
-  const [phase, setPhase] = useState<"" | "auto" | "teleop">("");
+  // The scoring map filters by phase and driver station itself now.
+  const phase = "" as "" | "auto" | "teleop";
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
 
@@ -109,27 +111,19 @@ export default function TeamSearchPage() {
             <Stat label="Matches" value={summary.matches} />
             <Stat label="Avg Points" value={num(summary.avg_points)} accent />
             <Stat label="Consistency" value={pct(summary.consistency)} />
-            <Stat label="EPA" value={summary.epa != null ? num(summary.epa, 0) : "—"} />
+            <Stat label="EPA" value={summary.epa != null ? num(summary.epa, 0) : "-"} />
           </div>
+
+          <HazeIntel teamNumber={summary.team} />
 
           <div className="grid cols-2">
             <div className="card">
-              <div className="card-h"><h3>Scoring Heatmap</h3>
-                <div className="seg">
-                  <button className={phase === "" ? "on" : ""} onClick={() => setPhase("")}>All</button>
-                  <button className={phase === "auto" ? "on" : ""} onClick={() => setPhase("auto")}>Auto</button>
-                  <button className={phase === "teleop" ? "on" : ""} onClick={() => setPhase("teleop")}>Teleop</button>
-                </div>
-              </div>
+              <div className="card-h"><h3>Scoring Map</h3></div>
+              {/* The map now carries its own phase and driver-station filters,
+                  so the page-level phase toggle above it would just be a
+                  second control for the same thing. */}
               {heat && heat.points.length > 0 ? (
-                <>
-                  <FieldHeatmap points={heat.points} />
-                  <div className="row" style={{ justifyContent: "space-between", marginTop: 10 }}>
-                    <span className="badge muted">{heat.total} attempts</span>
-                    <span className="badge green">{heat.made} made</span>
-                    <span className="badge haze">{pct(heat.accuracy)} accuracy</span>
-                  </div>
-                </>
+                <FieldHeatmap points={heat.points} />
               ) : <Empty icon="map" title="No mapped scoring" />}
             </div>
 

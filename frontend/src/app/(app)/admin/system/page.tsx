@@ -96,7 +96,7 @@ export default function SystemHealthPage() {
       <p className="page-sub">
         Firestore usage against the daily free tier, reconciliation against the
         match schedule, and scout check-ins. Devices that go quiet may still
-        hold unsynced records — chase them before shutting anything down.
+        hold unsynced records, chase them before shutting anything down.
       </p>
 
       {h.database.warning && (
@@ -128,7 +128,7 @@ export default function SystemHealthPage() {
           </p>
           {!h.database.configured && (
             <p className="faint" style={{ marginTop: 6 }}>
-              Not connected to Firestore — using the local development store. See instructions.txt.
+              Not connected to Firestore, using the local development store. See instructions.txt.
             </p>
           )}
           {h.database.error && <p className="faint" style={{ marginTop: 6 }}>{h.database.error}</p>}
@@ -194,7 +194,7 @@ export default function SystemHealthPage() {
                 <p key={i} className="faint" style={{ margin: "2px 0" }}>Duplicate: Q{d.match} team {d.team} scouted {d.count}×</p>
               ))}
               {rec.wrong_team.items.map((w, i) => (
-                <p key={i} className="faint" style={{ margin: "2px 0" }}>Wrong team: Q{w.match} — {w.team} isn't on the field ({w.scout_id})</p>
+                <p key={i} className="faint" style={{ margin: "2px 0" }}>Wrong team: Q{w.match}. {w.team} isn't on the field ({w.scout_id})</p>
               ))}
             </>
           )}
@@ -229,13 +229,13 @@ export default function SystemHealthPage() {
           <h3>Network / Gateway</h3>
           {h.network.available ? (
             <div className="grid cols-3">
-              <Stat label="Carrier" value={h.network.carrier ?? "—"} />
-              <Stat label="Signal" value={h.network.signal_quality ?? "—"} />
-              <Stat label="Packet loss" value={h.network.packet_loss ?? "—"} />
+              <Stat label="Carrier" value={h.network.carrier ?? "-"} />
+              <Stat label="Signal" value={h.network.signal_quality ?? "-"} />
+              <Stat label="Packet loss" value={h.network.packet_loss ?? "-"} />
             </div>
           ) : (
             <p className="faint" style={{ margin: 0 }}>
-              <Light ok={false} warn /> Gateway stats unavailable — {h.network.reason}. Set
+              <Light ok={false} warn /> Gateway stats unavailable. {h.network.reason}. Set
               {" "}<code>HAZEHUB_GATEWAY_STATS_URL</code> to the UniFi/gateway stats API to
               show carrier, signal quality and packet loss here.
             </p>

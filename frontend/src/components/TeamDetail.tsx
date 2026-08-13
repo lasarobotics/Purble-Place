@@ -40,7 +40,7 @@ export function TeamDetail({ team }: { team: Team }) {
         <TeamAvatar team={full} size="lg" />
         <div style={{ minWidth: 0 }}>
           <h2 style={{ margin: 0 }}>{full.team_number}</h2>
-          <div className="muted">{full.nickname || "—"}</div>
+          <div className="muted">{full.nickname || "-"}</div>
           <div className="faint" style={{ fontSize: "0.8rem" }}>
             {[full.city, full.state, full.country].filter(Boolean).join(", ")}
           </div>

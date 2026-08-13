@@ -65,6 +65,22 @@ export default function FilmPage() {
     }
   }
 
+  // Film review is a strategy tool. The nav hides it for scouters; this is
+  // the guard for anyone who types the URL. The API keeps film editing behind
+  // the same roles, so this is presentation, not the security boundary.
+  if (session && !session.is_admin) {
+    return (
+      <div>
+        <div className="page-title"><h1>Film Review</h1></div>
+        <Empty
+          icon="film"
+          title="Strategy and admin only"
+          sub="Film review lives with the strategy team. Ask them if you need a match pulled up."
+        />
+      </div>
+    );
+  }
+
   if (loading) return <Loading />;
   if (!matches.length) return (<div><h1>Film Review</h1><Empty icon="film" title="No schedule loaded" sub="Set an event in the Dashboard. If it's already set, TBA hasn't published that event's schedule yet." /></div>);
 

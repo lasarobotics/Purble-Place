@@ -54,7 +54,7 @@ export default function DeviceStatusPage() {
       toast(h.ok ? "Cloud API reachable" : "API responded but the database is unreachable", h.ok ? "ok" : "err");
     } catch {
       setApiStatus("down");
-      toast("Cloud API unreachable — records stay queued locally", "err");
+      toast("Cloud API unreachable, records stay queued locally", "err");
     } finally {
       setBusy("");
     }
@@ -83,7 +83,7 @@ export default function DeviceStatusPage() {
     setBusy("import");
     try {
       const { imported, skipped } = await importJSONL(await file.text());
-      toast(`Imported ${imported} record(s)${skipped ? ` · ${skipped} skipped` : ""} — syncing`, "ok");
+      toast(`Imported ${imported} record(s)${skipped ? ` · ${skipped} skipped` : ""}, syncing`, "ok");
       load();
     } finally {
       setBusy("");
@@ -98,8 +98,8 @@ export default function DeviceStatusPage() {
       <div className="page-title"><h1>Device Status</h1></div>
       <p className="page-sub">
         This device's local database and sync queue. Every submission is saved
-        here first and stays for the whole event — even after the cloud
-        confirms it — so a failed device can always be recovered.
+        here first and stays for the whole event, even after the cloud
+        confirms it, so a failed device can always be recovered.
       </p>
 
       <div className="grid cols-4" style={{ marginBottom: 16 }}>
@@ -113,11 +113,11 @@ export default function DeviceStatusPage() {
         <div className="card">
           <h3>Device</h3>
           <div className="report-grid" style={{ marginTop: 0 }}>
-            <div><div className="faint">Scout</div><p>{session?.display_name || "—"}</p></div>
+            <div><div className="faint">Scout</div><p>{session?.display_name || "-"}</p></div>
             <div><div className="faint">Device ID</div><p className="mono" style={{ fontSize: "0.78rem" }}>{deviceId || "…"}</p></div>
             <div>
               <div className="faint">Persistent storage</div>
-              <p>{persisted === null ? "Checking…" : persisted ? "Enabled" : "Not guaranteed — avoid clearing browser data"}</p>
+              <p>{persisted === null ? "Checking…" : persisted ? "Enabled" : "Not guaranteed, avoid clearing browser data"}</p>
             </div>
             <div>
               <div className="faint">Cloud API</div>
@@ -161,7 +161,7 @@ export default function DeviceStatusPage() {
           <h3>Recovery</h3>
           <p style={{ marginTop: 0 }}>
             Export recovery files at checkpoints. If this device dies, a spare
-            imports the file and uploads through the same idempotent sync — the
+            imports the file and uploads through the same idempotent sync, the
             submission UUIDs guarantee nothing double-counts.
           </p>
           <div className="btn-row">

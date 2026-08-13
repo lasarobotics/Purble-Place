@@ -5,9 +5,9 @@ import { api, getToken, wsUrl } from "./api";
 // Live server events (submission_ack, scout_submitted, bet_placed,
 // match_advanced, picklist_changed, ...) with two transports:
 //
-//   1. WebSocket to /ws — instant, used when the host supports it (local dev,
+//   1. WebSocket to /ws, instant, used when the host supports it (local dev,
 //      LAN server, container hosts).
-//   2. Polling GET /api/events?since=<cursor> — the serverless fallback
+//   2. Polling GET /api/events?since=<cursor>, the serverless fallback
 //      (Vercel functions can't hold sockets open). Same (event, payload)
 //      pairs, same bus.
 //
@@ -53,7 +53,7 @@ export function useLiveEvents(onEvent: (event: string, payload: any) => void) {
           try { cb.current(e.event, e.payload); } catch {}
         }
       } catch {
-        // Backend briefly unreachable — the next tick retries.
+        // Backend briefly unreachable, the next tick retries.
       } finally {
         inFlight = false;
       }
@@ -94,7 +94,7 @@ export function useLiveEvents(onEvent: (event: string, payload: any) => void) {
         clearTimeout(connectTimer);
         if (stopped) return;
         if (!opened) onWsFailure();
-        else retryTimer = setTimeout(connectWs, 2000); // was working — reconnect
+        else retryTimer = setTimeout(connectWs, 2000); // was working, reconnect
       };
       ws.onerror = () => { try { ws?.close(); } catch {} };
     };
