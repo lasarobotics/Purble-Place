@@ -17,6 +17,7 @@ import type { MeetingPicklists, Picklist, PicklistItem, Team } from "@/lib/types
 import { Loading } from "@/components/ui";
 import { PicklistBoard } from "@/components/PicklistBoard";
 import { ClickableTeam } from "@/components/TeamDetailModal";
+import { FinalPicklists } from "@/components/FinalPicklists";
 
 export default function MeetingPage() {
   const { session } = useAuth();
@@ -97,6 +98,8 @@ export default function MeetingPage() {
           {saving && <span className="badge muted">Saving</span>}
         </div>
       </div>
+
+      <FinalPicklists teams={teams} />
 
       <section className="meeting-master card">
         <div className="card-h">

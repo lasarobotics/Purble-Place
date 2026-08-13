@@ -57,6 +57,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [online, setOnline] = useState(true);
   const [pending, setPending] = useState(0);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     if (!loading && !session) router.replace("/login");
@@ -117,6 +118,16 @@ export function Shell({ children }: { children: React.ReactNode }) {
     href === "/admin" ? pathname === "/admin" : pathname.startsWith(href);
   const picklistOnly = session.picklist_only;
   const mainNav = picklistOnly ? PICKLIST_NAV : MAIN_NAV;
+  // The sheet shows everything the account can actually reach, so it is built
+  // from the same lists the sidebar uses rather than a second hand-kept copy.
+  const sheetGroups = picklistOnly
+    ? [{ title: "Picklist Meeting", items: PICKLIST_NAV }]
+    : session.is_admin
+      ? [
+          { title: "Scouting", items: MAIN_NAV },
+          { title: "Strategy", items: ADMIN_NAV },
+        ]
+      : [{ title: "Scouting", items: MAIN_NAV }];
   const mobileNav = picklistOnly
     ? PICKLIST_NAV
     : session.is_admin
@@ -192,7 +203,88 @@ export function Shell({ children }: { children: React.ReactNode }) {
             {n.label}
           </Link>
         ))}
+        {/* Five tabs fit across a phone; an admin has thirteen screens. The
+            rest were simply unreachable on mobile before this. */}
+        <button
+          type="button"
+          className={"more-tab" + (menuOpen ? " active" : "")}
+          onClick={() => setMenuOpen(true)}
+          aria-haspopup="dialog"
+          aria-expanded={menuOpen}
+        >
+          <span className="ico"><Icon name="menu" size={20} /></span>
+          All tabs
+        </button>
       </nav>
+
+      {menuOpen && (
+        <NavSheet
+          groups={sheetGroups}
+          isActive={isActive}
+          onClose={() => setMenuOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+interface NavItem { href: string; label: string; icon: string }
+
+/**
+ * Full-screen tab picker for phones.
+ *
+ * Rendered as a sheet rather than a scrolling tab strip because a strip you
+ * have to swipe hides exactly the thing you are looking for, and people are
+ * doing this one-handed in the stands between matches.
+ */
+function NavSheet({
+  groups,
+  isActive,
+  onClose,
+}: {
+  groups: { title: string; items: NavItem[] }[];
+  isActive: (href: string) => boolean;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previous;
+    };
+  }, [onClose]);
+
+  return (
+    <div className="nav-sheet-back" onClick={onClose} role="dialog" aria-label="All tabs">
+      <div className="nav-sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="nav-sheet-head">
+          <h2>All tabs</h2>
+          <button className="btn sm ghost" onClick={onClose}>Close</button>
+        </div>
+        <div className="nav-sheet-body">
+          {groups.map((g) => (
+            <section key={g.title}>
+              <div className="nav-section">{g.title}</div>
+              <div className="nav-sheet-grid">
+                {g.items.map((n) => (
+                  <Link
+                    key={n.href}
+                    href={n.href}
+                    onClick={onClose}
+                    className={"nav-sheet-item" + (isActive(n.href) ? " active" : "")}
+                  >
+                    <span className="ico"><Icon name={n.icon} size={22} /></span>
+                    <span>{n.label}</span>
+                  </Link>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

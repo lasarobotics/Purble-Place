@@ -13,6 +13,7 @@ import { useToast } from "@/lib/toast";
 import type { MeetingPicklists, Picklist, Team } from "@/lib/types";
 import { Loading, Empty } from "@/components/ui";
 import { ClickableTeam } from "@/components/TeamDetailModal";
+import { FinalPicklists } from "@/components/FinalPicklists";
 
 const FINAL_DIVISIONS = ["418", "436"] as const;
 const isFinalList = (p: Picklist) => p.owner_id.startsWith("final-");
@@ -87,6 +88,8 @@ export default function AllPicklistsPage() {
         copy a list into the alliance's final order. Edit the master list itself in
         Picklist Meeting.
       </p>
+
+      <FinalPicklists teams={teams} />
 
       {total === 0 ? (
         <Empty icon="list" title="No picklists yet" sub="They appear here as people build them." />

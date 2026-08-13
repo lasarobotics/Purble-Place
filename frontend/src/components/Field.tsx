@@ -1,5 +1,6 @@
 "use client";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { HeatPoint } from "@/lib/types";
 
 const FIELD_SRC = "/field.png";
@@ -99,48 +100,90 @@ export function FieldInput({
 // --------------------------------------------------------------------------- #
 // Read-only heatmap                                                            #
 // --------------------------------------------------------------------------- #
-// Two problems with the old version: every shot was one translucent dot, so a
-// team with 80 attempts read as purple soup, and there was no way to tell a
-// robot that only scores from its own side from one that scores anywhere.
+// The original drew one translucent dot per shot, so a team with 80 attempts
+// read as purple soup. Binning into coloured squares fixed the readability but
+// looked like a spreadsheet rather than a heatmap.
 //
-// This version bins attempts into a grid and sizes each cell by volume and
-// colours it by accuracy, which is the question people actually ask. It can
-// be filtered by phase and by the driver station the robot started from, and
-// it opens full screen with pinch or scroll zoom.
+// This draws a real density field: every attempt is a soft blob, the blobs are
+// blurred into each other, and the resulting intensity is mapped through a
+// colour ramp inside the SVG filter. Busy areas glow hot, one-off shots fade
+// away. Individual made and missed markers can be layered on top, and the
+// whole thing filters by phase and by driver station, because where a robot
+// starts changes which parts of the field it can reach.
 
 export type StationFilter = "all" | "red1" | "red2" | "red3" | "blue1" | "blue2" | "blue3";
 
-const GRID_X = 20;
-const GRID_Y = 10;
-
-interface Cell {
-  x: number;
-  y: number;
-  made: number;
-  total: number;
+/** Which driver station the scout was watching, if the report carried it. */
+function stationKey(p: HeatPoint): StationFilter | "" {
+  if (!p.alliance || !p.station) return "";
+  return `${p.alliance}${p.station}` as StationFilter;
 }
 
-function bin(points: HeatPoint[]): Cell[] {
-  const cells = new Map<string, Cell>();
-  for (const p of points) {
-    const gx = Math.min(GRID_X - 1, Math.max(0, Math.floor(p.x * GRID_X)));
-    const gy = Math.min(GRID_Y - 1, Math.max(0, Math.floor(p.y * GRID_Y)));
-    const key = `${gx}:${gy}`;
-    const cell = cells.get(key) || { x: gx, y: gy, made: 0, total: 0 };
-    cell.total += 1;
-    if (p.result === "made") cell.made += 1;
-    cells.set(key, cell);
-  }
-  return [...cells.values()];
+function stationLabel(s: StationFilter): string {
+  if (s === "all") return "All stations";
+  return s.replace("red", "Red ").replace("blue", "Blue ");
 }
 
-/** Green when they make it from here, amber when they mostly miss. */
-function accuracyColor(made: number, total: number): string {
-  const acc = total ? made / total : 0;
-  if (acc >= 0.75) return "#22c55e";
-  if (acc >= 0.5) return "#a855f7";
-  if (acc >= 0.25) return "#f59e0b";
-  return "#ef4444";
+/**
+ * The density field.
+ *
+ * Each attempt is a soft radial blob. feGaussianBlur melts them together, the
+ * first feColorMatrix copies the accumulated alpha into the colour channels,
+ * and feComponentTransfer maps that intensity through the ramp. The copy step
+ * is the part that is easy to miss: without it the colour tables would be
+ * reading channels that are all zero, and every pixel would come out the
+ * same shade.
+ */
+function DensityLayer({
+  id,
+  points,
+  blobRadius,
+}: {
+  id: string;
+  points: HeatPoint[];
+  blobRadius: number;
+}) {
+  return (
+    <>
+      <defs>
+        <radialGradient id={`${id}-blob`}>
+          <stop offset="0%" stopColor="#fff" stopOpacity="0.85" />
+          <stop offset="55%" stopColor="#fff" stopOpacity="0.30" />
+          <stop offset="100%" stopColor="#fff" stopOpacity="0" />
+        </radialGradient>
+        <filter
+          id={`${id}-heat`}
+          x="-15%"
+          y="-15%"
+          width="130%"
+          height="130%"
+          colorInterpolationFilters="sRGB"
+        >
+          <feGaussianBlur in="SourceGraphic" stdDeviation="1.6" result="blurred" />
+          <feColorMatrix
+            in="blurred"
+            type="matrix"
+            values="0 0 0 1 0
+                    0 0 0 1 0
+                    0 0 0 1 0
+                    0 0 0 1 0"
+            result="intensity"
+          />
+          <feComponentTransfer in="intensity">
+            <feFuncR type="table" tableValues="0.10 0.13 0.35 0.85 0.97 0.99" />
+            <feFuncG type="table" tableValues="0.20 0.60 0.80 0.75 0.45 0.15" />
+            <feFuncB type="table" tableValues="0.55 0.85 0.45 0.20 0.12 0.20" />
+            <feFuncA type="table" tableValues="0 0.35 0.60 0.75 0.85 0.92" />
+          </feComponentTransfer>
+        </filter>
+      </defs>
+      <g filter={`url(#${id}-heat)`}>
+        {points.map((p, i) => (
+          <circle key={i} cx={p.x * 100} cy={p.y * 50} r={blobRadius} fill={`url(#${id}-blob)`} />
+        ))}
+      </g>
+    </>
+  );
 }
 
 export function FieldHeatmap({
@@ -154,72 +197,65 @@ export function FieldHeatmap({
   expandable?: boolean;
   showControls?: boolean;
 }) {
+  // Filter and gradient ids must be unique, or two heatmaps on one page will
+  // both render with whichever definition happened to win.
+  const uid = useId().replace(/:/g, "");
   const [open, setOpen] = useState(false);
   const [phase, setPhase] = useState<"all" | "auto" | "teleop">("all");
   const [station, setStation] = useState<StationFilter>("all");
+  const [markers, setMarkers] = useState(false);
 
   const stationsPresent = Array.from(
     new Set(points.map((p) => stationKey(p)).filter(Boolean))
-  ) as StationFilter[];
+  ).sort() as StationFilter[];
 
   const filtered = points.filter(
     (p) =>
       (phase === "all" || p.phase === phase) &&
       (station === "all" || stationKey(p) === station)
   );
-  const cells = bin(filtered);
-  const busiest = Math.max(1, ...cells.map((c) => c.total));
   const made = filtered.filter((p) => p.result === "made").length;
 
-  const map = (
-    <div
-      className="field-wrap"
-      style={{ maxHeight: open ? undefined : height, cursor: expandable && !open ? "zoom-in" : undefined }}
-      onClick={expandable && !open ? () => setOpen(true) : undefined}
-      title={expandable && !open ? "Click to expand" : undefined}
-    >
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img className="field-bg" src={FIELD_SRC} alt="field" style={{ opacity: 0.5 }} />
-      <svg className="field-svg" viewBox="0 0 100 50" preserveAspectRatio="none">
-        {cells.map((c) => {
-          const share = c.total / busiest;
-          const cx = ((c.x + 0.5) / GRID_X) * 100;
-          const cy = ((c.y + 0.5) / GRID_Y) * 50;
-          return (
-            <g key={`${c.x}:${c.y}`}>
-              <rect
-                x={(c.x / GRID_X) * 100}
-                y={(c.y / GRID_Y) * 50}
-                width={100 / GRID_X}
-                height={50 / GRID_Y}
-                fill={accuracyColor(c.made, c.total)}
-                opacity={0.12 + share * 0.5}
-              />
+  // Three attempts need fatter blobs to register at all; two hundred need
+  // thinner ones or the whole field saturates into one red smear.
+  const blobRadius = filtered.length > 120 ? 3.2 : filtered.length > 40 ? 4.2 : 5.4;
+
+  function map(large: boolean) {
+    return (
+      <div
+        className="field-wrap"
+        style={{
+          maxHeight: large ? undefined : height,
+          cursor: expandable && !large ? "zoom-in" : undefined,
+        }}
+        onClick={expandable && !large ? () => setOpen(true) : undefined}
+        title={expandable && !large ? "Click to open the full size map" : undefined}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img className="field-bg" src={FIELD_SRC} alt="field" style={{ opacity: 0.45 }} />
+        <svg className="field-svg" viewBox="0 0 100 50" preserveAspectRatio="none">
+          <DensityLayer
+            id={`${uid}${large ? "-lg" : ""}`}
+            points={filtered}
+            blobRadius={blobRadius}
+          />
+          {markers &&
+            filtered.map((p, i) => (
               <circle
-                cx={cx}
-                cy={cy}
-                r={0.8 + share * 1.9}
-                fill={accuracyColor(c.made, c.total)}
-                opacity={0.95}
+                key={`m${i}`}
+                cx={p.x * 100}
+                cy={p.y * 50}
+                r={p.result === "made" ? 0.8 : 0.6}
+                fill={p.result === "made" ? "#eafff2" : "#1b0b0b"}
+                stroke={p.result === "made" ? "#0f2d1c" : "#ffd9d9"}
+                strokeWidth={0.18}
+                opacity={0.9}
               />
-              {open && c.total > 1 && (
-                <text
-                  x={cx}
-                  y={cy + 0.5}
-                  textAnchor="middle"
-                  fontSize={1.5}
-                  fill="#0b0713"
-                  fontWeight={700}
-                >
-                  {c.total}
-                </text>
-              )}
-            </g>
-          );
-        })}
-      </svg>
-    </div>
-  );
+            ))}
+        </svg>
+      </div>
+    );
+  }
 
   const controls = showControls && (
     <div className="row heatmap-controls" style={{ gap: 8, flexWrap: "wrap", marginTop: 10 }}>
@@ -235,23 +271,40 @@ export function FieldHeatmap({
           <button type="button" className={station === "all" ? "on" : ""} onClick={() => setStation("all")}>
             All stations
           </button>
-          {stationsPresent.sort().map((s) => (
+          {stationsPresent.map((s) => (
             <button key={s} type="button" className={station === s ? "on" : ""} onClick={() => setStation(s)}>
-              {s.replace("red", "R").replace("blue", "B")}
+              {stationLabel(s)}
             </button>
           ))}
         </div>
       )}
+      <button
+        type="button"
+        className={"btn sm " + (markers ? "primary" : "ghost")}
+        onClick={() => setMarkers((v) => !v)}
+      >
+        {markers ? "Hide" : "Show"} each shot
+      </button>
+    </div>
+  );
+
+  const stats = (
+    <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+      <span className="badge muted">{filtered.length} attempts</span>
+      <span className="badge green">{made} made</span>
+      <span className="badge haze">
+        {filtered.length ? Math.round((made / filtered.length) * 100) : 0}% accuracy
+      </span>
     </div>
   );
 
   const legend = (
-    <div className="row heatmap-legend" style={{ gap: 10, flexWrap: "wrap", marginTop: 8, fontSize: "0.75rem" }}>
-      <span className="faint">Bigger dot means more attempts from that spot. Colour is how often they made it:</span>
-      <span className="badge" style={{ color: "#22c55e" }}>75% and up</span>
-      <span className="badge" style={{ color: "#a855f7" }}>50 to 74%</span>
-      <span className="badge" style={{ color: "#f59e0b" }}>25 to 49%</span>
-      <span className="badge" style={{ color: "#ef4444" }}>under 25%</span>
+    <div className="heatmap-legend">
+      <span className="faint">Shots from here:</span>
+      <span className="heat-ramp" aria-hidden />
+      <span className="faint">a few</span>
+      <span className="faint">a lot</span>
+      {markers && <span className="faint">Light dots are makes, dark dots are misses.</span>}
     </div>
   );
 
@@ -261,25 +314,20 @@ export function FieldHeatmap({
 
   return (
     <>
-      {map}
+      {map(false)}
       {controls}
-      <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-        <span className="badge muted">{filtered.length} attempts</span>
-        <span className="badge green">{made} made</span>
-        <span className="badge haze">
-          {filtered.length ? Math.round((made / filtered.length) * 100) : 0}% accuracy
-        </span>
-        {expandable && (
-          <button type="button" className="btn sm ghost" onClick={() => setOpen(true)}>
-            Expand and zoom
-          </button>
-        )}
-      </div>
+      {stats}
+      {expandable && (
+        <button type="button" className="btn sm ghost" style={{ marginTop: 8 }} onClick={() => setOpen(true)}>
+          Open full size
+        </button>
+      )}
       {legend}
       {open && (
         <ZoomableField onClose={() => setOpen(false)} title={`${filtered.length} attempts`}>
-          {map}
+          {map(true)}
           {controls}
+          {stats}
           {legend}
         </ZoomableField>
       )}
@@ -287,18 +335,17 @@ export function FieldHeatmap({
   );
 }
 
-/** Which driver station the scout was watching, if the report carried it. */
-function stationKey(p: HeatPoint): StationFilter | "" {
-  if (!p.alliance || !p.station) return "";
-  return `${p.alliance}${p.station}` as StationFilter;
-}
-
 /**
  * Full-screen field with scroll and pinch zoom plus drag to pan.
  *
- * Built on a plain transform rather than a library: the whole interaction is
- * "scale about the pointer, translate on drag", and pulling in a pan-zoom
- * dependency for that would be more code to ship to a Chromebook, not less.
+ * Portalled to <body> deliberately. .card sets a backdrop-filter, which makes
+ * it a containing block for position:fixed, so rendering this inline pinned
+ * the overlay to the card rather than the viewport and it opened far below
+ * the fold. The Modal component in ui.tsx portals for exactly this reason.
+ *
+ * Pan and zoom is a plain CSS transform rather than a library: the whole
+ * interaction is scale, then translate on drag, and these are borrowed
+ * Chromebooks, so the right answer is thirty lines and no extra bundle.
  */
 function ZoomableField({
   children,
@@ -309,22 +356,36 @@ function ZoomableField({
   onClose: () => void;
   title?: string;
 }) {
+  const [mounted, setMounted] = useState(false);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
   const pinch = useRef<number | null>(null);
 
+  useEffect(() => setMounted(true), []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previous;
+    };
+  }, [onClose]);
+
   const clampScale = (s: number) => Math.min(6, Math.max(1, s));
 
   function onWheel(e: React.WheelEvent) {
-    e.preventDefault();
     setScale((s) => {
       const next = clampScale(s * (e.deltaY < 0 ? 1.15 : 0.87));
       if (next === 1) setOffset({ x: 0, y: 0 });
       return next;
     });
   }
-
   function onPointerDown(e: React.PointerEvent) {
     (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
     drag.current = { x: e.clientX, y: e.clientY, ox: offset.x, oy: offset.y };
@@ -339,37 +400,32 @@ function ZoomableField({
   function onPointerUp() {
     drag.current = null;
   }
-
   function onTouchMove(e: React.TouchEvent) {
     if (e.touches.length !== 2) return;
-    const [a, b] = [e.touches[0], e.touches[1]];
+    const a = e.touches[0];
+    const b = e.touches[1];
     const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
-    if (pinch.current != null) {
-      setScale((s) => clampScale(s * (dist / pinch.current!)));
-    }
+    if (pinch.current != null) setScale((s) => clampScale(s * (dist / pinch.current!)));
     pinch.current = dist;
   }
-  function onTouchEnd() {
-    pinch.current = null;
-  }
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    document.body.style.overflow = "hidden";
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      document.body.style.overflow = "";
-    };
-  }, [onClose]);
+  if (!mounted) return null;
 
-  return (
+  return createPortal(
     <div className="field-zoom-backdrop" onClick={onClose}>
       <div className="field-zoom" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
-          <h3 style={{ margin: 0 }}>Scoring map {title ? <span className="faint">· {title}</span> : null}</h3>
+          <h3 style={{ margin: 0 }}>
+            Scoring map {title ? <span className="faint">· {title}</span> : null}
+          </h3>
           <div className="btn-row">
-            <button className="btn sm ghost" onClick={() => { setScale(1); setOffset({ x: 0, y: 0 }); }}>
+            <button
+              className="btn sm ghost"
+              onClick={() => {
+                setScale(1);
+                setOffset({ x: 0, y: 0 });
+              }}
+            >
               Reset zoom
             </button>
             <button className="btn sm ghost" onClick={onClose}>Close</button>
@@ -383,7 +439,9 @@ function ZoomableField({
           onPointerUp={onPointerUp}
           onPointerLeave={onPointerUp}
           onTouchMove={onTouchMove}
-          onTouchEnd={onTouchEnd}
+          onTouchEnd={() => {
+            pinch.current = null;
+          }}
           style={{ cursor: scale > 1 ? "grab" : "default" }}
         >
           <div
@@ -400,6 +458,7 @@ function ZoomableField({
           Scroll or pinch to zoom, drag to pan. Press Escape to close.
         </p>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

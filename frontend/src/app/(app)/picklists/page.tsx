@@ -8,6 +8,7 @@ import { timeAgo } from "@/lib/format";
 import type { Picklist, PicklistItem, Team } from "@/lib/types";
 import { Loading } from "@/components/ui";
 import { PicklistBoard } from "@/components/PicklistBoard";
+import { FinalPicklists } from "@/components/FinalPicklists";
 
 export default function PicklistsPage() {
   const { session } = useAuth();
@@ -99,6 +100,8 @@ export default function PicklistsPage() {
         Rank the teams you want for each pick and say why. Your lists are visible to
         strategy and admin during the picklist meeting.
       </p>
+
+      <FinalPicklists teams={teams} />
 
       <div className="row" style={{ gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
         <div className="seg">

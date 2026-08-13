@@ -165,14 +165,14 @@ code { font-family: var(--font-num); font-size: 0.85em; background: var(--panel-
     border-top: 1px solid var(--border); padding: 6px 4px env(safe-area-inset-bottom);
     justify-content: space-around;
   }
-  .bottomnav a {
+  .bottomnav a, .bottomnav .more-tab {
     display: flex; flex-direction: column; align-items: center; gap: 2px;
     font-size: 0.64rem; font-weight: 500;
     color: var(--faint); padding: 6px 8px; border-radius: var(--radius-sm);
     flex: 1; min-width: 0;
   }
-  .bottomnav a .ico { display: grid; place-items: center; height: 22px; }
-  .bottomnav a.active { color: var(--haze-glow); }
+  .bottomnav a .ico, .bottomnav .more-tab .ico { display: grid; place-items: center; height: 22px; }
+  .bottomnav a.active, .bottomnav .more-tab.active { color: var(--haze-glow); }
   .content { padding: 16px; }
 }
 
@@ -854,3 +854,252 @@ table.data td.num { text-align: right; font-family: var(--font-num); font-varian
 .consensus-numbers { margin-top: 10px; }
 .consensus-numbers summary { cursor: pointer; font-size: 0.8rem; }
 .consensus-numbers[open] summary { margin-bottom: 8px; }
+
+/* Final pick order, shown above every picklist editor */
+.final-picks { border-color: var(--haze); }
+.final-pick-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px;
+  background: var(--panel-2);
+}
+
+/* Heatmap legend and colour ramp */
+.heatmap-legend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  font-size: 0.75rem;
+}
+.heat-ramp {
+  display: inline-block;
+  width: 130px;
+  height: 9px;
+  border-radius: 5px;
+  background: linear-gradient(
+    90deg,
+    rgba(26, 51, 140, 0.35) 0%,
+    #2199d9 22%,
+    #59cc73 45%,
+    #d9bf33 68%,
+    #f77f26 85%,
+    #fc2626 100%
+  );
+}
+
+/* ============================================================ *
+ * Mobile
+ * ------------------------------------------------------------
+ * Most people use HazeHub on a phone in the stands, so the new
+ * screens have to work at 360px, one-handed, with the bottom nav
+ * eating the last 70px of the viewport.
+ * ============================================================ */
+
+/* Horizontal scroll instead of a broken wrap. The phase and driver
+   station toggles can be six buttons wide; wrapping them stacks the
+   controls three rows deep and pushes the map off screen. */
+@media (max-width: 760px) {
+  .heatmap-controls {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding-bottom: 4px;
+  }
+  .heatmap-controls::-webkit-scrollbar { display: none; }
+  .heatmap-controls .seg { flex: 0 0 auto; }
+  .heatmap-controls .btn { flex: 0 0 auto; white-space: nowrap; }
+}
+
+/* The zoom overlay is the whole screen on a phone. A centred card with
+   margins wastes the space that the map needs. */
+@media (max-width: 760px) {
+  .field-zoom-backdrop { padding: 0; align-items: stretch; }
+  .field-zoom {
+    width: 100vw;
+    max-height: 100dvh;
+    height: 100dvh;
+    border-radius: 0;
+    border: 0;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+  }
+  .field-zoom-stage { flex: 1; display: flex; align-items: center; }
+  .field-zoom .modal-head { flex-wrap: wrap; gap: 8px; }
+}
+
+/* Picklist board: the ranked list is the thing you came for, so it goes
+   first on a phone. The pool follows and scrolls on its own. */
+@media (max-width: 900px) {
+  .picklist-board { grid-template-columns: 1fr; }
+  .picklist-pool { order: 0; }
+  .pool-list { max-height: 44vh; }
+}
+
+@media (max-width: 560px) {
+  .picklist-ranked, .picklist-pool { padding: 10px; }
+
+  /* Rank, team and the move buttons no longer fit on one line at 360px,
+     so the buttons drop to their own row and stretch to thumb size. */
+  .pick-row {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas: "rank team" "move move" "note note";
+    gap: 8px;
+  }
+  .pick-row .pick-move { justify-self: stretch; display: flex; }
+  .pick-row .pick-move .btn { flex: 1; min-height: 38px; }
+  .pool-row { flex-wrap: wrap; }
+  .pool-row .btn { min-height: 36px; }
+  .pick-note { font-size: 16px; } /* 16px stops iOS zooming on focus */
+  .pool-search { font-size: 16px; }
+}
+
+/* Meeting mode on a phone is a reference view, not an editing view.
+   Strategy lists go single column and the scouter strip gets narrower
+   cards rather than being squeezed to unreadable. */
+@media (max-width: 900px) {
+  .meeting .grid.cols-2 { grid-template-columns: 1fr; }
+  .scouter-strip { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+}
+@media (max-width: 480px) {
+  .scouter-strip { grid-template-columns: 1fr 1fr; }
+  .list-card.sm { font-size: 0.72rem; }
+  .pick-why { padding-left: 0; }
+}
+
+/* Final pick order stacks rather than shrinking below readable. */
+@media (max-width: 620px) {
+  .final-picks .grid { grid-template-columns: 1fr !important; }
+}
+
+/* Legend wraps to two lines instead of overflowing. */
+@media (max-width: 480px) {
+  .heat-ramp { width: 100%; }
+}
+
+/* Nothing should be able to push the page sideways. A single wide table
+   or long team name used to make the whole app scroll horizontally. */
+html, body { overflow-x: hidden; }
+.content { min-width: 0; }
+.card, .grid, .row { min-width: 0; }
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+/* Leave room for the bottom nav so the last control is never under it. */
+@media (max-width: 860px) {
+  .content { padding-bottom: 84px; }
+}
+
+/* Touch targets. 38px is the smallest thing a cold hand hits reliably. */
+@media (pointer: coarse) {
+  .btn.sm { min-height: 36px; }
+  .seg button { min-height: 36px; }
+  .chip { min-height: 34px; }
+}
+
+/* The pool toggle is a phone affordance; on a desktop the pool is a
+   permanent column and a Hide button would just be clutter. */
+.pool-toggle { display: none; }
+@media (max-width: 900px) {
+  .pool-toggle { display: inline-flex; }
+  .picklist-pool.collapsed .pool-search,
+  .picklist-pool.collapsed .pool-list { display: none; }
+}
+
+/* ============================================================ *
+ * Mobile: the all-tabs sheet
+ * ------------------------------------------------------------
+ * Five tabs fit across a phone. An admin has thirteen screens, so
+ * the rest were simply unreachable on mobile. The last slot in the
+ * bottom bar opens a sheet listing every screen the account can
+ * reach, grouped the same way the sidebar groups them.
+ * ============================================================ */
+.more-tab {
+  background: none;
+  border: 0;
+  font: inherit;
+  cursor: pointer;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 0;
+}
+.more-tab.active { color: var(--haze-text, #c4a4ff); }
+
+.nav-sheet-back {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 4, 12, 0.72);
+  backdrop-filter: blur(3px);
+  z-index: 150;
+  display: flex;
+  align-items: flex-end;
+}
+.nav-sheet {
+  width: 100%;
+  max-height: 88dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  border-radius: 18px 18px 0 0;
+  padding: 14px 14px calc(14px + env(safe-area-inset-bottom));
+  animation: sheet-up 0.16s ease-out;
+}
+@keyframes sheet-up {
+  from { transform: translateY(14px); opacity: 0.4; }
+}
+.nav-sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.nav-sheet-head h2 { margin: 0; font-size: 1.05rem; }
+.nav-sheet-body { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.nav-sheet-body section { margin-bottom: 8px; }
+
+.nav-sheet-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 6px;
+}
+@media (max-width: 380px) {
+  .nav-sheet-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+.nav-sheet-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  text-align: center;
+  /* Big enough to hit reliably with a cold thumb in the stands. */
+  min-height: 78px;
+  padding: 10px 6px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--panel-2);
+  color: var(--text);
+  text-decoration: none;
+  font-size: 0.76rem;
+  line-height: 1.2;
+}
+.nav-sheet-item .ico { color: var(--muted); }
+.nav-sheet-item.active {
+  border-color: var(--haze);
+  background: rgba(139, 92, 246, 0.16);
+}
+.nav-sheet-item.active .ico { color: inherit; }
+
+/* Desktop keeps the sidebar, so neither the sheet nor its trigger exist. */
+@media (min-width: 861px) {
+  .more-tab, .nav-sheet-back { display: none; }
+}

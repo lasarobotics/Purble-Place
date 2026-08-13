@@ -35,6 +35,13 @@ const ICONS: Record<string, React.ReactNode> = {
     P("M9 6h12M9 12h12M9 18h12", 0),
     P("M4 6h.01M4 12h.01M4 18h.01", 1),
   ],
+  // Grid of squares: "show me everything", for the mobile all-tabs sheet.
+  menu: [
+    <rect key="a" x="3" y="3" width="7" height="7" rx="1.6" />,
+    <rect key="b" x="14" y="3" width="7" height="7" rx="1.6" />,
+    <rect key="c" x="3" y="14" width="7" height="7" rx="1.6" />,
+    <rect key="d" x="14" y="14" width="7" height="7" rx="1.6" />,
+  ],
   user: [
     <circle key="c" cx="12" cy="7.5" r="3.5" />,
     P("M5 21v-1.5A5.5 5.5 0 0 1 10.5 14h3A5.5 5.5 0 0 1 19 19.5V21", 0),

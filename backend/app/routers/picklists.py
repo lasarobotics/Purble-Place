@@ -152,6 +152,31 @@ def get_master(
     return [_dict(r) for r in rows]
 
 
+@router.get("/finals")
+def get_finals(
+    event: str | None = None,
+    _: Scouter = Depends(current_scouter),
+) -> list[dict]:
+    """The locked-in final orders for 418 and 436.
+
+    Every screen where somebody builds a picklist shows these at the top: once
+    the alliance order is decided, a scout still tinkering with their own list
+    should be able to see what the team actually settled on without going
+    looking for it. Read-only for everyone except admin and strategy, and
+    absent from the response entirely until a final list has teams in it.
+    """
+    event_key = repo.resolve_event(event)
+    out: list[dict] = []
+    for division in ("418", "436"):
+        for pick_round in (PICK_FIRST, PICK_SECOND):
+            found = repo.find_picklist_round(
+                event_key, f"final-{division}", pick_round, True
+            )
+            if found and found.items:
+                out.append({**_dict(found), "division": division})
+    return out
+
+
 @router.get("/all")
 def get_all(
     event: str | None = None,

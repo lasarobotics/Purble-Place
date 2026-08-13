@@ -28,6 +28,7 @@ export function PicklistBoard({ list, teams, pool, canEdit, onChange }: BoardPro
   const [items, setItems] = useState<PicklistItem[]>(list.items || []);
   const [openTeam, setOpenTeam] = useState<number | null>(null);
   const [search, setSearch] = useState("");
+  const [poolOpen, setPoolOpen] = useState(true);
   const dragFrom = useRef<{ zone: "list" | "pool"; index: number } | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
 
@@ -153,10 +154,21 @@ export function PicklistBoard({ list, teams, pool, canEdit, onChange }: BoardPro
         </ol>
       </section>
 
-      <aside className="picklist-pool">
+      <aside className={"picklist-pool" + (poolOpen ? "" : " collapsed")}>
         <div className="card-h">
           <h3 style={{ margin: 0 }}>Teams</h3>
-          <span className="badge muted">{available.length}</span>
+          <div className="row" style={{ gap: 8 }}>
+            <span className="badge muted">{available.length}</span>
+            {/* Phones only: the pool is tall, and the ranked list is what
+                people came to look at. */}
+            <button
+              type="button"
+              className="btn sm ghost pool-toggle"
+              onClick={() => setPoolOpen((v) => !v)}
+            >
+              {poolOpen ? "Hide" : "Show"}
+            </button>
+          </div>
         </div>
         <input
           className="pool-search"
