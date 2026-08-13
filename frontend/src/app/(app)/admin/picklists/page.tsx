@@ -1,52 +1,40 @@
 "use client";
-import { useEffect, useState, useCallback } from "react";
+// Every picklist at the event, in one place, grouped by whose it is.
+//
+// No password. Reaching this page already requires a strategy or admin
+// account, and the picklist meeting screen at /meeting is where lists are
+// actually edited during selection. This page is for reviewing what everyone
+// submitted and promoting a list to a final list for 418 or 436.
+import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { onBus } from "@/lib/bus";
 import { timeAgo } from "@/lib/format";
 import { useToast } from "@/lib/toast";
-import type { Picklist, PicklistItem, Team } from "@/lib/types";
+import type { MeetingPicklists, Picklist, Team } from "@/lib/types";
 import { Loading, Empty } from "@/components/ui";
 import { ClickableTeam } from "@/components/TeamDetailModal";
 
-const TIER_CLS: Record<string, string> = { first: "green", second: "haze", third: "blue", dnp: "red" };
-const TIER_LABEL: Record<string, string> = { first: "1st", second: "2nd", third: "Bench", dnp: "DNP" };
-const PICKLIST_PASSWORD = "PickListSTRAT";
 const FINAL_DIVISIONS = ["418", "436"] as const;
-
-const toSlots = (items: PicklistItem[]) => {
-  const slots = items.map((it) => String(it.team || ""));
-  while (slots.length < 4) slots.push("");
-  return slots;
-};
-const toItems = (slots: string[]): PicklistItem[] =>
-  slots
-    .map((slot) => parseInt(slot.replace(/[^0-9]/g, ""), 10))
-    .filter((team, index, all) => team && all.indexOf(team) === index)
-    .map((team) => ({ team, tier: "first" }));
-const isFinalList = (p: Picklist) => p.owner_id === "final-418" || p.owner_id === "final-436";
+const isFinalList = (p: Picklist) => p.owner_id.startsWith("final-");
 const finalDivision = (p: Picklist) => p.owner_id.replace("final-", "");
+const justificationOf = (it: { justification?: string; note?: string }) =>
+  it.justification ?? it.note ?? "";
 
 export default function AllPicklistsPage() {
   const toast = useToast();
-  const [lists, setLists] = useState<Picklist[]>([]);
+  const [data, setData] = useState<MeetingPicklists | null>(null);
   const [teams, setTeams] = useState<Record<number, Team>>({});
+  const [round, setRound] = useState<1 | 2>(1);
   const [loading, setLoading] = useState(true);
-  const [unlocked, setUnlocked] = useState(false);
-  const [password, setPassword] = useState("");
-  const [active, setActive] = useState<Picklist | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const rows = await api<Picklist[]>("/api/picklists/all");
-      setLists(rows);
-      setActive((cur) => cur ? rows.find((p) => p.id === cur.id) || cur : rows.find(isFinalList) || null);
-    } catch {}
+      setData(await api<MeetingPicklists>("/api/picklists/meeting"));
+    } catch (e: any) {
+      toast(e.message || "Could not load picklists", "err");
+    }
     setLoading(false);
-  }, []);
-
-  useEffect(() => {
-    setUnlocked(sessionStorage.getItem("hazehub.picklist.unlocked") === "1");
-  }, []);
+  }, [toast]);
 
   useEffect(() => {
     load();
@@ -54,203 +42,137 @@ export default function AllPicklistsPage() {
   }, [load]);
 
   useEffect(() => {
-    const nums = Array.from(new Set(lists.flatMap((list) => list.items.map((it) => it.team)))).filter((n) => n && !teams[n]);
+    if (!data) return;
+    const all = [...data.master, ...data.strategy, ...data.scouter];
+    const nums = Array.from(new Set(all.flatMap((l) => l.items.map((i) => i.team))))
+      .filter((n) => n && !teams[n]);
     if (!nums.length) return;
-    api<Team[]>("/api/teams/batch", { method: "POST", body: { teams: nums } })
+    api<Team[]>("/api/teams/batch", { method: "POST", body: { teams: nums.slice(0, 24) } })
       .then((rows) => setTeams((cur) => ({ ...cur, ...Object.fromEntries(rows.map((t) => [t.team_number, t])) })))
       .catch(() => {});
-  }, [lists, teams]);
+  }, [data, teams]);
 
-  async function makeFinal(division: "418" | "436", source?: Picklist) {
+  async function makeFinal(division: "418" | "436", source: Picklist) {
     try {
-      const updated = await api<Picklist>(`/api/picklists/finals/${division}`, {
+      await api(`/api/picklists/finals/${division}`, {
         method: "POST",
-        body: source ? { source_id: source.id } : { name: `Final Picklist ${division}`, items: [] },
+        body: { source_id: source.id, pick_round: source.pick_round },
       });
-      toast(source ? `Set ${source.name} as final ${division}` : `Created final ${division}`, "ok");
-      setLists((cur) => [updated, ...cur.filter((p) => p.id !== updated.id)]);
-      setActive(updated);
+      toast(`Copied ${source.owner_name}'s list into Final ${division}`, "ok");
       load();
     } catch (e: any) {
-      toast(e.message || "Could not update final picklist", "err");
-    }
-  }
-
-  async function saveMaster(p: Picklist) {
-    try {
-      const updated = await api<Picklist>(`/api/picklists/${p.id}`, { method: "PUT", body: { name: p.name, items: p.items } });
-      toast("Master picklist saved", "ok");
-      setLists((cur) => cur.map((x) => x.id === updated.id ? updated : x));
-      setActive(updated);
-    } catch (e: any) {
-      toast(e.message || "Save failed", "err");
+      toast(e.message || "Could not update the final picklist", "err");
     }
   }
 
   if (loading) return <Loading />;
-  if (!unlocked) {
-    return (
-      <div>
-        <div className="page-title"><h1>All Pick Lists</h1></div>
-        <div className="card" style={{ maxWidth: 420 }}>
-          <h3>Picklist Password</h3>
-          <label className="field">
-            <span>Password</span>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && password === PICKLIST_PASSWORD) {
-                  sessionStorage.setItem("hazehub.picklist.unlocked", "1");
-                  setUnlocked(true);
-                }
-              }}
-            />
-          </label>
-          <button
-            className="btn primary block"
-            onClick={() => {
-              if (password !== PICKLIST_PASSWORD) return;
-              sessionStorage.setItem("hazehub.picklist.unlocked", "1");
-              setUnlocked(true);
-            }}
-          >
-            Unlock Picklists
-          </button>
-        </div>
-      </div>
-    );
-  }
 
-  const visible = lists.filter((p) => p.items.length > 0 || p.is_master);
-  const masterLists = visible.filter((p) => p.is_master);
+  const forRound = (rows: Picklist[]) => rows.filter((l) => l.pick_round === round);
+  const master = forRound(data?.master ?? []);
+  const strategy = forRound(data?.strategy ?? []);
+  const scouter = forRound(data?.scouter ?? []);
+  const total = master.length + strategy.length + scouter.length;
 
   return (
     <div>
       <div className="page-title">
         <h1>All Pick Lists</h1>
-        <span className="badge muted">{visible.length} lists</span>
-      </div>
-      <p className="page-sub">Review submitted lists, choose a final list for 418 or 436, or build a new final list from scratch.</p>
-
-      <div className="card tight" style={{ marginBottom: 14 }}>
-        <div className="card-h">
-          <div>
-            <h3 style={{ margin: 0 }}>Master Finals</h3>
-            <div className="faint" style={{ fontSize: "0.78rem" }}>Final lists are saved as master picklists for the selected group.</div>
-          </div>
-          <div className="btn-row">
-            {FINAL_DIVISIONS.map((division) => (
-              <button key={division} className="btn sm primary" onClick={() => makeFinal(division)}>New Final {division}</button>
-            ))}
-          </div>
-        </div>
-        <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
-          {masterLists.map((p) => (
-            <button key={p.id} className={"chip" + (active?.id === p.id ? " on" : "")} onClick={() => setActive(p)}>
-              {p.name}{isFinalList(p) ? ` (${finalDivision(p)})` : ""}
-            </button>
-          ))}
+        <div className="seg">
+          <button className={round === 1 ? "on" : ""} onClick={() => setRound(1)}>First pick</button>
+          <button className={round === 2 ? "on" : ""} onClick={() => setRound(2)}>Second pick</button>
         </div>
       </div>
+      <p className="page-sub">
+        Everything the team submitted for this pick. Use Final 418 or Final 436 to
+        copy a list into the alliance's final order. Edit the master list itself in
+        Picklist Meeting.
+      </p>
 
-      {active && active.is_master && (
-        <MasterEditor key={`${active.id}-${active.updated_at}`} list={active} onSave={saveMaster} />
-      )}
-
-      {visible.length === 0 ? <Empty icon="List" title="No sent picklists yet" /> : (
-        <div className="grid auto" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(280px,1fr))", marginTop: 14 }}>
-          {visible.map((p) => (
-            <div key={p.id} className="card tight" style={p.is_master ? { borderColor: "var(--haze-glow)" } : {}}>
-              <div className="card-h">
-                <div>
-                  <h3 style={{ fontSize: "1rem", margin: 0 }}>
-                    {p.name} {p.is_master && <span className="badge haze">{isFinalList(p) ? `final ${finalDivision(p)}` : "master"}</span>}
-                  </h3>
-                  <div className="faint" style={{ fontSize: "0.72rem" }}>{p.owner_name} · {timeAgo(p.updated_at)}</div>
-                </div>
-                <span className="badge muted">{p.items.length}</span>
-              </div>
-              {p.items.length === 0 ? <p className="faint" style={{ fontSize: "0.8rem" }}>Empty</p> : (
-                <ol style={{ margin: 0, paddingLeft: 22, display: "grid", gap: 6 }}>
-                  {p.items.slice(0, 12).map((it) => (
-                    <li key={it.team}>
-                      <span className="row" style={{ gap: 8 }}>
-                        <ClickableTeam team={teams[it.team] || { team_number: it.team, nickname: "" }} showNickname={false} />
-                        <span className={`badge ${TIER_CLS[it.tier] || "muted"}`}>{TIER_LABEL[it.tier] || it.tier}</span>
-                        {it.note && <span className="faint" style={{ fontSize: "0.75rem" }}>{it.note}</span>}
-                      </span>
-                    </li>
-                  ))}
-                  {p.items.length > 12 && <li className="faint">+{p.items.length - 12} more...</li>}
-                </ol>
-              )}
-              <div className="btn-row" style={{ marginTop: 12 }}>
-                {FINAL_DIVISIONS.map((division) => (
-                  <button key={division} className="btn sm" onClick={() => makeFinal(division, p)}>Final {division}</button>
-                ))}
-                {p.is_master && <button className="btn sm ghost" onClick={() => setActive(p)}>Edit</button>}
-              </div>
-            </div>
-          ))}
-        </div>
+      {total === 0 ? (
+        <Empty icon="list" title="No picklists yet" sub="They appear here as people build them." />
+      ) : (
+        <>
+          <Group title="Master and final lists" lists={master} teams={teams} onFinal={makeFinal} big />
+          <Group title="Strategy lists" lists={strategy} teams={teams} onFinal={makeFinal} big />
+          <Group title="Scouter lists" lists={scouter} teams={teams} onFinal={makeFinal} />
+        </>
       )}
     </div>
   );
 }
 
-function MasterEditor({ list, onSave }: { list: Picklist; onSave: (p: Picklist) => void }) {
-  const [slots, setSlots] = useState<string[]>(() => toSlots(list.items || []));
-  const [teams, setTeams] = useState<Record<number, Team>>({});
-  const [dirty, setDirty] = useState(false);
-
-  useEffect(() => { setSlots(toSlots(list.items || [])); setDirty(false); }, [list.id, list.updated_at]);
-  useEffect(() => {
-    const nums = Array.from(new Set(slots.map((slot) => parseInt(slot.replace(/[^0-9]/g, ""), 10)))).filter((n) => n && !teams[n]);
-    if (!nums.length) return;
-    api<Team[]>("/api/teams/batch", { method: "POST", body: { teams: nums } })
-      .then((rows) => setTeams((cur) => ({ ...cur, ...Object.fromEntries(rows.map((t) => [t.team_number, t])) })))
-      .catch(() => {});
-  }, [slots, teams]);
-
-  const upd = (next: string[]) => { setSlots(next); setDirty(true); };
-  const sentItems = toItems(slots);
-
+function Group({
+  title,
+  lists,
+  teams,
+  onFinal,
+  big,
+}: {
+  title: string;
+  lists: Picklist[];
+  teams: Record<number, Team>;
+  onFinal: (d: "418" | "436", p: Picklist) => void;
+  big?: boolean;
+}) {
+  if (!lists.length) return null;
   return (
-    <div className="card">
+    <section style={{ marginBottom: 20 }}>
       <div className="card-h">
-        <div>
-          <h3 style={{ margin: 0 }}>{list.name} {isFinalList(list) && <span className="badge haze">final {finalDivision(list)}</span>}</h3>
-          <div className="faint" style={{ fontSize: "0.75rem" }}>updated {timeAgo(list.updated_at)}</div>
-        </div>
-        <button className="btn sm primary" onClick={() => onSave({ ...list, items: sentItems })}>
-          {dirty ? "Save Final" : "Save Again"}
-        </button>
+        <h2 style={{ fontSize: "1rem", margin: 0 }}>{title}</h2>
+        <span className="badge muted">{lists.length}</span>
       </div>
-
-      <div className="grid" style={{ gap: 8 }}>
-        {slots.map((slot, i) => {
-          const n = parseInt(slot.replace(/[^0-9]/g, ""), 10);
-          return (
-            <div key={i} className="card tight pick-slot">
-              <span className="rank-chip">{i + 1}</span>
-              {n ? <ClickableTeam team={teams[n] || { team_number: n, nickname: "" }} /> : <span className="faint">Blank team slot</span>}
-              <input
-                value={slot}
-                onChange={(e) => upd(slots.map((x, k) => k === i ? e.target.value : x))}
-                placeholder="Team number"
-                inputMode="numeric"
-              />
-              {slots.length > 4 && (
-                <button className="btn sm ghost" onClick={() => upd(slots.filter((_, k) => k !== i))}>Remove</button>
-              )}
+      <div
+        className="grid auto"
+        style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${big ? 300 : 210}px, 1fr))`, marginTop: 10 }}
+      >
+        {lists.map((p) => (
+          <div key={p.id} className="card tight" style={p.is_master ? { borderColor: "var(--haze)" } : {}}>
+            <div className="card-h">
+              <div>
+                <h3 style={{ fontSize: "0.95rem", margin: 0 }}>
+                  {p.owner_name}{" "}
+                  {isFinalList(p) && <span className="badge haze">final {finalDivision(p)}</span>}
+                  {p.is_master && !isFinalList(p) && <span className="badge haze">master</span>}
+                </h3>
+                <div className="faint" style={{ fontSize: "0.72rem" }}>{timeAgo(p.updated_at)}</div>
+              </div>
+              <span className="badge muted">{p.items.length}</span>
             </div>
-          );
-        })}
+
+            {p.items.length === 0 ? (
+              <p className="faint" style={{ fontSize: "0.8rem", margin: 0 }}>Empty</p>
+            ) : (
+              <ol className="list-card-items">
+                {p.items.slice(0, big ? 15 : 8).map((it, i) => (
+                  <li key={it.team}>
+                    <span className="rank-chip sm">{i + 1}</span>
+                    <ClickableTeam
+                      team={teams[it.team] || { team_number: it.team, nickname: "" }}
+                      showNickname={!!big}
+                    />
+                    {big && justificationOf(it) && (
+                      <span className="pick-why">{justificationOf(it)}</span>
+                    )}
+                  </li>
+                ))}
+                {p.items.length > (big ? 15 : 8) && (
+                  <li className="faint">and {p.items.length - (big ? 15 : 8)} more</li>
+                )}
+              </ol>
+            )}
+
+            {p.items.length > 0 && !isFinalList(p) && (
+              <div className="btn-row" style={{ marginTop: 10 }}>
+                {FINAL_DIVISIONS.map((d) => (
+                  <button key={d} className="btn sm" onClick={() => onFinal(d, p)}>
+                    Final {d}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
       </div>
-      <button className="btn" style={{ marginTop: 12 }} onClick={() => upd([...slots, ""])}>+ Add Team</button>
-      <p className="faint" style={{ fontSize: "0.75rem" }}>{sentItems.length} teams will be saved in this master list.</p>
-    </div>
+    </section>
   );
 }
