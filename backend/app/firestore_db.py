@@ -193,8 +193,27 @@ def _credentials():
 
     raw = os.getenv("FIREBASE_SERVICE_ACCOUNT", "").strip()
     if raw:
+        # Two accepted forms: the JSON itself (how Render and other hosts
+        # without a filesystem supply it) or a path to the downloaded file.
         if raw.lstrip().startswith("{"):
-            return credentials.Certificate(json.loads(raw))
+            try:
+                return credentials.Certificate(json.loads(raw))
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    "FIREBASE_SERVICE_ACCOUNT looks like JSON but did not parse "
+                    f"({exc}). If you pasted the key into a web form, flatten it "
+                    "to one line first: deploy/render-key.ps1 does this."
+                ) from exc
+        if not os.path.exists(raw):
+            # Without this, firebase_admin raises a bare FileNotFoundError
+            # naming the value — which is baffling when someone has pasted the
+            # wrong secret into the variable.
+            hint = f"{raw[:12]}..." if len(raw) > 12 else raw
+            raise ValueError(
+                "FIREBASE_SERVICE_ACCOUNT is neither valid JSON nor a path to an "
+                f"existing file (got {hint!r}). Set it to the full contents of the "
+                "service-account key, or to the path of the downloaded .json file."
+            )
         return credentials.Certificate(raw)
     path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
     if path and os.path.exists(path):

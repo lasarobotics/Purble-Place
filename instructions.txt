@@ -525,6 +525,17 @@ SETUP
          as one value. Render has no filesystem to put a key file on, so the
          app accepts the JSON inline as well as a path.
 
+         The downloaded file is pretty-printed across many lines and pastes
+         badly. Flatten it straight to your clipboard:
+
+             ./deploy/render-key.ps1 ~\Downloads\hazehub-8a941-...json
+
+         That prints nothing sensitive, so the key stays out of your shell
+         history and off your screen. Never paste a key into a chat, an
+         issue, or a commit — if you do, delete it in the console
+         (Service accounts -> Manage permissions -> Keys) and make a new one.
+         A leaked key is full read/write on your database.
+
      HAZEHUB_TEAM_PASSWORD
          The shared sign-in password.
 
