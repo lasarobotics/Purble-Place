@@ -31,6 +31,7 @@ import json
 import logging
 import os
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -285,6 +286,34 @@ def init_error() -> str:
     return _init_error
 
 
+#: The connectivity probe is a network round trip, and /api/health is hit by
+#: the host's uptime checker every few seconds — thousands of times a day.
+#: Caching the result keeps that from being a constant background cost on a
+#: small instance, while still surfacing an outage within half a minute.
+_PROBE_TTL_S = 30.0
+_probe: tuple[float, bool, str] = (0.0, False, "")
+_probe_lock = threading.Lock()
+
+
+def _probe_connection(client) -> tuple[bool, str]:  # noqa: ANN001
+    global _probe
+    now = time.monotonic()
+    with _probe_lock:
+        checked_at, ok, err = _probe
+        if now - checked_at < _PROBE_TTL_S:
+            return ok, err
+    try:
+        # Cheapest possible round trip: list at most one collection. Listing
+        # collections is not billed as a document read.
+        next(iter(client.collections()), None)
+        result = (True, "")
+    except Exception as exc:  # noqa: BLE001
+        result = (False, f"{type(exc).__name__}: {exc}")
+    with _probe_lock:
+        _probe = (now, result[0], result[1])
+    return result
+
+
 def status() -> dict[str, Any]:
     """Connectivity + configuration summary for /api/health and System Health."""
     pid = project_id()
@@ -292,13 +321,9 @@ def status() -> dict[str, Any]:
     reachable = client is not None
     error = _init_error
     if reachable:
-        try:
-            # Cheapest possible round trip: list at most one collection.
-            next(iter(client.collections()), None)
-            count("read", 0)  # listing collections is not a document read
-        except Exception as exc:  # noqa: BLE001
-            reachable = False
-            error = f"{type(exc).__name__}: {exc}"
+        reachable, probe_error = _probe_connection(client)
+        if probe_error:
+            error = probe_error
     out: dict[str, Any] = {
         "engine": "firestore",
         "project_id": pid,

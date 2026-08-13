@@ -13,12 +13,13 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import repo
+from .cache import StoreUnavailable
 from .config import settings
 from .database import close_db, init_db
 from .firestore_db import guard
@@ -88,6 +89,29 @@ for r in (
     events.router,
 ):
     app.include_router(r)
+
+
+@app.exception_handler(StoreUnavailable)
+def _datastore_unavailable(request: Request, exc: StoreUnavailable) -> JSONResponse:
+    """Answer 503, not 500, when the datastore is unreachable.
+
+    This matters for scouting: a tablet treats 5xx as "retry later" and keeps
+    the submission queued, but 503 plus a real explanation is the difference
+    between someone diagnosing a bad credential in a minute and staring at an
+    opaque "Internal Server Error" for an hour.
+    """
+    log.error("datastore unavailable on %s: %s", request.url.path, exc)
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": (
+                "The database is unreachable, so this could not be saved. "
+                "Your device has kept it queued and will retry. "
+                f"Cause: {exc}"
+            ),
+            "retry": True,
+        },
+    )
 
 
 @app.get("/api/health")
@@ -173,16 +197,33 @@ if WEB_DIR.is_dir() and (WEB_DIR / "index.html").exists():
                 return resolved
         return None
 
-    @app.get("/{full_path:path}", include_in_schema=False)
+    #: Extensions that must never fall through to the app shell. A missing
+    #: chunk answered with 200 + HTML looks like a working deploy while the
+    #: page silently fails; a real 404 says what actually happened.
+    _ASSET_SUFFIXES = {
+        ".js", ".css", ".map", ".json", ".txt", ".woff", ".woff2", ".ttf",
+        ".otf", ".eot", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp",
+        ".ico", ".mp4", ".webm", ".xml", ".wasm",
+    }
+
+    # HEAD as well as GET: uptime checkers and platform probes send HEAD to /,
+    # and FastAPI does not derive it from a GET route. Answering 405 makes a
+    # healthy service look unhealthy to whatever is watching it.
+    @app.api_route("/{full_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
     def serve_web(full_path: str):
         """Serve the built web app for any non-API path.
 
-        Registered last so every real route wins; unknown paths fall through
-        to the app shell and the client router handles them.
+        Registered last so every real route wins; unknown *page* paths fall
+        through to the app shell and the client router handles them.
         """
-        target = _resolve(full_path) or (WEB_DIR / "404.html")
-        if not target.is_file():
-            target = WEB_DIR / "index.html"
+        target = _resolve(full_path)
+        if target is None:
+            suffix = Path(full_path).suffix.lower()
+            if suffix and suffix in _ASSET_SUFFIXES:
+                raise HTTPException(status_code=404, detail="Not found")
+            target = WEB_DIR / "404.html"
+            if not target.is_file():
+                target = WEB_DIR / "index.html"
         no_cache = target.suffix == ".html"
         return FileResponse(
             target,
