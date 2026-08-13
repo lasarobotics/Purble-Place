@@ -60,6 +60,12 @@ def _firebase_project() -> str:
     return ""
 
 
+def _ids(env_var: str, default: str) -> list[str]:
+    """Parse a comma-separated list of scouter IDs, lowercased for matching."""
+    raw = os.getenv(env_var, "").strip() or default
+    return [part.strip().lower() for part in raw.split(",") if part.strip()]
+
+
 def _environment() -> str:
     if os.getenv("FIRESTORE_EMULATOR_HOST", "").strip():
         return "emulator"
@@ -88,6 +94,13 @@ class Settings:
     ADMIN_ID: str = os.getenv("HAZEHUB_ADMIN_ID", "admin")
     SECRET_KEY: str = os.getenv("HAZEHUB_SECRET", "purple-haze-dev-secret-change-me")
     TOKEN_TTL_HOURS: int = 24 * 14
+
+    # Which scouter IDs get which role the first time they sign in. After
+    # that, an admin can change anyone's role from the Admin dashboard, and
+    # that choice wins. Everyone not listed here is a plain scouter.
+    ADMIN_IDS: list[str] = _ids("HAZEHUB_ADMIN_IDS", os.getenv("HAZEHUB_ADMIN_ID", "admin"))
+    STRATEGY_IDS: list[str] = _ids("HAZEHUB_STRATEGY_IDS", "strategy")
+    PICKLIST_IDS: list[str] = _ids("HAZEHUB_PICKLIST_IDS", "picklist")
 
     # Economy
     STARTING_BUCKS: int = 100

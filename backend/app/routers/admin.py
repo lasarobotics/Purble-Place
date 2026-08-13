@@ -18,11 +18,11 @@ from ..analytics import (
     team_heatmap,
     team_summary,
 )
-from ..auth import require_admin
+from ..auth import require_admin, require_full_admin
 from ..config import settings
 from ..external import sync_event_matches
 from ..firestore_db import guard
-from ..models import Bet, Scouter
+from ..models import ROLE_ADMIN, ROLE_SCOUTER, ROLE_STRATEGY, ROLE_PICKLIST, ROLES, Bet, Scouter
 from ..realtime import emit
 from .betting import resolve_match_bets
 from .teams import report_dict, scout_name
@@ -307,6 +307,7 @@ def scouters(_: Scouter = Depends(require_admin)) -> list[dict]:
                 "scout_id": s.scout_id,
                 "s_number": s.s_number,
                 "display_name": s.display_name or s.scout_id,
+                "role": s.role,
                 "is_admin": s.is_admin,
                 "bucks": s.bucks,
                 "matches_scouted": s.matches_scouted,
@@ -315,6 +316,58 @@ def scouters(_: Scouter = Depends(require_admin)) -> list[dict]:
         )
     out.sort(key=lambda r: -r["matches_scouted"])
     return out
+
+
+class RoleIn(BaseModel):
+    role: str
+
+
+@router.post("/scouters/{scout_id}/role")
+def set_role(
+    scout_id: str,
+    body: RoleIn,
+    admin: Scouter = Depends(require_full_admin),
+) -> dict:
+    """Change an account's role.
+
+    Admin only, not strategy: letting strategy accounts promote each other
+    would make the distinction meaningless.
+    """
+    role = (body.role or "").strip().lower()
+    if role not in ROLES:
+        raise HTTPException(
+            status_code=400, detail=f"Role must be one of {', '.join(ROLES)}"
+        )
+    target = repo.scouter(scout_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Scouter not found")
+    if target.scout_id == admin.scout_id and role != ROLE_ADMIN:
+        # Otherwise the last admin can lock everyone out of event control.
+        raise HTTPException(
+            status_code=400, detail="You cannot remove your own admin role"
+        )
+    target.role = role
+    repo.save_scouter(target)
+    emit("roles_changed", {"scout_id": target.scout_id, "role": role})
+    return {"ok": True, "scout_id": target.scout_id, "role": role}
+
+
+@router.get("/roles")
+def list_roles(_: Scouter = Depends(require_admin)) -> dict:
+    return {
+        "roles": [
+            {"key": ROLE_SCOUTER, "label": "Scouter",
+             "description": "Collects match and pit data. Builds their own picklists."},
+            {"key": ROLE_STRATEGY, "label": "Strategy",
+             "description": "Everything a scouter does, plus all analysis screens. "
+                            "Their picklists outrank scouter lists in the meeting."},
+            {"key": ROLE_ADMIN, "label": "Admin",
+             "description": "Strategy, plus event control, film and account roles."},
+            {"key": ROLE_PICKLIST, "label": "Picklist meeting",
+             "description": "Shared screen account for the picklist meeting. "
+                            "Can only view teams and edit picklists."},
+        ]
+    }
 
 
 # --------------------------------------------------------------------------- #

@@ -356,6 +356,20 @@ def find_picklist(event_key: str, owner_id: str, is_master: bool) -> Optional[Pi
     return None
 
 
+def find_picklist_round(
+    event_key: str, owner_id: str, pick_round: int, is_master: bool
+) -> Optional[Picklist]:
+    """One list per owner per pick round (first pick / second pick)."""
+    for p in picklists(event_key):
+        if (
+            p.owner_id == owner_id
+            and int(p.pick_round) == int(pick_round)
+            and bool(p.is_master) == bool(is_master)
+        ):
+            return p
+    return None
+
+
 def save_picklist(p: Picklist) -> None:
     p.updated_at = _now()
     store.write(p)

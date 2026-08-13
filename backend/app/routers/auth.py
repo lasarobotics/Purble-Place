@@ -24,7 +24,9 @@ class LoginIn(BaseModel):
 class LoginOut(BaseModel):
     token: str
     scout_id: str
+    role: str
     is_admin: bool
+    picklist_only: bool
     display_name: str
     bucks: int
 
@@ -33,7 +35,9 @@ def _scouter_out(s: Scouter, token: str) -> LoginOut:
     return LoginOut(
         token=token,
         scout_id=s.scout_id,
+        role=s.role,
         is_admin=s.is_admin,
+        picklist_only=s.picklist_only,
         display_name=s.display_name or s.scout_id,
         bucks=s.bucks,
     )

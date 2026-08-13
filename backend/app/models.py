@@ -112,6 +112,51 @@ def _float(value: Any, default: float = 0.0) -> float:
 # --------------------------------------------------------------------------- #
 # scouters                                                                     #
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# Account roles                                                                #
+# --------------------------------------------------------------------------- #
+#: What each role can do.
+#:
+#:   scouter   collects data. Everything a normal account does today. Their
+#:             picklists are visible to strategy and admin, but rank lowest.
+#:   strategy  scouter plus every analysis screen. Their picklists outrank
+#:             scouter lists during the picklist meeting.
+#:   admin     identical to strategy, plus event control and the film tab.
+#:   picklist  the account used on the shared screen during a picklist
+#:             meeting. It can reach picklists and team data and nothing else,
+#:             so a stray tap cannot advance the match or settle bets.
+ROLE_SCOUTER = "scouter"
+ROLE_STRATEGY = "strategy"
+ROLE_ADMIN = "admin"
+ROLE_PICKLIST = "picklist"
+
+ROLES = (ROLE_SCOUTER, ROLE_STRATEGY, ROLE_ADMIN, ROLE_PICKLIST)
+
+#: Roles allowed on the analysis and event-control screens.
+ADMIN_ROLES = (ROLE_STRATEGY, ROLE_ADMIN)
+
+#: Ranking used when several picklists are shown together. Lower sorts first.
+PICKLIST_PRIORITY = {
+    "master": 0,
+    ROLE_ADMIN: 1,
+    ROLE_STRATEGY: 1,
+    ROLE_SCOUTER: 2,
+    ROLE_PICKLIST: 2,
+}
+
+
+def normalize_role(value: Any, *, is_admin: bool = False) -> str:
+    """Coerce stored data to a known role.
+
+    Accounts created before roles existed only have ``is_admin``; that is the
+    fallback so an existing admin does not lose access on upgrade.
+    """
+    role = str(value or "").strip().lower()
+    if role in ROLES:
+        return role
+    return ROLE_ADMIN if is_admin else ROLE_SCOUTER
+
+
 @dataclass
 class Scouter:
     """``scouters`` — document ID is ``scouter_id``."""
@@ -119,7 +164,7 @@ class Scouter:
     scout_id: str
     s_number: Optional[int] = None
     display_name: str = ""
-    is_admin: bool = False
+    role: str = ROLE_SCOUTER
     last_seen: datetime = field(default_factory=_now)   # -> last_login
     bucks: int = 100
     matches_scouted: int = 0
@@ -131,12 +176,28 @@ class Scouter:
     def doc_id(self) -> str:
         return self.scout_id
 
+    @property
+    def is_admin(self) -> bool:
+        """Kept as a property so existing checks and the API shape still work."""
+        return self.role in ADMIN_ROLES
+
+    @property
+    def can_open_picklists(self) -> bool:
+        return True
+
+    @property
+    def picklist_only(self) -> bool:
+        return self.role == ROLE_PICKLIST
+
     def to_doc(self) -> dict[str, Any]:
         return {
             "scouter_id": self.scout_id,
             "s_number": self.s_number,
             "display_name": self.display_name,
-            "is_admin": bool(self.is_admin),
+            "role": self.role,
+            # Written alongside role so an older build, or a human reading the
+            # console, still sees who is privileged.
+            "is_admin": self.is_admin,
             "last_login": as_utc(self.last_seen),
             "bucks": _int(self.bucks),
             "matches_scouted": _int(self.matches_scouted),
@@ -149,7 +210,7 @@ class Scouter:
             scout_id=d.get("scouter_id") or doc_id,
             s_number=d.get("s_number"),
             display_name=d.get("display_name") or "",
-            is_admin=bool(d.get("is_admin")),
+            role=normalize_role(d.get("role"), is_admin=bool(d.get("is_admin"))),
             last_seen=as_utc(d.get("last_login")) or _now(),
             bucks=_int(d.get("bucks"), 100),
             matches_scouted=_int(d.get("matches_scouted")),
@@ -581,20 +642,33 @@ class PitEntry:
 # --------------------------------------------------------------------------- #
 # picklists                                                                    #
 # --------------------------------------------------------------------------- #
+#: Which pick a list is for. Everyone keeps one of each.
+PICK_FIRST = 1
+PICK_SECOND = 2
+
+MAX_JUSTIFICATION_CHARS = 1000
+
+
 @dataclass
 class Picklist:
     """``picklists``.
 
     The schema's ``{rank}_team_number_comments`` column family becomes an
-    ordered ``items`` array of ``{rank, team_num, comments, tier}`` maps —
-    rank is the array position, so the list can be reordered with one write
-    instead of N column updates.
+    ordered ``items`` array of ``{rank, team_num, comments}`` maps. Rank is
+    the array position, so dragging a team to a new spot is one write instead
+    of renumbering N columns, and ``comments`` carries the justification the
+    scout typed for that specific pick.
+
+    ``pick_round`` splits first-pick and second-pick strategy, which are
+    genuinely different lists: the first pick is usually the best robot
+    available, the second is whatever complements the alliance.
     """
 
     event_key: str
     owner_id: str
     name: str = "My Picklist"             # -> picklist_name
     is_master: bool = False
+    pick_round: int = PICK_FIRST
     items: list[dict[str, Any]] = field(default_factory=list)
     created_at: datetime = field(default_factory=_now)
     updated_at: datetime = field(default_factory=_now)
@@ -607,20 +681,42 @@ class Picklist:
         return str(self.id)
 
     @staticmethod
+    def default_name(pick_round: int, owner_label: str = "") -> str:
+        which = "First Pick" if int(pick_round) == PICK_FIRST else "Second Pick"
+        return f"{owner_label} {which}".strip()
+
+    @staticmethod
     def normalize_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Stamp contiguous 1-based ranks and the schema's field names onto the
-        items the client sends (``{team, tier, note}``)."""
+        items the client sends.
+
+        Accepts ``team``/``team_num`` and ``note``/``comments``/
+        ``justification`` so older clients keep working, and writes all of the
+        aliases back so nothing downstream has to guess.
+        """
         out: list[dict[str, Any]] = []
-        for i, raw in enumerate(items or [], 1):
-            team = raw.get("team", raw.get("team_num"))
+        seen: set[int] = set()
+        for raw in items or []:
+            team = _int(raw.get("team", raw.get("team_num")))
+            if not team or team in seen:
+                continue  # a team can only occupy one slot in a list
+            seen.add(team)
+            note = (
+                raw.get("note")
+                or raw.get("comments")
+                or raw.get("justification")
+                or ""
+            )
+            note = str(note)[:MAX_JUSTIFICATION_CHARS]
             out.append(
                 {
-                    "rank": i,
-                    "team": _int(team),
-                    "team_num": _int(team),
+                    "rank": len(out) + 1,
+                    "team": team,
+                    "team_num": team,
                     "tier": raw.get("tier") or "",
-                    "note": raw.get("note", raw.get("comments", "")) or "",
-                    "comments": raw.get("note", raw.get("comments", "")) or "",
+                    "note": note,
+                    "comments": note,
+                    "justification": note,
                 }
             )
         return out
@@ -632,6 +728,7 @@ class Picklist:
             "owner_id": self.owner_id,
             "picklist_name": self.name,
             "is_master": bool(self.is_master),
+            "pick_round": _int(self.pick_round, PICK_FIRST),
             "items": self.normalize_items(self.items),
             "created_at": as_utc(self.created_at),
             "updated_at": as_utc(self.updated_at),
@@ -645,6 +742,7 @@ class Picklist:
             owner_id=d.get("owner_id") or "",
             name=d.get("picklist_name") or "My Picklist",
             is_master=bool(d.get("is_master")),
+            pick_round=_int(d.get("pick_round"), PICK_FIRST) or PICK_FIRST,
             items=list(d.get("items") or []),
             created_at=as_utc(d.get("created_at")) or _now(),
             updated_at=as_utc(d.get("updated_at")) or _now(),

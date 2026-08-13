@@ -12,6 +12,14 @@ import pytest
 
 from app import schema
 from app.models import (
+    MAX_JUSTIFICATION_CHARS,
+    PICK_FIRST,
+    PICK_SECOND,
+    PICKLIST_PRIORITY,
+    ROLE_ADMIN,
+    ROLE_PICKLIST,
+    ROLE_SCOUTER,
+    ROLE_STRATEGY,
     Bet,
     Device,
     Event,
@@ -136,12 +144,71 @@ def test_scouting_round_trips_through_firestore() -> None:
 
 
 def test_scouter_maps_last_seen_to_last_login() -> None:
-    s = Scouter(scout_id="admin", s_number=1, display_name="Administrator", is_admin=True)
+    s = Scouter(scout_id="admin", s_number=1, display_name="Administrator",
+                role=ROLE_ADMIN)
     doc = s.to_doc()
     assert doc["scouter_id"] == "admin"
+    assert doc["role"] == ROLE_ADMIN
+    # is_admin is derived, and still written so the console stays readable.
     assert doc["is_admin"] is True
     assert "last_login" in doc and "last_seen" not in doc
     assert Scouter.from_doc("admin", doc).is_admin is True
+
+
+@pytest.mark.parametrize(
+    "role,is_admin,picklist_only",
+    [
+        (ROLE_SCOUTER, False, False),
+        (ROLE_STRATEGY, True, False),
+        (ROLE_ADMIN, True, False),
+        (ROLE_PICKLIST, False, True),
+    ],
+)
+def test_role_drives_permissions(role: str, is_admin: bool, picklist_only: bool) -> None:
+    s = Scouter(scout_id="x", role=role)
+    assert s.is_admin is is_admin
+    assert s.picklist_only is picklist_only
+
+
+def test_accounts_from_before_roles_keep_their_access() -> None:
+    """Documents written by the previous build only carry is_admin."""
+    assert Scouter.from_doc("a", {"is_admin": True}).role == ROLE_ADMIN
+    assert Scouter.from_doc("b", {"is_admin": False}).role == ROLE_SCOUTER
+    assert Scouter.from_doc("c", {}).role == ROLE_SCOUTER
+    # An unrecognised role falls back rather than granting anything.
+    assert Scouter.from_doc("d", {"role": "wizard"}).role == ROLE_SCOUTER
+
+
+def test_picklist_priority_orders_master_then_strategy_then_scouter() -> None:
+    assert PICKLIST_PRIORITY["master"] < PICKLIST_PRIORITY[ROLE_STRATEGY]
+    assert PICKLIST_PRIORITY[ROLE_STRATEGY] == PICKLIST_PRIORITY[ROLE_ADMIN]
+    assert PICKLIST_PRIORITY[ROLE_STRATEGY] < PICKLIST_PRIORITY[ROLE_SCOUTER]
+
+
+def test_picklist_items_carry_a_justification_and_drop_duplicates() -> None:
+    items = Picklist.normalize_items([
+        {"team": 254, "justification": "best cycler"},
+        {"team": 118, "note": "good defense"},
+        {"team": 254, "note": "same team again"},
+        {"team": 0},
+    ])
+    assert [i["rank"] for i in items] == [1, 2]
+    assert items[0]["justification"] == items[0]["note"] == items[0]["comments"] == "best cycler"
+    assert items[1]["team_num"] == 118
+
+
+def test_justification_is_capped_so_a_document_cannot_balloon() -> None:
+    items = Picklist.normalize_items([{"team": 1, "note": "x" * 50_000}])
+    assert len(items[0]["note"]) == MAX_JUSTIFICATION_CHARS
+
+
+def test_picklists_are_split_by_pick_round() -> None:
+    first = Picklist(event_key="e", owner_id="1", pick_round=PICK_FIRST)
+    second = Picklist(event_key="e", owner_id="1", pick_round=PICK_SECOND)
+    assert first.to_doc()["pick_round"] == 1
+    assert second.to_doc()["pick_round"] == 2
+    assert "First Pick" in Picklist.default_name(PICK_FIRST, "Alex")
+    assert "Second Pick" in Picklist.default_name(PICK_SECOND, "Alex")
 
 
 def test_event_stores_a_date_as_a_timestamp_and_derives_the_year() -> None:

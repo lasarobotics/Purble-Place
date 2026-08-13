@@ -51,10 +51,39 @@ def _betting_enabled() -> bool:
     return repo.setting("betting_enabled") == "1"
 
 
-def _is_locked(m: MatchRecord) -> bool:
+def lock_reason(m: MatchRecord) -> str:
+    """Why betting is closed on this match, or "" if it is open.
+
+    Every one of these has to be checked. A match whose score has come back
+    from The Blue Alliance is already decided, so allowing a bet on it would
+    be free Purple Bucks; so would betting on the match currently being
+    played, or on one that has already been scouted.
+    """
     if not _betting_enabled():
-        return True
-    return bool(m.betting_locked or m.winner is not None)
+        return "Betting is turned off"
+    if m.winner is not None:
+        return "This match is over"
+    if m.red_score is not None or m.blue_score is not None:
+        # Scores arrive from TBA before the winner field is derived, and a
+        # partial score still tells you who is winning.
+        return "Results are already in for this match"
+    if m.betting_locked:
+        return "Betting closed when scouting started"
+    current = _int(repo.setting("current_match"))
+    if m.comp_level == "qm" and current and m.match_number <= current:
+        return "This match has already been played"
+    return ""
+
+
+def _is_locked(m: MatchRecord) -> bool:
+    return bool(lock_reason(m))
+
+
+def _int(value: object) -> int:
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return 0
 
 
 @router.get("/odds")
@@ -75,6 +104,7 @@ async def odds(
         "red_teams": teams_payload(m.red),
         "blue_teams": teams_payload(m.blue),
         "locked": _is_locked(m),
+        "lock_reason": lock_reason(m),
         "betting_enabled": _betting_enabled(),
         "source": probs["source"],
         "red_odds": {**odds_for(probs["red"])},
@@ -103,8 +133,9 @@ async def place_bet(
     m = _match(body.match_key)
     if not m:
         raise HTTPException(status_code=404, detail="Match not found")
-    if _is_locked(m):
-        raise HTTPException(status_code=400, detail="Betting is closed for this match")
+    closed = lock_reason(m)
+    if closed:
+        raise HTTPException(status_code=400, detail=f"Betting is closed. {closed}.")
 
     probs = await _win_probs(m)
     p = probs[body.pick]
