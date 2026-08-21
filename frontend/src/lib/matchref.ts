@@ -6,9 +6,21 @@
 // report from qual 42 to the sentence; the reader taps it and sees the
 // numbers without leaving the list.
 //
-// The stored form is plain text -- `@42` or `@42:climb` -- so a note written
-// with references is still perfectly readable in the database, in an export,
-// or by an older build that knows nothing about this file.
+// Two forms:
+//
+//   @42          the whole qual 42 report
+//   @42:climb    the whole qual 42 report, with the climb row called out
+//   @all:climb   just the climb, from every report on that team this event
+//
+// A field on a single match narrows what the reader should look at, it does
+// not hide the rest: the number only means something next to the match it
+// came from, so the row is highlighted in place. "@all" is the opposite
+// question, one measurement across the event, so there the field is all you
+// get and every match is listed under it.
+//
+// The stored form is plain text, so a note written with references is still
+// readable in the database, in an export, or by a build that knows nothing
+// about this file.
 
 export interface RefField {
   key: string;
@@ -17,7 +29,7 @@ export interface RefField {
   hint: string;
 }
 
-/** What a reference can point at. `all` is the whole report. */
+/** What a reference can point at. `all` means the whole report. */
 export const REF_FIELDS: RefField[] = [
   { key: "all", label: "Full report", hint: "Everything the scout recorded" },
   { key: "points", label: "Points", hint: "Points scored in the match" },
@@ -34,16 +46,29 @@ export const REF_FIELDS: RefField[] = [
 
 export const DEFAULT_REF_FIELD = "all";
 
+/** The match part of a reference: a qual number, or every match. */
+export type RefTarget = number | "all";
+
+export const ALL_MATCHES: RefTarget = "all";
+
 export function fieldLabel(key: string): string {
   return REF_FIELDS.find((f) => f.key === key)?.label ?? key;
 }
 
-/** `@42` and `@42:climb`. Case-insensitive on the field name. */
-const REF_PATTERN = /@(\d{1,3})(?::([a-z]+))?/gi;
+export function isKnownField(key: string): boolean {
+  return REF_FIELDS.some((f) => f.key === key);
+}
+
+/** `@42`, `@42:climb`, `@all:climb`. Case-insensitive on the names. */
+const REF_PATTERN = /@(\d{1,3}|all)(?::([a-z]+))?/gi;
 
 export type NoteSegment =
   | { type: "text"; text: string }
-  | { type: "ref"; text: string; match: number; field: string };
+  | { type: "ref"; text: string; match: RefTarget; field: string };
+
+function parseTarget(raw: string): RefTarget {
+  return raw.toLowerCase() === "all" ? ALL_MATCHES : parseInt(raw, 10);
+}
 
 /** Split a justification into plain runs and match references. */
 export function parseNote(note: string): NoteSegment[] {
@@ -56,9 +81,12 @@ export function parseNote(note: string): NoteSegment[] {
     const field = (m[2] || DEFAULT_REF_FIELD).toLowerCase();
     // An unknown field name is almost certainly a word that happened to
     // follow a number, so leave it as text rather than inventing a chip.
-    if (!REF_FIELDS.some((f) => f.key === field)) continue;
+    if (!isKnownField(field)) continue;
+    // "@all" on its own has no measurement to show, so it is not a reference.
+    const target = parseTarget(m[1]);
+    if (target === ALL_MATCHES && field === DEFAULT_REF_FIELD) continue;
     if (m.index > last) out.push({ type: "text", text: note.slice(last, m.index) });
-    out.push({ type: "ref", text: m[0], match: parseInt(m[1], 10), field });
+    out.push({ type: "ref", text: m[0], match: target, field });
     last = m.index + m[0].length;
   }
   if (last < note.length) out.push({ type: "text", text: note.slice(last) });
@@ -69,11 +97,16 @@ export function hasRefs(note: string): boolean {
   return parseNote(note).some((s) => s.type === "ref");
 }
 
-/** The `@…` the caret is currently sitting in, if any. */
+/** Short label for the chip, e.g. "Q12" or "All". */
+export function refLabel(target: RefTarget): string {
+  return target === ALL_MATCHES ? "All" : `Q${target}`;
+}
+
+/** The `@...` the caret is currently sitting in, if any. */
 export interface ActiveRef {
   /** Index in the text where the `@` is. */
   start: number;
-  match: number;
+  match: RefTarget;
   /** What has been typed after the colon so far, for filtering. */
   query: string;
 }
@@ -82,11 +115,15 @@ export function activeRefAt(text: string, caret: number): ActiveRef | null {
   const before = text.slice(0, caret);
   // Only fires while the caret is still inside the token, so typing "@42 is
   // great" dismisses the picker as soon as the space lands.
-  const m = /@(\d{1,3})(?::([a-z]*))?$/i.exec(before);
+  const m = /@(\d{1,3}|all|al|a)(?::([a-z]*))?$/i.exec(before);
   if (!m) return null;
+  const word = m[1].toLowerCase();
+  // "a" and "al" are the way to "all", but they are also the start of a
+  // number-less typo. Only offer the picker once it is unambiguous.
+  if (/^[a-z]+$/.test(word) && word !== "all") return null;
   return {
     start: caret - m[0].length,
-    match: parseInt(m[1], 10),
+    match: parseTarget(m[1]),
     query: (m[2] || "").toLowerCase(),
   };
 }
@@ -98,7 +135,15 @@ export function completeRef(
   caret: number,
   field: string
 ): { text: string; caret: number } {
-  const token = `@${active.match}:${field} `;
+  const target = active.match === ALL_MATCHES ? "all" : String(active.match);
+  const token = `@${target}:${field} `;
   const next = text.slice(0, active.start) + token + text.slice(caret);
   return { text: next, caret: active.start + token.length };
+}
+
+/** The fields offerable for a target. "@all" has no whole-report option. */
+export function fieldsFor(target: RefTarget): RefField[] {
+  return target === ALL_MATCHES
+    ? REF_FIELDS.filter((f) => f.key !== DEFAULT_REF_FIELD)
+    : REF_FIELDS;
 }

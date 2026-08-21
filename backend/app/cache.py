@@ -5,12 +5,12 @@ The problem
 About 60 people use HazeHub for a ~12 hour competition day. Every device
 polls for live updates and every admin screen re-reads the whole event. If
 those requests reached Firestore, a single day would cost on the order of
-10^7 document reads — three orders of magnitude past the 50,000/day free
+10^7 document reads: three orders of magnitude past the 50,000/day free
 allowance, and expensive even on Blaze.
 
 The shape of the data is what makes this avoidable: one event is a few
 thousand small documents, and this API is the only writer. So the entire
-working set fits in memory, and RAM — not Firestore — can serve reads.
+working set fits in memory, and RAM: not Firestore: can serve reads.
 
 The design
 ----------
@@ -35,8 +35,8 @@ Running more than one instance
 ------------------------------
 Write-through caching assumes a single writer. The Cloud Run service is
 therefore deployed with ``--max-instances=1`` (see ``deploy/firebase.ps1``).
-If you ever need more than one instance — or you want edits made in the
-Firebase console to appear live — set ``HAZEHUB_FIRESTORE_LISTEN=1`` to
+If you ever need more than one instance: or you want edits made in the
+Firebase console to appear live: set ``HAZEHUB_FIRESTORE_LISTEN=1`` to
 attach snapshot listeners instead. That is correct under concurrency but
 costs one document read per change, so it is off by default.
 
@@ -176,11 +176,35 @@ class LocalBackend:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._data: dict[str, dict[str, dict]] = {}
-        if self.path.exists():
-            try:
-                self._data = json.loads(self.path.read_text(encoding="utf-8"))
-            except Exception:  # noqa: BLE001 — a corrupt dev file just resets
-                self._data = {}
+        self._mtime: float = -1.0
+        self._reread()
+
+    def _reread(self) -> None:
+        """Re-read the file if another process has written it.
+
+        Firestore has snapshot listeners; this file does not, so without this
+        check a second process (``python -m app.demo_data``, a hand edit, a
+        second server) would be silently clobbered the next time this one
+        wrote: every write persists the whole document set, so a stale
+        in-memory copy overwrites everything it did not know about. That is
+        how the current event pointer used to drift back to a stale value and
+        take the event's scouting out of the cache with it.
+
+        Callers hold ``self._lock``, except the constructor where nothing else
+        can be running yet.
+        """
+        try:
+            mtime = self.path.stat().st_mtime
+        except OSError:
+            return
+        if mtime == self._mtime:
+            return
+        try:
+            self._data = json.loads(self.path.read_text(encoding="utf-8"))
+            self._mtime = mtime
+        except Exception:  # noqa: BLE001 - a corrupt dev file just resets
+            self._data = {}
+            self._mtime = mtime
 
     def _persist(self) -> None:
         tmp = self.path.with_suffix(".tmp")
@@ -188,9 +212,14 @@ class LocalBackend:
             json.dumps(self._data, default=str, indent=0), encoding="utf-8"
         )
         tmp.replace(self.path)
+        try:
+            self._mtime = self.path.stat().st_mtime
+        except OSError:
+            self._mtime = -1.0
 
     def load(self, collection: str, event_key: Optional[str]) -> dict[str, dict]:
         with self._lock:
+            self._reread()
             docs = dict(self._data.get(collection, {}))
         if event_key:
             docs = {k: v for k, v in docs.items() if v.get("event_key") == event_key}
@@ -201,6 +230,7 @@ class LocalBackend:
 
     def set(self, collection: str, doc_id: str, data: dict) -> None:
         with self._lock:
+            self._reread()
             self._data.setdefault(collection, {})[doc_id] = json.loads(
                 json.dumps(data, default=str)
             )
@@ -208,6 +238,7 @@ class LocalBackend:
 
     def create(self, collection: str, doc_id: str, data: dict) -> bool:
         with self._lock:
+            self._reread()
             bucket = self._data.setdefault(collection, {})
             if doc_id in bucket:
                 return False
@@ -217,11 +248,13 @@ class LocalBackend:
 
     def delete(self, collection: str, doc_id: str) -> None:
         with self._lock:
+            self._reread()
             self._data.get(collection, {}).pop(doc_id, None)
             self._persist()
 
     def commit(self, ops: list[tuple[str, str, str, Optional[dict]]]) -> None:
         with self._lock:
+            self._reread()
             for kind, collection, doc_id, data in ops:
                 if kind == "delete":
                     self._data.get(collection, {}).pop(doc_id, None)
@@ -274,7 +307,7 @@ class Store:
         self._last_write: dict[tuple[str, str], float] = {}
         #: Canonical form of what Firestore currently holds for each document.
         #: The dirty check compares against THIS, not against the cached model
-        #: — callers mutate the cached object in place (``m = repo.match(...);
+        #:: callers mutate the cached object in place (``m = repo.match(...);
         #: m.betting_locked = True; repo.save_match(m)``), so comparing a model
         #: to itself would always look unchanged and the write would be lost.
         self._written: dict[tuple[str, str], str] = {}
@@ -293,7 +326,7 @@ class Store:
         if self.backend is None and not (fs.project_id() or fs.using_emulator()):
             self.backend = LocalBackend(data_dir / "hazehub-local.json")
             log.warning(
-                "No Firebase project configured — using the local dev store at %s. "
+                "No Firebase project configured: using the local dev store at %s. "
                 "Set FIREBASE_PROJECT_ID (or FIRESTORE_EMULATOR_HOST) for Firestore.",
                 self.backend.path,
             )
@@ -302,7 +335,10 @@ class Store:
 
         for collection in schema.GLOBAL_CACHED:
             self._load(collection, None)
-        self._event_key = self.setting_raw("current_event")
+        # Stripped, because every reader goes through repo.current_event()
+        # which strips. A stray space here would scope the event caches to a
+        # key nothing ever queries, and the event would look empty.
+        self._event_key = self.setting_raw("current_event").strip()
         for collection in schema.EVENT_SCOPED_CACHED:
             self._load(collection, self._event_key or None)
 
@@ -382,7 +418,7 @@ class Store:
     def retarget_event(self, event_key: str) -> None:
         """Re-scope the event-filtered collections after the event changes.
 
-        Costs one full read of the new event's documents — a handful of
+        Costs one full read of the new event's documents: a handful of
         thousand reads, at most twice a season.
         """
         event_key = (event_key or "").strip()
@@ -443,7 +479,7 @@ class Store:
         """Upsert ``model``. Returns True if Firestore was actually written.
 
         Skips the round trip when the document is identical to what Firestore
-        already holds — the dirty check that makes repeated TBA syncs and
+        already holds: the dirty check that makes repeated TBA syncs and
         idempotent client retries free.
         """
         collection, doc_id = model.COLLECTION, model.doc_id
@@ -579,7 +615,7 @@ class Store:
         """Apply ``model`` now, write it to Firestore at most once per ``delay_s``.
 
         For counters like ``matches_scouted`` that change on a request but do
-        not need to be durable within the second — this collapses a burst of
+        not need to be durable within the second: this collapses a burst of
         submissions from one scout into a single document write and keeps the
         document under Firestore's ~1 write/second sustained limit.
         """
@@ -609,7 +645,7 @@ class Store:
         while not self._stop.wait(FLUSH_INTERVAL_S):
             try:
                 self.flush()
-            except Exception as exc:  # noqa: BLE001 — the loop must never die
+            except Exception as exc:  # noqa: BLE001: the loop must never die
                 log.error("flush failed: %s", exc)
 
     def _persist(

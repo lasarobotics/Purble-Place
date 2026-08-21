@@ -1,12 +1,12 @@
-"""Cloud dashboard + reconciliation — the admin System Health panel.
+"""Cloud dashboard + reconciliation: the admin System Health panel.
 
 The direct-to-cloud design means this API can only see what devices have
 managed to sync. So beyond datastore health, the panel focuses on the two
 questions that matter at an event:
 
-1. **Reconciliation** — for every played match, compare the schedule (six
+1. **Reconciliation**: for every played match, compare the schedule (six
    robots) against received submissions: missing, duplicates, wrong-team.
-2. **Staleness** — scouts/devices that have not checked in recently may still
+2. **Staleness**: scouts/devices that have not checked in recently may still
    hold unsynchronized records in IndexedDB.
 
 Plus, since the migration to Firestore, a third: **quota**. The panel reports
@@ -53,8 +53,7 @@ def _reconciliation(event_key: str, current_match: int) -> dict:
     empty and who to ask. A match with five of six reports used to look
     completely clean here.
 
-    Two reports on the same robot are *not* a fault. Every submission is kept
-    — nothing here or anywhere else deletes one — and double-scouting is what
+    Two reports on the same robot are *not* a fault. Every submission is kept: nothing here or anywhere else deletes one: and double-scouting is what
     feeds the Consensus Radar, so they are counted separately as coverage
     rather than mixed into the findings total.
     """
@@ -148,8 +147,7 @@ def _scout_activity() -> list[dict]:
     """Per-scout check-in freshness. A silent scout may hold unsynced records.
 
     ``last_seen`` comes from the in-memory presence map, which is updated on
-    every authenticated request and persisted to Firestore at most hourly —
-    live freshness without a write per request.
+    every authenticated request and persisted to Firestore at most hourly: live freshness without a write per request.
     """
     now = _now()
     out = []
@@ -266,7 +264,7 @@ def device_checkin(
 ) -> dict:
     """Record a device heartbeat (battery, VLAN port, queue depth).
 
-    Throttled to one Firestore write per device per two minutes — devices can
+    Throttled to one Firestore write per device per two minutes: devices can
     call this as often as they like.
     """
     repo.record_device(
@@ -296,7 +294,7 @@ def report_outbox_failure(
 ) -> dict:
     """Record a submission a device gave up on, so it can be chased later.
 
-    Only terminal failures are stored — mirroring the live queue would cost a
+    Only terminal failures are stored: mirroring the live queue would cost a
     write per state transition per submission for data that is already on the
     device.
     """

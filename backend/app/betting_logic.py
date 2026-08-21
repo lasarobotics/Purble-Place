@@ -2,7 +2,7 @@
 
 Odds come straight from the Statbotics win probability for the picked
 alliance.  Betting the heavy favourite pays little; betting the underdog pays
-a lot — classic fair-odds with a small house edge and a floor so favourites
+a lot: classic fair-odds with a small house edge and a floor so favourites
 still earn something.
 
     profit_fraction = clamp( (1 - p)/p * EDGE , MIN_PROFIT , MAX_PROFIT )

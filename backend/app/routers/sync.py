@@ -3,16 +3,14 @@
 Devices queue submissions in IndexedDB while offline and flush them here when
 the connection returns; recovery JSONL files from a failed Chromebook replay
 through the same endpoint. Everything is keyed by the submission UUID and the
-payload hash, and the response carries an individual result for every record —
-one bad record never blocks the rest.
+payload hash, and the response carries an individual result for every record: one bad record never blocks the rest.
 
 Firestore notes
 ---------------
 A batch is capped at ``MAX_BATCH`` records, comfortably inside Firestore's
 500-operations-per-commit limit even counting the match-lock writes a batch
 can trigger. New records go in through one batched commit rather than a write
-per record, and the per-scout counter is bumped once for the whole batch —
-so a device that comes back online with 40 queued matches costs roughly 42
+per record, and the per-scout counter is bumped once for the whole batch: so a device that comes back online with 40 queued matches costs roughly 42
 document writes, not 120.
 """
 from __future__ import annotations
@@ -94,7 +92,7 @@ def sync_scout(
             if not data.get("payload_hash"):
                 data["payload_hash"] = canonical_hash(data)
             entry = ScoutEntry.from_submission(data)
-        except Exception as exc:  # noqa: BLE001 — isolate the bad record
+        except Exception as exc:  # noqa: BLE001: isolate the bad record
             result.update(status="invalid", error=str(exc)[:300])
             continue
 

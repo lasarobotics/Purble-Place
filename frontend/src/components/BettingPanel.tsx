@@ -187,7 +187,7 @@ export function BettingPanel({ matchNumber }: { matchNumber?: number }) {
                 <button type="button" className="chip" onClick={() => setWager(session?.bucks ?? 0)}>All in</button>
               </div>
               <button className={`btn block ${pick}`} disabled={busy || !enabled} onClick={place}>
-                {busy ? "Placing…" : `Bet ${wager} PB on ${pick.toUpperCase()} → ${potential} PB`}
+                {busy ? "Placing..." : `Bet ${wager} PB on ${pick.toUpperCase()} → ${potential} PB`}
               </button>
             </>
           )}

@@ -59,7 +59,7 @@ export default function ComparePage() {
   return (
     <div>
       <div className="page-title"><h1>Compare Robots</h1></div>
-      <p className="page-sub">Pick 2–6 robots from the event, best value in each row is highlighted.</p>
+      <p className="page-sub">Pick 2-6 robots from the event, best value in each row is highlighted.</p>
 
       <div className="card" style={{ marginBottom: 16 }}>
         {available.length === 0 ? (

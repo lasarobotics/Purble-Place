@@ -47,7 +47,7 @@ def _match_dict(m: MatchRecord) -> dict:
 
 
 def teams_payload(numbers: list[int]) -> list[dict]:
-    """Team cards for an alliance — served entirely from the cache."""
+    """Team cards for an alliance: served entirely from the cache."""
     out = []
     for n in numbers:
         tc = repo.team(n)

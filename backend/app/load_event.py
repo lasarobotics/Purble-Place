@@ -6,8 +6,8 @@
 What it does
 ------------
 1. Syncs the real match schedule (incl. YouTube match videos) from TBA.
-2. Syncs EVERY team at the event from TBA — profile, avatar, robot photos,
-   Statbotics EPA — plus the home teams (418 Purple Haze, 436 Purple Rain).
+2. Syncs EVERY team at the event from TBA: profile, avatar, robot photos,
+   Statbotics EPA: plus the home teams (418 Purple Haze, 436 Purple Rain).
 3. Generates synthetic scouting entries for the played matches so rankings,
    heatmaps and the Data Picklist have data. Synthetic skill is derived from
    each team's real EPA, so the numbers are plausible.
@@ -18,7 +18,7 @@ What it does
 
 Everything is idempotent: re-running wipes and rebuilds this event's documents.
 
-Cost note: this is the most Firestore-expensive thing HazeHub does — roughly
+Cost note: this is the most Firestore-expensive thing HazeHub does: roughly
 one write per team, per match and per synthetic entry (a few thousand for a
 district championship). Run it **once** while setting up, not repeatedly, and
 check ``GET /api/admin/firestore-usage`` afterwards.

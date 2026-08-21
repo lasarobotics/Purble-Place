@@ -29,8 +29,8 @@ interface Health {
       /** Every unscouted chair: which match, which alliance, which station. */
       slots: { match: number; alliance: "red" | "blue"; station: number; team: number }[];
     };
-    /** Robots scouted by more than one person. Kept on purpose — this is
-     *  coverage, not a fault — so it is reported apart from the findings. */
+    /** Robots scouted by more than one person. Kept on purpose: this is
+     *  coverage, not a fault: so it is reported apart from the findings. */
     double_scouted?: { count: number; items: { match: number; team: number; count: number }[] };
     duplicates: { count: number; items: { match: number; team: number; count: number }[] };
     wrong_team: { count: number; items: { match: number; team: number; scout_id: string; alliance?: string; station?: number }[] };
@@ -85,7 +85,7 @@ export default function SystemHealthPage() {
   }, [load]);
 
   if (err) return <div className="card" style={{ borderColor: "var(--red)" }}><h3>System Health</h3><p>{err}</p></div>;
-  if (!h) return <Loading label="Reading cloud diagnostics…" />;
+  if (!h) return <Loading label="Reading cloud diagnostics..." />;
 
   const dbOk = h.database.reachable;
   const rec = h.reconciliation;

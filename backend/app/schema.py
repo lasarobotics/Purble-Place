@@ -1,4 +1,4 @@
-"""Firestore schema for HazeHub — collections, document IDs, index policy.
+"""Firestore schema for HazeHub: collections, document IDs, index policy.
 
 This is the single place that describes *how* the HazeHub DB schema is laid
 out in Cloud Firestore. ``models.py`` serialises to these shapes and
@@ -27,7 +27,7 @@ Relational → Firestore translation
 ----------------------------------
 * Every table becomes a **top-level collection with the same name**. Firestore
   has no joins, so ``event_key`` stays a field (not a subcollection path) and
-  every event-scoped query is a single equality filter — which Firestore
+  every event-scoped query is a single equality filter: which Firestore
   serves from the automatic single-field index, so **no composite indexes are
   required by this app**.
 * Surrogate keys (``BIGSERIAL``) become deterministic document IDs. That is
@@ -67,6 +67,8 @@ APP_SETTINGS = "app_settings"
 SYNC_OUTBOX = "sync_outbox"
 NETWORK_STATUS = "network_status"
 DEVICES = "devices"
+#: One rolled-up document per finished event (see app/archive.py).
+EVENT_ARCHIVES = "event_archives"
 
 ALL_COLLECTIONS = (
     SCOUTERS,
@@ -81,17 +83,18 @@ ALL_COLLECTIONS = (
     SYNC_OUTBOX,
     NETWORK_STATUS,
     DEVICES,
+    EVENT_ARCHIVES,
 )
 
 #: Collections mirrored into RAM in full. Small, global, read on every page.
-GLOBAL_CACHED = (SCOUTERS, EVENTS, TEAM_CACHE, APP_SETTINGS, DEVICES)
+GLOBAL_CACHED = (SCOUTERS, EVENTS, TEAM_CACHE, APP_SETTINGS, DEVICES, EVENT_ARCHIVES)
 
 #: Collections mirrored into RAM filtered to the current event. These grow
 #: with the competition, so scoping the listener to one event keeps both the
 #: memory footprint and the listener's initial read cost bounded.
 EVENT_SCOPED_CACHED = (MATCHES, MATCH_SCOUTING, PICKLISTS, BETS, PIT_SCOUTING)
 
-#: Written but never listened to — nothing in the UI reads them hot.
+#: Written but never listened to: nothing in the UI reads them hot.
 WRITE_ONLY = (SYNC_OUTBOX, NETWORK_STATUS)
 
 
@@ -99,7 +102,7 @@ WRITE_ONLY = (SYNC_OUTBOX, NETWORK_STATUS)
 # Document IDs                                                                 #
 # --------------------------------------------------------------------------- #
 def match_id(event_key: str, comp_level: str, match_num: int) -> str:
-    """TBA-style match key, e.g. ``2026txman_qm12`` — also the document ID."""
+    """TBA-style match key, e.g. ``2026txman_qm12``: also the document ID."""
     return f"{event_key}_{comp_level}{int(match_num)}"
 
 
@@ -155,7 +158,7 @@ MAX_BATCH_BYTES = 8 * 1024 * 1024
 MIN_DOC_WRITE_INTERVAL_S = 1.0
 
 #: Firestore caps ``in`` / ``array-contains-any`` at 30 values. The cache
-#: serves every multi-key lookup from RAM, so we never issue one — this
+#: serves every multi-key lookup from RAM, so we never issue one: this
 #: constant exists so a future query can assert against it.
 MAX_IN_CLAUSE = 30
 
@@ -186,7 +189,7 @@ INDEX_EXEMPT_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 #: Fields each event-scoped collection is filtered by. Single equality filters
-#: only — served by Firestore's automatic single-field indexes, so this app
+#: only: served by Firestore's automatic single-field indexes, so this app
 #: ships zero composite indexes.
 EVENT_FILTER_FIELD = "event_key"
 

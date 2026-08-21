@@ -11,6 +11,7 @@ from ..auth import (
     verify_team_password,
 )
 from ..config import settings
+from ..game import GAME
 from ..models import Scouter
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -71,3 +72,19 @@ def public_config() -> dict:
         "environment": settings.ENVIRONMENT,
         "home_teams": settings.HOME_TEAMS,
     }
+
+
+# The season definition is public and unauthenticated on purpose: the scouting
+# form needs it to render, and a device that has gone offline mid-event should
+# be able to fetch and cache it without a round trip through sign-in.
+game_router = APIRouter(prefix="/api/game", tags=["game"])
+
+
+@game_router.get("")
+def game_definition() -> dict:
+    """What game is being scouted: scoring values, endgame levels, tags.
+
+    Everything here comes from ``app/game.py``. Edit that file for a new
+    season and the scouting form follows without a frontend change.
+    """
+    return GAME.to_dict()

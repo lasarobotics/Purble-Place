@@ -73,7 +73,7 @@ export default function LoginPage() {
           </label>
 
           <button className="btn primary block" disabled={busy} type="submit">
-            {busy ? "Signing in…" : "Sign in"}
+            {busy ? "Signing in..." : "Sign in"}
           </button>
         </form>
       </div>

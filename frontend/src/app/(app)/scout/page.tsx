@@ -10,30 +10,11 @@ import { FieldInput } from "@/components/Field";
 import { Confirm, Segmented, Stepper, Rating, TeamIdentity } from "@/components/ui";
 import { BettingPanel } from "@/components/BettingPanel";
 import { matchLabel } from "@/lib/format";
+import { useGame } from "@/lib/game";
 
 const STATION_KEY = "hazehub.station";
 
-// Structured qualitative tags, one tap each, aggregated per team so picklist
-// meetings see *what kind* of robot this is (TideScout-style qual insights).
-const QUICK_TAGS: { tag: string; tone: "good" | "bad" }[] = [
-  { tag: "Fast cycles", tone: "good" },
-  { tag: "Strong auto", tone: "good" },
-  { tag: "Clutch climb", tone: "good" },
-  { tag: "Great defense", tone: "good" },
-  { tag: "Smart driver", tone: "good" },
-  { tag: "Consistent", tone: "good" },
-  { tag: "Good under pressure", tone: "good" },
-  { tag: "Great partner", tone: "good" },
-  { tag: "Died on field", tone: "bad" },
-  { tag: "Dropped pieces", tone: "bad" },
-  { tag: "Slow cycles", tone: "bad" },
-  { tag: "Tippy / unstable", tone: "bad" },
-  { tag: "Penalty prone", tone: "bad" },
-  { tag: "Struggled vs defense", tone: "bad" },
-  { tag: "Comms issues", tone: "bad" },
-];
-
-const blank = (): ScoutEntry => ({
+const blank = (endgameNone = "none"): ScoutEntry => ({
   match_number: 1,
   comp_level: "qm",
   team_number: 0,
@@ -42,7 +23,7 @@ const blank = (): ScoutEntry => ({
   auto_leave: false,
   auto_climb: false,
   heatmap: [],
-  climb: "none",
+  climb: endgameNone,
   tags: [],
   played_defense: false,
   defense_rating: 0,
@@ -79,12 +60,19 @@ function Step({ n, title, hint, children }: { n: number; title: string; hint?: s
 
 export default function ScoutPage() {
   const toast = useToast();
-  const [f, setF] = useState<ScoutEntry>(blank());
+  // Endgame levels and quick tags come from backend/app/game.py, so a new
+  // season changes the form without a frontend change.
+  const game = useGame();
+  const [f, setF] = useState<ScoutEntry>(() => blank());
   const [matches, setMatches] = useState<MatchRec[]>([]);
   const [scheduleSource, setScheduleSource] = useState<ScheduleSource>("none");
   const [scheduleSavedAt, setScheduleSavedAt] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [pendingSlot, setPendingSlot] = useState<SlotChange | null>(null);
+  // A submitted report leaves the screen instantly (the form resets for the
+  // next match), so without this a scout has no idea whether the tap landed.
+  // The stamp is the receipt: it names the team and says where the record is.
+  const [receipt, setReceipt] = useState<{ team: number; detail: string; queued: boolean } | null>(null);
   const set = <K extends keyof ScoutEntry>(k: K, v: ScoutEntry[K]) => setF((p) => ({ ...p, [k]: v }));
 
   // Restore remembered alliance/station, then refine from the server.
@@ -170,15 +158,16 @@ export default function ScoutPage() {
     try {
       const res = await api<{ entry: ScoutEntry }>("/api/scout", { method: "POST", body: entry });
       await markAcknowledged([submissionId], res.entry.azure_received_at || undefined);
-      toast(f.no_show ? `No-show recorded for ${f.team_number}` : `Confirmed · team ${f.team_number} · ${res.entry.points} pts`, "ok");
+      showReceipt(f.team_number, f.no_show ? "No show recorded" : `${res.entry.points} pts saved`, false);
       resetForNext();
     } catch (err: any) {
       if (err?.status === 409) {
         await markStatus(submissionId, "conflict", err.message);
-        toast("Conflict, this submission UUID already exists with different data", "err");
+        toast("This submission already exists with different data", "err");
       } else {
-        // Offline or server error → already saved locally, sync later.
-        toast("Saved locally, will sync when connected", "info");
+        // Offline or server error. It is already on the device, so this is a
+        // delay rather than a loss, and the receipt says so.
+        showReceipt(f.team_number, "Saved on this device", true);
         flushQueue();
       }
       resetForNext();
@@ -187,9 +176,14 @@ export default function ScoutPage() {
     }
   }
 
+  function showReceipt(team: number, detail: string, queued: boolean) {
+    setReceipt({ team, detail, queued });
+    window.setTimeout(() => setReceipt(null), 2200);
+  }
+
   function resetForNext() {
     setF((p) => ({
-      ...blank(),
+      ...blank(game.endgame_none),
       alliance: p.alliance,
       station: p.station,
       comp_level: p.comp_level,
@@ -331,14 +325,9 @@ export default function ScoutPage() {
           {!f.no_show && (
             <>
               {/* 3, endgame */}
-              <Step n={3} title="Endgame climb">
+              <Step n={3} title={game.endgame_label}>
                 <Segmented
-                  options={[
-                    { value: "none", label: "No climb" },
-                    { value: "l1", label: "L1" },
-                    { value: "l2", label: "L2" },
-                    { value: "l3", label: "L3" },
-                  ]}
+                  options={game.endgame.map((l) => ({ value: l.key, label: l.label }))}
                   value={f.climb}
                   onChange={(v) => set("climb", v)}
                 />
@@ -378,7 +367,7 @@ export default function ScoutPage() {
               {/* 5, quick tags */}
               <Step n={5} title="Quick tags" hint="Tap anything you saw, these build the team's profile.">
                 <div className="tag-list">
-                  {QUICK_TAGS.map(({ tag, tone }) => {
+                  {game.tags.map(({ tag, tone }) => {
                     const on = f.tags.includes(tag);
                     return (
                       <button
@@ -413,7 +402,7 @@ export default function ScoutPage() {
                 )}
                 <label className="field" style={{ margin: 0 }}>
                   <span>Comments?</span>
-                  <textarea value={f.notes} onChange={(e) => set("notes", e.target.value)} placeholder="Strategy, partner compatibility, driver decisions…" />
+                  <textarea value={f.notes} onChange={(e) => set("notes", e.target.value)} placeholder="Strategy, partner compatibility, driver decisions..." />
                 </label>
               </Step>
             </>
@@ -431,13 +420,23 @@ export default function ScoutPage() {
           <b>{matchLabel(f.comp_level, f.match_number)}</b>
           <span>{f.team_number ? `Team ${f.team_number}` : "No team yet"}{f.no_show ? " · NO SHOW" : ""}</span>
         </div>
-        <button className="btn ghost" type="button" onClick={() => setF((p) => ({ ...blank(), alliance: p.alliance, station: p.station, match_number: p.match_number }))}>
+        <button className="btn ghost" type="button" onClick={() => setF((p) => ({ ...blank(game.endgame_none), alliance: p.alliance, station: p.station, match_number: p.match_number }))}>
           Clear
         </button>
         <button className="btn primary submit-cta" type="button" onClick={submit} disabled={busy}>
-          {busy ? "Saving…" : "Submit →"}
+          {busy ? "Saving..." : "Submit →"}
         </button>
       </div>
+
+      {receipt && (
+        <div className={"submit-receipt" + (receipt.queued ? " queued" : "")} role="status">
+          <span className="submit-receipt-mark" aria-hidden />
+          <span className="submit-receipt-text">
+            <b>Team {receipt.team}</b>
+            <span>{receipt.detail}</span>
+          </span>
+        </div>
+      )}
 
       {pendingSlot && (
         <Confirm

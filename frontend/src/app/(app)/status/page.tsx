@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { getDeviceId, queueStats, requestPersistentStorage, type QueueStats } from "@/lib/db";
+import { useOffline } from "@/lib/offline";
 import { exportJSONL, importJSONL, retryNow } from "@/lib/sync";
 import { useLiveRefetch } from "@/lib/bus";
 import { useToast } from "@/lib/toast";
@@ -27,6 +28,7 @@ export default function DeviceStatusPage() {
   const toast = useToast();
   const [deviceId, setDeviceId] = useState("");
   const [persisted, setPersisted] = useState<boolean | null>(null);
+  const offline = useOffline();
   const [stats, setStats] = useState<QueueStats | null>(null);
   const [apiStatus, setApiStatus] = useState<"unknown" | "ok" | "down">("unknown");
   const [busy, setBusy] = useState("");
@@ -91,7 +93,7 @@ export default function DeviceStatusPage() {
     }
   }
 
-  if (!stats) return <Loading label="Reading local database…" />;
+  if (!stats) return <Loading label="Reading local database..." />;
 
   return (
     <div>
@@ -114,14 +116,24 @@ export default function DeviceStatusPage() {
           <h3>Device</h3>
           <div className="report-grid" style={{ marginTop: 0 }}>
             <div><div className="faint">Scout</div><p>{session?.display_name || "-"}</p></div>
-            <div><div className="faint">Device ID</div><p className="mono" style={{ fontSize: "0.78rem" }}>{deviceId || "…"}</p></div>
+            <div><div className="faint">Device ID</div><p className="mono" style={{ fontSize: "0.78rem" }}>{deviceId || "..."}</p></div>
             <div>
               <div className="faint">Persistent storage</div>
-              <p>{persisted === null ? "Checking…" : persisted ? "Enabled" : "Not guaranteed, avoid clearing browser data"}</p>
+              <p>{persisted === null ? "Checking..." : persisted ? "Enabled" : "Not guaranteed, avoid clearing browser data"}</p>
             </div>
             <div>
               <div className="faint">Cloud API</div>
               <p>{apiStatus === "unknown" ? "Not tested yet" : apiStatus === "ok" ? "Reachable" : "Unreachable"}</p>
+            </div>
+            <div>
+              <div className="faint">Offline app</div>
+              <p>
+                {!offline.supported
+                  ? "Not available in this browser"
+                  : offline.ready
+                    ? "Cached, this device can scout with no signal"
+                    : "Caching, keep this page open for a moment"}
+              </p>
             </div>
           </div>
         </div>
@@ -166,15 +178,15 @@ export default function DeviceStatusPage() {
           </p>
           <div className="btn-row">
             <button className="btn primary" disabled={!!busy} onClick={doRetry}>
-              {busy === "retry" ? "Retrying…" : "Retry queued records"}
+              {busy === "retry" ? "Retrying..." : "Retry queued records"}
             </button>
             <button className="btn" onClick={() => doExport(true)}>Export queued</button>
             <button className="btn" onClick={() => doExport(false)}>Export all records</button>
             <button className="btn" disabled={!!busy} onClick={() => fileRef.current?.click()}>
-              {busy === "import" ? "Importing…" : "Import recovery file"}
+              {busy === "import" ? "Importing..." : "Import recovery file"}
             </button>
             <button className="btn ghost" disabled={!!busy} onClick={connectionTest}>
-              {busy === "test" ? "Testing…" : "Run connection test"}
+              {busy === "test" ? "Testing..." : "Run connection test"}
             </button>
           </div>
           <input

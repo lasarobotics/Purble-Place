@@ -8,6 +8,7 @@ import { emitBus } from "@/lib/bus";
 import { flushQueue } from "@/lib/sync";
 import { pendingCount, requestPersistentStorage } from "@/lib/db";
 import { useBattery } from "@/lib/battery";
+import { useOffline } from "@/lib/offline";
 import { Loading } from "./ui";
 import { Icon } from "./icons";
 import { ROLE_LABEL } from "@/lib/types";
@@ -61,6 +62,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const [pending, setPending] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
   const battery = useBattery();
+  // Registers the service worker that keeps the app loadable with no signal.
+  const offline = useOffline();
 
   useEffect(() => {
     if (!loading && !session) router.replace("/login");
@@ -114,8 +117,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
     };
   }, [online]);
 
-  if (loading) return <Loading label="Connecting to HazeHub…" />;
-  if (!session) return <Loading label="Redirecting…" />;
+  if (loading) return <Loading label="Connecting to HazeHub..." />;
+  if (!session) return <Loading label="Redirecting..." />;
 
   const isActive = (href: string) =>
     href === "/admin" ? pathname === "/admin" : pathname.startsWith(href);
@@ -189,7 +192,16 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 <Icon name="refresh" size={12} /> {pending} queued
               </span>
             )}
-            <span className="badge muted" title={online ? "Online" : "Offline, saving locally"}>
+            <span
+              className="badge muted"
+              title={
+                online
+                  ? "Connected"
+                  : offline.ready
+                    ? "No connection. The app is running from the copy on this device and your scouting is queued."
+                    : "No connection. Your scouting is queued on this device."
+              }
+            >
               <span className={"dot " + (online ? "green" : "red")} /> {online ? "Live" : "Offline"}
             </span>
             {/* A flat battery is what actually ends a scout's day, so the
@@ -208,7 +220,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <span className="badge haze">{session.bucks} PB</span>
           </div>
         </header>
-        {!online && <div className="offline-bar">Offline, your scouting is saved on this device and will sync automatically.</div>}
+        {!online && (
+          <div className="offline-bar">
+            No connection. Your scouting is saved on this device and syncs automatically.
+            {offline.ready ? " The app itself is cached, so reloading is safe." : ""}
+          </div>
+        )}
         <main className="content">{children}</main>
       </div>
 

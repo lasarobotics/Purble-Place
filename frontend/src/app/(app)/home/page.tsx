@@ -67,24 +67,27 @@ export default function HomePage() {
 
   return (
     <div className="landing">
+      {/* A header line, not a hero. It answers "what am I doing next" in one
+          row and gets out of the way of the data underneath. */}
       <section className="hero">
-        <p className="hero-kicker">
-          {cur?.event ? <>Live at <b>{cur.event}</b></> : "No event set yet"}
-        </p>
-        <h1 className="hero-title">
-          Hey {firstName}. {" "}
-          {nextMatch
-            ? <>let&apos;s scout <span className="haze-text">{matchLabel(nextMatch.comp_level, nextMatch.match_number)}</span></>
-            : <>ready when <span className="haze-text">the schedule is</span></>}
-        </h1>
+        <div>
+          <p className="hero-kicker">
+            {cur?.event ? <>Live at <b>{cur.event}</b></> : "No event set"}
+          </p>
+          <h1 className="hero-title">
+            {firstName}, {nextMatch
+              ? <>next up is {matchLabel(nextMatch.comp_level, nextMatch.match_number)}</>
+              : <>the schedule is not published yet</>}
+          </h1>
+        </div>
         <div className="hero-cta">
-          <Link href="/scout" className="btn primary lg">Scout the next match →</Link>
           {me && (
             <span className="hero-stat">
               <b className="mono">{session?.bucks ?? 0} PB</b>
-              <span>rank #{me.rank}{openBets.length ? ` · ${openBets.length} open bet${openBets.length > 1 ? "s" : ""}` : ""}</span>
+              <span>rank {me.rank}{openBets.length ? `, ${openBets.length} open bet${openBets.length > 1 ? "s" : ""}` : ""}</span>
             </span>
           )}
+          <Link href="/scout" className="btn primary">Scout the next match</Link>
         </div>
       </section>
 

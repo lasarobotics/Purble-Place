@@ -59,7 +59,7 @@ async def _get_json(
     if cached is not None and age < ttl:
         return cached
 
-    # A User-Agent is REQUIRED — The Blue Alliance sits behind Cloudflare, which
+    # A User-Agent is REQUIRED: The Blue Alliance sits behind Cloudflare, which
     # blocks requests with no UA (HTTP 403, error 1010).
     req_headers = {"User-Agent": "HazeHub/1.0 (FRC scouting platform)"}
     req_headers.update(headers or {})
@@ -73,7 +73,7 @@ async def _get_json(
             return payload
         if resp.status_code == 404:
             return None
-    except Exception:  # noqa: BLE001 — network down; fall through to stale cache
+    except Exception:  # noqa: BLE001: network down; fall through to stale cache
         pass
 
     return cached
@@ -107,7 +107,7 @@ async def sync_event_matches(event_key: str) -> list[MatchRecord]:
     This runs every time an admin advances the current match, so it is written
     to be nearly free: the rows are diffed against the cached copies and
     ``repo.save_matches`` only commits the ones that actually changed. A
-    typical advance writes 1–2 documents instead of the whole 120-match
+    typical advance writes 1-2 documents instead of the whole 120-match
     schedule.
     """
     data = await tba(f"/event/{event_key}/matches")

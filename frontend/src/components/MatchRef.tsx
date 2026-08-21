@@ -8,13 +8,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import {
+  ALL_MATCHES,
   activeRefAt,
   completeRef,
   fieldLabel,
+  fieldsFor,
   hasRefs,
   parseNote,
-  REF_FIELDS,
+  refLabel,
   type ActiveRef,
+  type RefTarget,
 } from "@/lib/matchref";
 import type { MatchReport } from "@/lib/types";
 import { Modal } from "@/components/ui";
@@ -30,7 +33,7 @@ import { Modal } from "@/components/ui";
  * gets pulled out of the match.
  */
 export function NoteText({ note, team }: { note: string; team: number }) {
-  const [open, setOpen] = useState<{ match: number; field: string } | null>(null);
+  const [open, setOpen] = useState<{ match: RefTarget; field: string } | null>(null);
   const segments = useMemo(() => parseNote(note || ""), [note]);
   if (!note) return null;
 
@@ -45,14 +48,18 @@ export function NoteText({ note, team }: { note: string; team: number }) {
               key={i}
               type="button"
               className="match-ref"
-              title={`Qual ${seg.match} · ${fieldLabel(seg.field)} for team ${team}`}
+              title={
+                seg.match === ALL_MATCHES
+                  ? `${fieldLabel(seg.field)} across every match for team ${team}`
+                  : `Qual ${seg.match} report for team ${team}`
+              }
               onClick={(e) => {
                 // These sit inside cards that open a team modal of their own.
                 e.stopPropagation();
                 setOpen({ match: seg.match, field: seg.field });
               }}
             >
-              Q{seg.match}
+              {refLabel(seg.match)}
               {seg.field !== "all" && <span className="match-ref-field">{fieldLabel(seg.field)}</span>}
             </button>
           )
@@ -71,10 +78,10 @@ export function NoteText({ note, team }: { note: string; team: number }) {
 }
 
 // --------------------------------------------------------------------------
-// The popup
+// Reading a report
 // --------------------------------------------------------------------------
 
-const NA = "—";
+const NA = "-";
 
 function climbLabel(v: string) {
   return v && v !== "none" ? v.toUpperCase() : "No climb";
@@ -90,26 +97,39 @@ function heatCounts(report: MatchReport) {
   return c;
 }
 
-/** The rows shown for a given field. `all` returns every row. */
-function rowsFor(field: string, r: MatchReport): { label: string; value: React.ReactNode }[] {
+interface Row {
+  key: string;
+  label: string;
+  value: React.ReactNode;
+}
+
+/** Every row of one report, in a fixed order. */
+function reportRows(r: MatchReport): Row[] {
   const c = heatCounts(r);
-  const all: Record<string, { label: string; value: React.ReactNode }> = {
-    points: { label: "Points", value: r.points ?? NA },
-    auto: {
+  return [
+    { key: "points", label: "Points", value: r.points ?? NA },
+    {
+      key: "auto",
       label: "Auto",
-      value: `${r.auto_leave ? "left the zone" : "stayed put"}${r.auto_climb ? ", auto climb" : ""} · ${c.autoMade}/${c.autoMade + c.autoMiss} scored`,
+      value: `${r.auto_leave ? "left the zone" : "stayed put"}${r.auto_climb ? ", auto climb" : ""}, ${c.autoMade}/${c.autoMade + c.autoMiss} scored`,
     },
-    climb: { label: "Climb", value: climbLabel(r.climb) },
-    defense: {
+    { key: "climb", label: "Climb", value: climbLabel(r.climb) },
+    {
+      key: "defense",
       label: "Defense",
       value: r.played_defense
         ? `${r.defense_rating}/5, ${r.successful_stops} stop${r.successful_stops === 1 ? "" : "s"}${r.defense_on ? ` on ${r.defense_on}` : ""}`
         : "Did not play defense",
     },
-    driver: { label: "Driver skill", value: `${r.driver_skill}/5` },
-    speed: { label: "Speed / cycling", value: `${r.speed_rating}/5 · ${c.teleMade}/${c.teleMade + c.teleMiss} scored in teleop` },
-    fouls: { label: "Fouls", value: r.fouls },
-    tags: {
+    { key: "driver", label: "Driver skill", value: `${r.driver_skill}/5` },
+    {
+      key: "speed",
+      label: "Speed / cycling",
+      value: `${r.speed_rating}/5, ${c.teleMade}/${c.teleMade + c.teleMiss} scored in teleop`,
+    },
+    { key: "fouls", label: "Fouls", value: r.fouls },
+    {
+      key: "tags",
       label: "Quick tags",
       value: r.tags?.length ? (
         <span className="tag-list">
@@ -117,8 +137,9 @@ function rowsFor(field: string, r: MatchReport): { label: string; value: React.R
         </span>
       ) : "None tapped",
     },
-    notes: { label: "Scout comments", value: r.notes || "Nothing written" },
-    reliability: {
+    { key: "notes", label: "Scout comments", value: r.notes || "Nothing written" },
+    {
+      key: "reliability",
       label: "Reliability",
       value: r.no_show
         ? "Never showed up"
@@ -126,10 +147,16 @@ function rowsFor(field: string, r: MatchReport): { label: string; value: React.R
           ? `Broke down${r.failure_details ? `: ${r.failure_details}` : ""}`
           : "No problems reported",
     },
-  };
-  if (field !== "all" && all[field]) return [all[field]];
-  return Object.values(all);
+  ];
 }
+
+function rowFor(field: string, r: MatchReport): Row | undefined {
+  return reportRows(r).find((row) => row.key === field);
+}
+
+// --------------------------------------------------------------------------
+// The popup
+// --------------------------------------------------------------------------
 
 export function MatchRefModal({
   match,
@@ -137,63 +164,145 @@ export function MatchRefModal({
   team,
   onClose,
 }: {
-  match: number;
+  match: RefTarget;
   field: string;
   team: number;
   onClose: () => void;
 }) {
   const [reports, setReports] = useState<MatchReport[] | null>(null);
   const [error, setError] = useState("");
+  const everyMatch = match === ALL_MATCHES;
 
   useEffect(() => {
     let alive = true;
-    api<MatchReport[]>(`/api/scout/match/${match}`)
+    const path = everyMatch ? `/api/scout/team/${team}` : `/api/scout/match/${match}`;
+    api<MatchReport[]>(path)
       .then((rows) => {
         if (!alive) return;
-        setReports(rows.filter((r) => r.team_number === team));
+        setReports(everyMatch ? rows : rows.filter((r) => r.team_number === team));
       })
-      .catch((e) => alive && setError(e?.message || "Could not load that match"));
+      .catch((e) => alive && setError(e?.message || "Could not load that scouting"));
     return () => { alive = false; };
-  }, [match, team]);
+  }, [match, team, everyMatch]);
+
+  const subtitle = everyMatch
+    ? `${fieldLabel(field)}, every match`
+    : field === "all"
+      ? "Full scouting report"
+      : `Full report, ${fieldLabel(field)} highlighted`;
 
   return (
     <Modal onClose={onClose}>
       <div className="ref-modal">
         <div className="card-h">
           <div>
-            <h3 style={{ margin: 0 }}>Qual {match} · Team {team}</h3>
-            <span className="faint" style={{ fontSize: "0.76rem" }}>
-              {field === "all" ? "Full scouting report" : fieldLabel(field)}
-            </span>
+            <h3>{everyMatch ? `Team ${team}` : `Qual ${match}, team ${team}`}</h3>
+            <span className="ref-modal-sub">{subtitle}</span>
           </div>
           <button className="btn sm ghost" onClick={onClose}>Close</button>
         </div>
 
-        {error && <p className="faint">{error}</p>}
-        {!error && reports === null && <p className="faint">Loading…</p>}
+        {error && <p className="muted">{error}</p>}
+        {!error && reports === null && <RefSkeleton />}
+
         {reports?.length === 0 && (
-          <p className="faint" style={{ margin: 0 }}>
-            Nobody scouted team {team} in qual {match}, so there is nothing to show.
+          <p className="muted empty-line">
+            {everyMatch
+              ? `Nobody has scouted team ${team} at this event yet.`
+              : `Nobody scouted team ${team} in qual ${match}, so there is nothing to show.`}
           </p>
         )}
 
-        {reports?.map((r, i) => (
-          <div key={r.submission_id || r.client_uuid || i} className="ref-report">
-            {reports.length > 1 && (
-              <div className="faint ref-report-who">Reported by {r.scout_id || "unknown scout"}</div>
-            )}
-            <dl className="ref-rows">
-              {rowsFor(field, r).map((row) => (
-                <div key={row.label}>
-                  <dt>{row.label}</dt>
-                  <dd>{row.value}</dd>
-                </div>
-              ))}
-            </dl>
-          </div>
-        ))}
+        {reports && reports.length > 0 && (
+          everyMatch
+            ? <AcrossMatches reports={reports} field={field} />
+            : <SingleMatch reports={reports} field={field} />
+        )}
       </div>
     </Modal>
+  );
+}
+
+/**
+ * One match, whole report.
+ *
+ * A field on the reference narrows attention rather than hiding context: a
+ * fouls count on its own says nothing, but a fouls count next to the points,
+ * the defense rating and the scout's comments from that same match is an
+ * argument. So the row is marked and the rest stays.
+ */
+function SingleMatch({ reports, field }: { reports: MatchReport[]; field: string }) {
+  return (
+    <>
+      {reports.map((r, i) => (
+        <div key={r.submission_id || r.client_uuid || i} className="ref-report">
+          {reports.length > 1 && (
+            <div className="ref-report-who">
+              Reported by {r.scout_id || "unknown scout"}
+            </div>
+          )}
+          <dl className="ref-rows">
+            {reportRows(r).map((row) => (
+              <div key={row.key} className={row.key === field ? "ref-row-marked" : undefined}>
+                <dt>{row.label}</dt>
+                <dd>{row.value}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      ))}
+      {reports.length > 1 && (
+        <p className="ref-foot">
+          {reports.length} scouts watched this robot in this match. Every report is
+          kept, so you are reading all of them.
+        </p>
+      )}
+    </>
+  );
+}
+
+/**
+ * One measurement, every match.
+ *
+ * The opposite question to a single match: not "what happened in qual 42" but
+ * "does this robot climb". So it shows only the asked-for field, once per
+ * match, in match order, and nothing else.
+ */
+function AcrossMatches({ reports, field }: { reports: MatchReport[]; field: string }) {
+  const rows = reports
+    .map((r) => ({ report: r, row: rowFor(field, r) }))
+    .filter((x) => x.row);
+  const matches = new Set(reports.map((r) => r.match_number)).size;
+
+  return (
+    <>
+      <ul className="ref-across">
+        {rows.map(({ report, row }, i) => (
+          <li key={report.submission_id || report.client_uuid || i}>
+            <span className="ref-across-match">Q{report.match_number}</span>
+            <span className="ref-across-value">{row!.value}</span>
+            <span className="ref-across-scout">{report.scout_id || ""}</span>
+          </li>
+        ))}
+      </ul>
+      <p className="ref-foot">
+        {rows.length} report{rows.length === 1 ? "" : "s"} across {matches} match
+        {matches === 1 ? "" : "es"}.
+      </p>
+    </>
+  );
+}
+
+function RefSkeleton() {
+  return (
+    <div className="skeleton-rows" aria-label="Loading">
+      {[0, 1, 2, 3].map((i) => (
+        <div key={i} className="skeleton-row">
+          <span className="skeleton skeleton-label" />
+          <span className="skeleton skeleton-value" />
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -240,7 +349,10 @@ export function NoteEditor({
   }, [readOnly]);
 
   const options = useMemo(
-    () => (active ? REF_FIELDS.filter((f) => !active.query || f.key.startsWith(active.query)) : []),
+    () =>
+      active
+        ? fieldsFor(active.match).filter((f) => !active.query || f.key.startsWith(active.query))
+        : [],
     [active]
   );
 
@@ -298,8 +410,10 @@ export function NoteEditor({
       />
       {active && options.length > 0 && (
         <div className="ref-picker">
-          <div className="ref-picker-head faint">
-            Pull from qual {active.match}
+          <div className="ref-picker-head">
+            {active.match === ALL_MATCHES
+              ? "Pull from every match"
+              : `Pull from qual ${active.match}`}
           </div>
           {options.map((f) => (
             <button
@@ -310,14 +424,17 @@ export function NoteEditor({
               onMouseDown={(e) => { e.preventDefault(); choose(f.key); }}
             >
               <b>{f.label}</b>
-              <span className="faint">{f.hint}</span>
+              <span>
+                {active.match === ALL_MATCHES ? `${f.hint}, every match` : f.hint}
+              </span>
             </button>
           ))}
         </div>
       )}
       {!readOnly && !active && (
-        <p className="note-editor-hint faint">
-          Type <code>@</code> and a qual number to pull in scouting data.
+        <p className="note-editor-hint">
+          Type <code>@</code> and a qual number for one match, or <code>@all</code> for
+          the whole event.
         </p>
       )}
     </div>

@@ -20,7 +20,7 @@ export function apiBase(): string {
   return "http://localhost:8000";
 }
 
-// WebSocket URL for the MegaScout realtime hub (/ws). Derives ws/wss from the
+// WebSocket URL for the realtime hub (/ws). Derives ws/wss from the
 // API base, or from the current origin for same-origin (Nginx) deployments.
 export function wsUrl(): string {
   const base = apiBase();

@@ -205,7 +205,7 @@ async def submit_scout(
             ):
                 raise HTTPException(
                     status_code=409,
-                    detail="Submission UUID exists with a different payload — "
+                    detail="Submission UUID exists with a different payload: "
                     "submit a correction instead of overwriting",
                 )
             return {"ok": True, "duplicate": True, "entry": _entry_dict(existing)}
@@ -246,7 +246,7 @@ async def submit_scout(
         except Exception:  # noqa: BLE001
             pass
 
-    # Acknowledgement: the record is committed to Firestore — the device can
+    # Acknowledgement: the record is committed to Firestore: the device can
     # mark it "acknowledged"; every dashboard refetches.
     emit("submission_ack", {
         "submission_id": entry.submission_id,
@@ -285,6 +285,26 @@ def entries_for_match(
 ) -> list[dict]:
     event_key = repo.resolve_event(event)
     return [_entry_dict(e) for e in repo.scouting_for_match(event_key, match_number)]
+
+
+@router.get("/team/{team_number}")
+def entries_for_team(
+    team_number: int,
+    event: str | None = None,
+    _: Scouter = Depends(current_scouter),
+) -> list[dict]:
+    """Every report on one robot this event, in match order.
+
+    Backs the ``@all:field`` reference in a picklist justification, which
+    pulls one measurement across the whole event rather than one match. Same
+    shape as ``/match/{n}`` so the reader renders both the same way.
+    """
+    event_key = repo.resolve_event(event)
+    rows = sorted(
+        repo.scouting_for_team(event_key, team_number),
+        key=lambda e: (e.match_number, e.id or 0),
+    )
+    return [_entry_dict(e) for e in rows]
 
 
 # --------------------------------------------------------------------------- #

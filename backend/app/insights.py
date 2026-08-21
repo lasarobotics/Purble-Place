@@ -1,4 +1,4 @@
-"""Haze Intel — AI-assisted team summaries grounded in scouting evidence.
+"""Haze Intel: AI-assisted team summaries grounded in scouting evidence.
 
 Every claim in an insight is backed by a number, tag count, or scout note
 pulled straight from the database, so the output is auditable in picklist
@@ -7,10 +7,10 @@ idea).
 
 Two engines:
 
-* **rules** (always available) — a deterministic narrative generator that
+* **rules** (always available): a deterministic narrative generator that
   ranks the team against the rest of the event and writes strengths /
   concerns / verdict with the supporting evidence attached.
-* **claude** (optional) — if the `anthropic` package is installed and
+* **claude** (optional): if the `anthropic` package is installed and
   ``ANTHROPIC_API_KEY`` is set, the same evidence pack is handed to Claude
   to write the narrative. Falls back to rules on any failure, so the
   feature works offline at competitions.
@@ -116,7 +116,7 @@ def _rules_insight(ev: dict[str, Any]) -> dict[str, Any]:
             f"{s['avg_points']} avg pts across {n} matches (bottom {round(p['avg_points'] * 100)}%)")
     if acc_att >= 8:
         if acc >= 0.72:
-            add(strengths, "Efficient shooter — makes what it attempts.",
+            add(strengths, "Efficient shooter: makes what it attempts.",
                 f"{s['counts']['teleop_made']}/{acc_att} teleop attempts made ({round(acc * 100)}%)")
         elif acc <= 0.45:
             add(concerns, "Wastes cycles on missed attempts.",
@@ -127,14 +127,14 @@ def _rules_insight(ev: dict[str, Any]) -> dict[str, Any]:
         add(strengths, "Repeats its performance match after match.",
             f"consistency {s['consistency']} (σ {s['std_points']} pts), {n} matches")
     elif n >= 3 and s["consistency"] <= 0.5:
-        add(concerns, "Boom-or-bust — output swings hard between matches.",
-            f"range {s['min_points']}–{s['max_points']} pts, σ {s['std_points']}")
+        add(concerns, "Boom-or-bust: output swings hard between matches.",
+            f"range {s['min_points']}-{s['max_points']} pts, σ {s['std_points']}")
     if s["failure_rate"] >= 0.25:
         details = "; ".join(f"Q{f['match']}: {f['detail']}" for f in ev["failures"][:3])
-        add(concerns, "Reliability risk — has died or broken on the field.",
+        add(concerns, "Reliability risk: has died or broken on the field.",
             f"failed in {round(s['failure_rate'] * 100)}% of matches ({details})")
     if s.get("no_shows"):
-        add(concerns, "Has no-showed a match — verify they can field the robot.",
+        add(concerns, "Has no-showed a match: verify they can field the robot.",
             f"{s['no_shows']} no-show{'s' if s['no_shows'] != 1 else ''} recorded")
     elif n >= 4 and s["failure_rate"] == 0:
         add(strengths, "Zero recorded failures.", f"{n} clean matches")
@@ -158,7 +158,7 @@ def _rules_insight(ev: dict[str, Any]) -> dict[str, Any]:
         add(concerns, "Scouts rate the driving poorly.",
             f"driver skill {s['avg_driver']}/5 across {n} reports")
     if s["total_fouls"] >= max(3, n):
-        add(concerns, "Foul-prone — could gift points in playoffs.",
+        add(concerns, "Foul-prone: could gift points in playoffs.",
             f"{s['total_fouls']} fouls in {n} matches")
 
     # --- Tags ---
@@ -174,29 +174,29 @@ def _rules_insight(ev: dict[str, Any]) -> dict[str, Any]:
     # --- Film-check suggestions ---
     if s["max_points"] >= s["avg_points"] * 1.6 and n >= 3:
         watch.append(
-            f"Peak of {s['max_points']} pts is {round(s['max_points'] / max(0.1, s['avg_points']), 1)}× its average — "
+            f"Peak of {s['max_points']} pts is {round(s['max_points'] / max(0.1, s['avg_points']), 1)}× its average: "
             "check film whether that ceiling is real or a soft schedule."
         )
     if ev["failures"]:
-        watch.append(f"Re-watch Q{ev['failures'][-1]['match']} — most recent failure ({ev['failures'][-1]['detail']}).")
+        watch.append(f"Re-watch Q{ev['failures'][-1]['match']}: most recent failure ({ev['failures'][-1]['detail']}).")
     if s["defense_rate"] > 0 and s["defense_rate"] < 0.4:
-        watch.append("Has flashed defense — verify on film whether it holds up before slotting as a defense pick.")
+        watch.append("Has flashed defense: verify on film whether it holds up before slotting as a defense pick.")
 
     # --- Verdict ---
     blend = 0.5 * p["avg_points"] + 0.3 * p["consistency"] + 0.2 * p["climb_rate"]
     penalty = 0.25 * s["failure_rate"]
     v = blend - penalty
     if n == 0:
-        verdict, headline = "unknown", "No scouting data yet — send a scout or pull pit data."
+        verdict, headline = "unknown", "No scouting data yet: send a scout or pull pit data."
     elif v >= 0.7:
         verdict = "first-pick"
-        headline = f"{_tier_word(p['avg_points']).capitalize()} scorer with {_tier_word(p['consistency'])} consistency — first-pick material."
+        headline = f"{_tier_word(p['avg_points']).capitalize()} scorer with {_tier_word(p['consistency'])} consistency: first-pick material."
     elif v >= 0.45:
         verdict = "second-pick"
-        headline = "Solid contributor — a dependable second-pick candidate."
+        headline = "Solid contributor: a dependable second-pick candidate."
     elif v >= 0.25:
         verdict = "third-pick"
-        headline = "Situational pick — value depends on what your alliance is missing."
+        headline = "Situational pick: value depends on what your alliance is missing."
     else:
         verdict = "avoid"
         headline = "Data says pass unless film shows something the numbers miss."
@@ -236,7 +236,7 @@ def _claude_insight(ev: dict[str, Any]) -> dict[str, Any] | None:
             max_tokens=1200,
             system=(
                 "You are the strategy analyst for an FRC scouting app. Write a team "
-                "insight grounded ONLY in the evidence JSON provided — every claim "
+                "insight grounded ONLY in the evidence JSON provided: every claim "
                 "must cite a number, tag count, or scout note from it. Be direct and "
                 "picklist-oriented."
             ),

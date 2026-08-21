@@ -216,12 +216,12 @@ export default function PitScoutPage() {
               value={form.notes}
               onChange={(e) => setForm((c) => ({ ...c, notes: e.target.value }))}
               rows={5}
-              placeholder="Drivetrain, intake, climber, auto routines, anything they told you…"
+              placeholder="Drivetrain, intake, climber, auto routines, anything they told you..."
             />
           </label>
 
           <button className="btn primary block" type="submit" disabled={busy}>
-            {busy ? "Saving…" : teamNumber ? `Save pit report for ${teamNumber}` : "Save pit report"}
+            {busy ? "Saving..." : teamNumber ? `Save pit report for ${teamNumber}` : "Save pit report"}
           </button>
         </form>
 

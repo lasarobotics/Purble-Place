@@ -30,7 +30,7 @@ NICKS = {
     1986: "Team Titanium", 2056: "OP Robotics", 2767: "Stryke Force", 3310: "Black Hawk",
 }
 SCOUTS = ["1", "2", "3"]
-# Each scout counts slightly differently — feeds the Consensus Radar.
+# Each scout counts slightly differently: feeds the Consensus Radar.
 SCOUT_BIAS = {"1": 1.0, "2": 0.82, "3": 1.14}
 
 POSITIVE_TAGS = ["Fast cycles", "Strong auto", "Clutch climb", "Great defense",

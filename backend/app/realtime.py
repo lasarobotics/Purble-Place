@@ -1,4 +1,4 @@
-"""Realtime layer — WebSocket fan-out with a polled fallback.
+"""Realtime layer: WebSocket fan-out with a polled fallback.
 
 ``emit`` does two things for every change event:
 
@@ -11,7 +11,7 @@
 Why the feed is not stored in Firestore
 ---------------------------------------
 It used to be an ``activity`` table. In Firestore that would be one document
-write per change plus one delete per expiry — roughly 4,000 write operations
+write per change plus one delete per expiry: roughly 4,000 write operations
 and 4,000 deletes on a competition day, about 40% of the free daily
 allowance, spent on data with a two-hour lifespan that nothing reads after
 the fact. The feed is ephemeral by definition, so it lives in RAM: 60 clients
@@ -133,7 +133,7 @@ def _parse_cursor(since_iso: str) -> datetime | None:
 def events_since(since_iso: str | None) -> dict[str, Any]:
     """Events newer than the ``since`` cursor, plus a fresh cursor.
 
-    The first poll (no cursor) returns no events — clients only care about
+    The first poll (no cursor) returns no events: clients only care about
     changes that happen after they connect.
     """
     now = _now()

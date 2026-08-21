@@ -120,7 +120,7 @@ export default function AdminDashboard() {
           <label className="field"><span>TBA Event Key</span>
             <input value={event} onChange={(e) => setEvent(e.target.value)} placeholder="e.g. 2026txende" />
           </label>
-          <button className="btn primary" onClick={saveEvent} disabled={busy === "event"}>{busy === "event" ? "Loading schedule…" : "Set event & sync schedule"}</button>
+          <button className="btn primary" onClick={saveEvent} disabled={busy === "event"}>{busy === "event" ? "Loading schedule..." : "Set event & sync schedule"}</button>
           <p className="faint" style={{ fontSize: "0.75rem", marginTop: 8 }}>Pulls the match schedule + teams from The Blue Alliance.</p>
         </div>
 

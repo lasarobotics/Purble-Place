@@ -8,11 +8,11 @@ Two naming systems meet in this file, on purpose:
 
 * **Document fields** use the names from the team's DB schema
   (``scouter_id``, ``match_num``, ``team_num``, ``comments``, ``submitted_at``,
-  ``submission_uuid``…), so what is stored in Firestore matches the design doc
+  ``submission_uuid``...), so what is stored in Firestore matches the design doc
   and any SQL export lines up column-for-column.
 * **Python attributes** keep the names the rest of the codebase and the JSON
   API already use (``scout_id``, ``match_number``, ``team_number``, ``notes``,
-  ``created_at``, ``submission_id``…), so analytics, routers and the frontend
+  ``created_at``, ``submission_id``...), so analytics, routers and the frontend
   contract are untouched by the migration.
 
 ``to_doc()`` / ``from_doc()`` are the only places the two vocabularies meet.
@@ -56,8 +56,7 @@ _seq_last = 0
 def next_seq_id() -> int:
     """Monotonic, time-ordered surrogate ID (replaces BIGSERIAL).
 
-    ``ms * 1000 + n`` gives 1000 IDs per millisecond and lands around 1.8e15
-    — under JavaScript's 2^53 safe-integer ceiling, so the frontend can keep
+    ``ms * 1000 + n`` gives 1000 IDs per millisecond and lands around 1.8e15: under JavaScript's 2^53 safe-integer ceiling, so the frontend can keep
     treating IDs as numbers.
     """
     global _seq_last
@@ -159,7 +158,7 @@ def normalize_role(value: Any, *, is_admin: bool = False) -> str:
 
 @dataclass
 class Scouter:
-    """``scouters`` — document ID is ``scouter_id``."""
+    """``scouters``: document ID is ``scouter_id``."""
 
     scout_id: str
     s_number: Optional[int] = None
@@ -223,7 +222,7 @@ class Scouter:
 # --------------------------------------------------------------------------- #
 @dataclass
 class Event:
-    """``events`` — document ID is the TBA ``event_key`` (e.g. 2026txman)."""
+    """``events``: document ID is the TBA ``event_key`` (e.g. 2026txman)."""
 
     event_key: str
     start_date: Optional[date] = None
@@ -239,7 +238,7 @@ class Event:
         start = self.start_date
         return {
             "event_key": self.event_key,
-            # Firestore has no date type — store midnight UTC.
+            # Firestore has no date type: store midnight UTC.
             "start_date": (
                 datetime(start.year, start.month, start.day, tzinfo=timezone.utc)
                 if isinstance(start, date) and not isinstance(start, datetime)
@@ -264,7 +263,7 @@ class Event:
 # --------------------------------------------------------------------------- #
 @dataclass
 class MatchRecord:
-    """``matches`` — document ID is the TBA match key (``2026txman_qm12``)."""
+    """``matches``: document ID is the TBA match key (``2026txman_qm12``)."""
 
     match_key: str
     event_key: str
@@ -345,10 +344,10 @@ class MatchRecord:
 
 
 # --------------------------------------------------------------------------- #
-# match_scouting — one document per robot, per match, per scouter              #
+# match_scouting: one document per robot, per match, per scouter              #
 # --------------------------------------------------------------------------- #
 #: Everything the scouter observed, stored as the nested ``data`` map (the
-#: schema's JSONB column). Exempt from indexing — see schema.INDEX_EXEMPT_FIELDS.
+#: schema's JSONB column). Exempt from indexing: see schema.INDEX_EXEMPT_FIELDS.
 PAYLOAD_KEYS = (
     "heatmap", "auto_leave", "auto_climb", "climb", "climb_seconds",
     "tags", "played_defense", "defense_rating", "defense_on",
@@ -359,7 +358,7 @@ PAYLOAD_KEYS = (
 
 @dataclass
 class ScoutEntry:
-    """``match_scouting`` — document ID **is** ``submission_uuid``.
+    """``match_scouting``: document ID **is** ``submission_uuid``.
 
     Using the client's UUID as the document ID is what makes offline sync
     safe: a device replaying its IndexedDB queue writes to the same document
@@ -459,7 +458,7 @@ class ScoutEntry:
             id=_int(d.get("seq")) or next_seq_id(),
         )
 
-    # ---- payload accessors (analytics reads e.heatmap, e.climb, …) --------- #
+    # ---- payload accessors (analytics reads e.heatmap, e.climb, ...) --------- #
     def _d(self, key: str, default: Any = None) -> Any:
         return (self.data or {}).get(key, default)
 
@@ -581,7 +580,7 @@ class ScoutEntry:
 # --------------------------------------------------------------------------- #
 @dataclass
 class PitEntry:
-    """``pit_scouting`` — document ID ``{event_key}_{team_num}`` (one per team)."""
+    """``pit_scouting``: document ID ``{event_key}_{team_num}`` (one per team)."""
 
     event_key: str
     team_number: int
@@ -827,7 +826,7 @@ class Bet:
 # --------------------------------------------------------------------------- #
 @dataclass
 class TeamCache:
-    """``team_cache`` — document ID is the team number as a string.
+    """``team_cache``: document ID is the team number as a string.
 
     ``avatar`` holds a base64 data URI from TBA (tens of KB) and is exempt
     from indexing; the whole document still has to stay under 1 MiB, which
@@ -895,7 +894,7 @@ class TeamCache:
 # --------------------------------------------------------------------------- #
 @dataclass
 class Device:
-    """``devices`` — one document per Chromebook/tablet on the event LAN."""
+    """``devices``: one document per Chromebook/tablet on the event LAN."""
 
     device_id: str
     role: str = "scouting"                 # scouting / admin / megascout
@@ -940,7 +939,7 @@ class Device:
 # --------------------------------------------------------------------------- #
 @dataclass
 class NetworkStatus:
-    """``network_status`` — a periodic snapshot of the venue uplink.
+    """``network_status``: a periodic snapshot of the venue uplink.
 
     Written at most once a minute (see ``repo.record_network_status``): the
     admin panel reads the live value from memory, so this collection exists
@@ -994,12 +993,12 @@ class NetworkStatus:
 # --------------------------------------------------------------------------- #
 @dataclass
 class OutboxRecord:
-    """``sync_outbox`` — the *server-side tail* of the device outbox.
+    """``sync_outbox``: the *server-side tail* of the device outbox.
 
     The live outbox lives in each device's IndexedDB (``frontend/src/lib/db.ts``);
     mirroring every queued row to Firestore would cost a write per state
-    transition per submission for no benefit. Only terminal failures — records
-    a device gave up on — are written here, so a lead scout can find them
+    transition per submission for no benefit. Only terminal failures: records
+    a device gave up on: are written here, so a lead scout can find them
     after the event without the queue itself costing quota.
     """
 
@@ -1045,6 +1044,63 @@ class OutboxRecord:
 
 
 #: collection name -> model class, used by the cache to hydrate snapshots.
+# --------------------------------------------------------------------------- #
+# event_archives                                                               #
+# --------------------------------------------------------------------------- #
+@dataclass
+class EventArchive:
+    """``event_archives``: one finished event rolled up, document ID is the key.
+
+    Written when an event ends (see app/archive.py). Deliberately a summary
+    and not a copy: the submissions stay where they are, and this is the part
+    that has to stay cheap to read forever.
+    """
+
+    event_key: str
+    name: str = ""
+    season: int = 0
+    game_name: str = ""
+    archived_at: datetime = field(default_factory=_now)
+    counts: dict[str, Any] = field(default_factory=dict)
+    #: ``{team number as string: team_summary(...)}``
+    teams: dict[str, Any] = field(default_factory=dict)
+    pit: list[dict[str, Any]] = field(default_factory=list)
+    picklists: list[dict[str, Any]] = field(default_factory=list)
+
+    COLLECTION = schema.EVENT_ARCHIVES
+
+    @property
+    def doc_id(self) -> str:
+        return self.event_key
+
+    def to_doc(self) -> dict[str, Any]:
+        return {
+            "event_key": self.event_key,
+            "name": self.name or "",
+            "season": _int(self.season),
+            "game_name": self.game_name or "",
+            "archived_at": as_utc(self.archived_at),
+            "counts": dict(self.counts or {}),
+            "teams": dict(self.teams or {}),
+            "pit": list(self.pit or []),
+            "picklists": list(self.picklists or []),
+        }
+
+    @classmethod
+    def from_doc(cls, doc_id: str, d: dict[str, Any]) -> "EventArchive":
+        return cls(
+            event_key=d.get("event_key") or doc_id,
+            name=d.get("name") or "",
+            season=_int(d.get("season")),
+            game_name=d.get("game_name") or "",
+            archived_at=as_utc(d.get("archived_at")) or _now(),
+            counts=dict(d.get("counts") or {}),
+            teams=dict(d.get("teams") or {}),
+            pit=list(d.get("pit") or []),
+            picklists=list(d.get("picklists") or []),
+        )
+
+
 MODEL_FOR_COLLECTION = {
     schema.SCOUTERS: Scouter,
     schema.EVENTS: Event,
@@ -1057,4 +1113,5 @@ MODEL_FOR_COLLECTION = {
     schema.DEVICES: Device,
     schema.NETWORK_STATUS: NetworkStatus,
     schema.SYNC_OUTBOX: OutboxRecord,
+    schema.EVENT_ARCHIVES: EventArchive,
 }

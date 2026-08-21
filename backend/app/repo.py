@@ -1,16 +1,17 @@
-"""Repository layer — every query and mutation HazeHub performs.
+"""Repository layer: every query and mutation HazeHub performs.
 
 This replaces the SQLModel ``Session`` that used to be threaded through every
 router. Reads are served from :mod:`cache` (RAM, zero Firestore cost); writes
 go through the cache's write-through path so the mirror can never drift.
 
-Grouped views (``scouting_for_team``, ``matches_by_number``, …) are rebuilt
+Grouped views (``scouting_for_team``, ``matches_by_number``, ...) are rebuilt
 lazily and memoised against the owning collection's revision counter, so a
 page that asks for one team's reports does not scan every submission at the
-event on every request — it scans once per change.
+event on every request: it scans once per change.
 """
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
@@ -23,6 +24,7 @@ from .models import (
     Bet,
     Device,
     Event,
+    EventArchive,
     MatchRecord,
     NetworkStatus,
     OutboxRecord,
@@ -33,6 +35,8 @@ from .models import (
     TeamCache,
     next_seq_id,
 )
+
+log = logging.getLogger("hazehub.repo")
 
 T = TypeVar("T")
 
@@ -122,7 +126,7 @@ def scouters() -> list[Scouter]:
 def save_scouter(s: Scouter, *, coalesce: bool = False) -> None:
     """Persist a scouter.
 
-    ``coalesce=True`` is for counter bumps (``matches_scouted``) — the change
+    ``coalesce=True`` is for counter bumps (``matches_scouted``): the change
     is visible immediately in memory and lands in Firestore within a couple of
     seconds, collapsing a burst of submissions into one write.
     """
@@ -148,7 +152,7 @@ def next_s_number() -> int:
 # ``last_seen`` is read constantly by the System Health panel but only needs
 # to survive a restart, so it lives in memory and is persisted at most once an
 # hour per scouter. Writing it on every request would cost ~8,600 writes/day
-# for 60 scouts — nearly half the free daily allowance, for a timestamp.
+# for 60 scouts: nearly half the free daily allowance, for a timestamp.
 PRESENCE_PERSIST_S = float(os.getenv("HAZEHUB_PRESENCE_PERSIST", "3600"))
 _presence: dict[str, float] = {}
 _presence_persisted: dict[str, float] = {}
@@ -184,6 +188,96 @@ def last_seen(s: Scouter) -> Optional[datetime]:
 # --------------------------------------------------------------------------- #
 def event(event_key: str) -> Optional[Event]:
     return store.get(schema.EVENTS, event_key)
+
+
+def events() -> list[Event]:
+    """Every event this installation knows about, newest start date first."""
+    rows = store.all(schema.EVENTS)
+    return sorted(
+        rows,
+        key=lambda e: (e.start_date is not None, e.start_date, e.event_key),
+        reverse=True,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# event_archives                                                               #
+# --------------------------------------------------------------------------- #
+def archive(event_key: str) -> Optional[EventArchive]:
+    return store.get(schema.EVENT_ARCHIVES, (event_key or "").strip())
+
+
+def archives() -> list[EventArchive]:
+    """Every archived event, most recently archived first."""
+    return sorted(
+        store.all(schema.EVENT_ARCHIVES),
+        key=lambda a: a.archived_at,
+        reverse=True,
+    )
+
+
+def save_archive(row: EventArchive) -> None:
+    store.write(row)
+
+
+def delete_archive(event_key: str) -> None:
+    store.delete(schema.EVENT_ARCHIVES, (event_key or "").strip())
+
+
+def reconcile_current_event() -> str:
+    """Make sure the current event pointer names an event that exists.
+
+    The pointer is one string in ``app_settings`` and every screen reads
+    through it, so when it goes stale the whole app looks empty: the schedule
+    is blank, scouting returns nothing, and reconciliation reports every match
+    as unscouted, all while the data sits in the datastore under another key.
+
+    Called once at startup, and it only acts when the pointer is unusable, so
+    the normal case costs nothing. An event with a schedule and no scouting is
+    left alone: that is exactly what a competition looks like the morning
+    before it starts. It also refuses to choose between two plausible events,
+    because silently switching events mid-competition would be much worse than
+    an empty page somebody can fix in the dashboard.
+    """
+    current = current_event()
+    known = {e.event_key for e in events()}
+    if current and current in known:
+        return current
+
+    # The match cache only holds the current event, so candidates have to be
+    # counted against the datastore. This runs once, and only when the pointer
+    # is already broken, so the reads are worth it.
+    def match_count(key: str) -> int:
+        try:
+            return len(store.backend.load(schema.MATCHES, key))
+        except Exception:  # noqa: BLE001
+            return 0
+
+    candidates = [e.event_key for e in events() if match_count(e.event_key)]
+
+    if current:
+        log.warning(
+            "current event %r is not a known event; events with a schedule: %s",
+            current, ", ".join(candidates) or "none",
+        )
+
+    if not candidates:
+        log.warning("no event has a schedule; leaving the pointer at %r", current)
+        return current
+
+    if len(candidates) > 1:
+        log.warning(
+            "leaving the current event at %r: %d events have schedules (%s) and "
+            "guessing could switch the event mid-competition. Set it in the "
+            "Admin dashboard.",
+            current or "(unset)", len(candidates), ", ".join(candidates),
+        )
+        return current
+
+    chosen = candidates[0]
+    log.warning("repaired the current event pointer: %r -> %r", current or "(unset)", chosen)
+    set_setting("current_event", chosen)
+    return chosen
 
 
 def save_event(e: Event) -> None:
@@ -283,7 +377,7 @@ def scouting_for_scout(scout_id: str, event_key: str = "") -> list[ScoutEntry]:
 
 
 def scouting_by_submission(submission_id: str) -> Optional[ScoutEntry]:
-    """Look up by submission UUID — the document ID, so this is a dict hit."""
+    """Look up by submission UUID: the document ID, so this is a dict hit."""
     return store.get(schema.MATCH_SCOUTING, (submission_id or "").strip())
 
 
@@ -409,7 +503,7 @@ def bets_for_scout(scout_id: str) -> list[Bet]:
 
 
 def bets_by_scout() -> dict[str, list[Bet]]:
-    """One pass over every bet, memoised — the leaderboard used to run a query
+    """One pass over every bet, memoised: the leaderboard used to run a query
     per scouter, which is 60 scans of the same collection per page load."""
 
     def build() -> dict[str, list[Bet]]:
@@ -498,7 +592,7 @@ def record_device(d: Device) -> None:
     """Upsert a device heartbeat, throttled.
 
     Devices check in often; the panel reads from memory, so Firestore only
-    needs the occasional durable snapshot. Non-essential — the quota guard
+    needs the occasional durable snapshot. Non-essential: the quota guard
     drops these first if a day ever runs hot.
     """
     d.last_seen_at = _now()

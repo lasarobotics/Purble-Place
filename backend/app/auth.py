@@ -6,7 +6,7 @@ closed: ``settings.ACCOUNTS`` lists every ID that exists, those documents are
 written to Firestore at startup, and an ID that is not on the list is refused
 rather than provisioned.
 
-Tokens are stateless HMAC-signed blobs — no extra dependency required, and no
+Tokens are stateless HMAC-signed blobs: no extra dependency required, and no
 datastore round trip to validate one.
 
 Note on Firebase Auth: HazeHub deliberately does **not** use it. Sixty people
@@ -78,7 +78,7 @@ def normalize_id(scout_id: str) -> str:
     """Trim and validate a scouter ID.
 
     The ID becomes a Firestore document ID, so it has to satisfy Firestore's
-    rules (no ``/``, not ``.``/``..``, not ``__*__``, ≤1500 bytes) — checked
+    rules (no ``/``, not ``.``/``..``, not ``__*__``, ≤1500 bytes): checked
     here so a bad login fails with a 400 rather than an opaque write error.
     """
     try:
@@ -191,12 +191,12 @@ PICKLIST_ALLOWED_PREFIXES = (
 
 #: Read-only paths that need a method check as well as a prefix. Picklist
 #: justifications can reference a match ("@42"), and reading that reference is
-#: the whole point of the meeting screen — but the same prefix is how scouting
+#: the whole point of the meeting screen: but the same prefix is how scouting
 #: gets submitted, so only the GETs are let through.
 #: ``/api/pit`` is here rather than above because the team detail popup
 #: reads a robot's pit report, but a projector account must not be able to
 #: submit one.
-PICKLIST_ALLOWED_READS = ("/api/scout/match", "/api/pit")
+PICKLIST_ALLOWED_READS = ("/api/scout/match", "/api/scout/team", "/api/pit")
 
 
 def _picklist_account_may_reach(path: str, method: str = "GET") -> bool:
@@ -229,7 +229,7 @@ def current_scouter(
             detail="This is a picklist meeting account. It can only view teams "
             "and edit picklists. Sign in with your own account for anything else.",
         )
-    # Presence is tracked in memory and persisted at most hourly — see
+    # Presence is tracked in memory and persisted at most hourly: see
     # repo.touch_presence. Doing it on every request costs nothing.
     repo.touch_presence(scouter.scout_id)
     return scouter

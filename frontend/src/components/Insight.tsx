@@ -35,7 +35,7 @@ export function HazeIntel({ teamNumber }: { teamNumber: number }) {
       <div className="card tight intel-card">
         <div className="intel-loading">
           <span className="intel-spark"><Icon name="sparkles" size={16} /></span>
-          Reading the scouting record…
+          Reading the scouting record...
         </div>
       </div>
     );

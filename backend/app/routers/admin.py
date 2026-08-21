@@ -18,6 +18,7 @@ from ..analytics import (
     team_heatmap,
     team_summary,
 )
+from ..archive import archive_event, archive_if_worthwhile
 from ..auth import require_admin, require_full_admin
 from ..config import settings
 from ..external import sync_event_matches
@@ -68,13 +69,27 @@ async def set_event(
     _: Scouter = Depends(require_admin),
 ) -> dict:
     event_key = body.event_key.strip()
+    # Freeze the outgoing event first. Switching is the moment its records
+    # stop being readable from the cache, so this is the last chance to roll
+    # them up cheaply, and doing it here means nobody has to remember to.
+    previous = repo.current_event()
+    archived = None
+    if previous and previous != event_key:
+        rolled = archive_if_worthwhile(previous)
+        archived = rolled.event_key if rolled else None
     # This re-scopes the event-filtered caches, which costs one full read of
-    # the new event's documents — the only bulk read outside a cold start.
+    # the new event's documents: the only bulk read outside a cold start.
     repo.set_setting("current_event", event_key)
     matches = await sync_event_matches(event_key) if event_key else []
     settled = _settle_finished_matches(event_key) if event_key else 0
     emit("settings_changed", {"current_event": event_key})
-    return {"ok": True, "event": event_key, "matches": len(matches), "bets_settled": settled}
+    return {
+        "ok": True,
+        "event": event_key,
+        "matches": len(matches),
+        "bets_settled": settled,
+        "archived": archived,
+    }
 
 
 class CurrentMatchIn(BaseModel):
@@ -404,3 +419,61 @@ def reload_cache(_: Scouter = Depends(require_admin)) -> dict:
     store.retarget_event(event_key)
     repo.invalidate_memo()
     return {"ok": True, "event": event_key, "cache": repo.cache_stats()}
+
+
+# --------------------------------------------------------------------------- #
+# Event archives                                                               #
+# --------------------------------------------------------------------------- #
+@router.get("/archives")
+def list_archives(_: Scouter = Depends(require_admin)) -> list[dict]:
+    """Every event this installation has finished, newest first.
+
+    Summaries only. The per-team detail is a second request, because the
+    whole point of the archive is that the list stays small enough to load
+    without thinking about it.
+    """
+    return [
+        {
+            "event_key": a.event_key,
+            "name": a.name,
+            "season": a.season,
+            "game_name": a.game_name,
+            "archived_at": a.archived_at.isoformat(),
+            "counts": a.counts,
+        }
+        for a in repo.archives()
+    ]
+
+
+@router.get("/archives/{event_key}")
+def get_archive(event_key: str, _: Scouter = Depends(require_admin)) -> dict:
+    row = repo.archive(event_key)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No archive for {event_key}")
+    return {
+        "event_key": row.event_key,
+        "name": row.name,
+        "season": row.season,
+        "game_name": row.game_name,
+        "archived_at": row.archived_at.isoformat(),
+        "counts": row.counts,
+        "teams": row.teams,
+        "pit": row.pit,
+        "picklists": row.picklists,
+    }
+
+
+@router.post("/archives/{event_key}")
+def create_archive(event_key: str, _: Scouter = Depends(require_admin)) -> dict:
+    """Archive an event now.
+
+    Normally this happens by itself when the current event changes. Doing it
+    by hand is for taking a checkpoint mid-event, or for rebuilding an archive
+    after late scouting has synced in. Re-running overwrites, so it is safe.
+    """
+    event_key = (event_key or "").strip()
+    if event_key != repo.current_event() and not repo.event(event_key):
+        raise HTTPException(status_code=404, detail=f"Unknown event {event_key}")
+    row = archive_event(event_key)
+    emit("event_archived", {"event": row.event_key})
+    return {"ok": True, "event": row.event_key, "counts": row.counts}

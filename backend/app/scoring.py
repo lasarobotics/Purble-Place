@@ -1,45 +1,45 @@
-"""Scoring proxy for the 2026 *Rebuilt* game.
+"""Turn a scouting entry into one comparable performance number.
 
-The exact field point values are game-specific; this module turns a scouting
-entry into a single comparable "performance" number used throughout the
-analytics.  Tweak the constants here when the official scoring is confirmed —
-everything downstream (rankings, picklists, compare) reads from this.
+Every value this uses comes from :mod:`app.game`, so a new season is edited
+there and not here. Everything downstream (rankings, picklists, compare,
+insights) reads the number this produces.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
-# Per-attempt point values by phase (a "made" scoring action).
-AUTO_MADE = 4.0
-TELEOP_MADE = 2.5
-
-AUTO_LEAVE = 3.0
-AUTO_CLIMB_BONUS = 4.0
-CLIMB_POINTS = {"none": 0.0, "l1": 3.0, "l2": 6.0, "l3": 12.0}
-STOP_BONUS = 1.5          # defensive stop value (credited to the defender)
-FOUL_PENALTY = 2.0
+from .game import Game, game_for
 
 
-def attempt_value(attempt: dict[str, Any]) -> float:
+def attempt_value(attempt: dict[str, Any], game: Optional[Game] = None) -> float:
+    """What one scoring attempt was worth.
+
+    An explicit ``value`` on the attempt wins, so a game with several scoring
+    heights can record the real number per tap without this module needing to
+    know the field layout.
+    """
+    g = game or game_for()
     if attempt.get("result") != "made":
         return 0.0
     explicit = attempt.get("value")
     if isinstance(explicit, (int, float)) and explicit > 0:
         return float(explicit)
-    return AUTO_MADE if attempt.get("phase") == "auto" else TELEOP_MADE
+    return g.auto_made if attempt.get("phase") == "auto" else g.teleop_made
 
 
-def compute_points(entry: dict[str, Any]) -> float:
+def compute_points(entry: dict[str, Any], season: Optional[int] = None) -> float:
+    """Score one scouting entry under the rules of its season."""
+    g = game_for(season)
     pts = 0.0
     for a in entry.get("heatmap") or []:
-        pts += attempt_value(a)
+        pts += attempt_value(a, g)
     if entry.get("auto_leave"):
-        pts += AUTO_LEAVE
+        pts += g.auto_leave
     if entry.get("auto_climb"):
-        pts += AUTO_CLIMB_BONUS
-    pts += CLIMB_POINTS.get(str(entry.get("climb", "none")).lower(), 0.0)
-    pts += STOP_BONUS * int(entry.get("successful_stops") or 0)
-    pts -= FOUL_PENALTY * int(entry.get("fouls") or 0)
+        pts += g.auto_endgame_bonus
+    pts += g.endgame_points.get(str(entry.get("climb", g.endgame_none)).lower(), 0.0)
+    pts += g.stop_bonus * int(entry.get("successful_stops") or 0)
+    pts -= g.foul_penalty * int(entry.get("fouls") or 0)
     return round(max(pts, 0.0), 2)
 
 

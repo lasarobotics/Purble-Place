@@ -205,10 +205,10 @@ function FilmEditor({
   return (
     <div>
       <label className="field"><span>YouTube link or ID</span>
-        <input value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://youtu.be/… or video ID" />
+        <input value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://youtu.be/... or video ID" />
       </label>
       <label className="field"><span>Film summary / takeaway</span>
-        <textarea value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="What the video shows that the numbers miss…" />
+        <textarea value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="What the video shows that the numbers miss..." />
       </label>
       <div className="spread film-editor-head">
         <span className="muted" style={{ fontSize: "0.85rem", fontWeight: 600 }}>Key moments</span>
@@ -223,7 +223,7 @@ function FilmEditor({
               <input value={ev.type} onChange={(e) => upd(i, { type: e.target.value })} placeholder="Type" />
               <button className="btn sm ghost" type="button" onClick={() => setEvents(events.filter((_, k) => k !== i))}>✕</button>
             </div>
-            <input value={ev.detail} onChange={(e) => upd(i, { detail: e.target.value })} placeholder="What happened…" />
+            <input value={ev.detail} onChange={(e) => upd(i, { detail: e.target.value })} placeholder="What happened..." />
           </div>
         ))}
         {events.length === 0 && <span className="faint" style={{ fontSize: "0.8rem" }}>No moments yet.</span>}

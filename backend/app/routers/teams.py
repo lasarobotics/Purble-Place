@@ -102,7 +102,7 @@ def get_team_insight(
     event: str | None = None,
     _: Scouter = Depends(current_scouter),
 ) -> dict:
-    """Haze Intel — an AI-assisted summary where every claim carries the
+    """Haze Intel: an AI-assisted summary where every claim carries the
     scouting evidence behind it."""
     event_key = repo.resolve_event(event)
     return team_insight(event_key, team_number)

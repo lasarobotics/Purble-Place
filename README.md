@@ -245,17 +245,52 @@ backend/
     models.py          SQLModel tables
     auth.py            sign-in + tokens
     external.py        TBA + Statbotics clients (cached)
-    scoring.py         2026 "Rebuilt" point proxy  ← tune scoring here
+    game.py            the season: scoring, endgame, tags  <- edit this each year
+    scoring.py         turns a scouting entry into points, reading game.py
+    archive.py         rolls a finished event into one durable document
     analytics.py       summaries, rank, strength-of-schedule, compare
     betting_logic.py   Purple Bucks odds engine
     demo_data.py       seed a full demo event
     routers/           auth, scouting, betting, picklists, teams, matches, admin, sync
 frontend/
   src/
-    app/               Next.js App Router pages (login, home, scout, betting, admin/*, …)
+    app/               Next.js App Router pages (login, home, scout, pit, admin/*, ...)
     components/        Field heatmap, charts, shell/nav, team detail, UI kit
-    lib/               api client, auth, Dexie offline queue, websocket, types
+    lib/               api client, auth, Dexie offline queue, websocket, game, types
+  public/
+    sw.js              service worker: the app keeps working with no signal
 ```
 
-> Tuning game scoring: the 2026 point values live in `backend/app/scoring.py`. Adjust the
-> constants there once official scoring is confirmed and every ranking updates.
+## 🗓️ Rolling over to a new season
+
+FRC changes the game every January, so the scouting form has to change with
+it. Everything game-specific lives in **one file**: `backend/app/game.py`.
+
+1. Copy the `GAME_2026` block, rename it for the new year, and edit the
+   values: `season`, `name`, the scoring numbers, `endgame_label`, the
+   `endgame` levels, and the quick `tags`.
+2. Add it to the `GAMES` dict.
+3. Replace the field image at `frontend/public/field.png` and
+   `backend/app/static_field/field.png`.
+
+That is the whole job. No TypeScript changes: the scouting form fetches the
+definition from `GET /api/game` and renders the endgame buttons and tag chips
+from it, caching a copy on each device so a scout with no signal still gets
+the right form. Scoring, the analytics and the insight rules all read the same
+object, and each stored entry keeps the season it was collected under, so last
+year's numbers are not silently rewritten by this year's rules.
+
+To run a past season (for testing, or to replay last year's event), set
+`HAZEHUB_SEASON=2026` and restart.
+
+## 📦 What happens when an event ends
+
+Only the current event is mirrored into memory, which is what keeps a whole
+season off Firestore's free-tier read budget. So when an admin sets a new
+event, the outgoing one is rolled up into a single `event_archives` document
+first: per-team aggregates, the final pick order, the pit reports and the
+totals. One read gets the whole event back, which is what makes "how did 254
+look at their last regional" answerable in the pit at the next one.
+
+It happens automatically on an event change, and `POST /api/admin/archives/<key>`
+re-runs it by hand (safe to repeat) if late scouting syncs in afterwards.

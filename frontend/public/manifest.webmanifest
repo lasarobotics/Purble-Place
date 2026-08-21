@@ -1,0 +1,19 @@
+{
+  "name": "HazeHub Scouting",
+  "short_name": "HazeHub",
+  "description": "Purple Haze scouting, strategy and picklist hub for FRC.",
+  "start_url": "/home",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0a0b0d",
+  "theme_color": "#0a0b0d",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

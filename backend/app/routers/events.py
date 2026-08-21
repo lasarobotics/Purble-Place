@@ -1,4 +1,4 @@
-"""Polled realtime change feed — the fallback for /ws.
+"""Polled realtime change feed: the fallback for /ws.
 
 Clients that cannot hold a WebSocket open poll this endpoint with the cursor
 from the previous response and dispatch the returned events onto the same

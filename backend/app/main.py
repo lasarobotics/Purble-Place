@@ -1,7 +1,6 @@
 """HazeHub FastAPI application.
 
-This process is the whole server: the JSON API, the WebSocket hub, and —
-when a built frontend is present — the web app itself. Serving both from one
+This process is the whole server: the JSON API, the WebSocket hub, and: when a built frontend is present: the web app itself. Serving both from one
 origin is what lets HazeHub run on a laptop on the event LAN with no reverse
 proxy, no CORS configuration, and no Cloud Run (so the Firebase project can
 stay on the free Spark plan).
@@ -49,11 +48,15 @@ async def lifespan(app: FastAPI):
     # still boot and serve /api/health with a clear diagnostic.
     #
     # init_db() loads the whole working set into memory. That is the single
-    # burst of Firestore reads in a normal day — a few thousand documents,
-    # once — and every request afterwards is served from RAM.
+    # burst of Firestore reads in a normal day: a few thousand documents,
+    # once: and every request afterwards is served from RAM.
     try:
         init_db()
         seed()
+        # The event pointer decides what every screen shows. If it has gone
+        # stale the app looks empty while the data sits in the datastore under
+        # another key, so it is checked here rather than discovered at an event.
+        repo.reconcile_current_event()
     except Exception as exc:  # noqa: BLE001
         log.exception("startup failed: %s", exc)
     yield
@@ -77,6 +80,7 @@ app.add_middleware(
 
 for r in (
     auth.router,
+    auth.game_router,
     teams.router,
     matches.router,
     scouting.router,
@@ -139,7 +143,7 @@ def health() -> dict:
         out["error"] = cache["error"]
     if cache.get("backend") == "local-file":
         out["warning"] = (
-            "Running on the local development store — data is NOT in Firestore. "
+            "Running on the local development store: data is NOT in Firestore. "
             "Set FIREBASE_PROJECT_ID (and FIREBASE_SERVICE_ACCOUNT outside Google "
             "Cloud), or FIRESTORE_EMULATOR_HOST for local emulator use. "
             "See instructions.txt."
@@ -233,7 +237,7 @@ if WEB_DIR.is_dir() and (WEB_DIR / "index.html").exists():
     log.info("serving the web app from %s", WEB_DIR)
 else:
     log.info(
-        "no built frontend at %s — API only. Build it with "
+        "no built frontend at %s: API only. Build it with "
         "`cd frontend && npm run build` (HAZEHUB_STATIC_EXPORT=1) to serve "
         "everything from this one process.",
         WEB_DIR,

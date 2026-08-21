@@ -6,7 +6,7 @@ Every aggregation here is memoised against the revision counters of the
 collections it reads (see ``repo.memoized``). That matters at an event: with
 60 people refreshing dashboards, ``rank_teams`` was recomputing a full
 per-team pass over every submission on every request. Now it is computed once
-per new submission and served from memory until the next one lands — the CPU
+per new submission and served from memory until the next one lands: the CPU
 equivalent of the read-cache, and the reason the single Cloud Run instance
 keeps up.
 """
@@ -16,6 +16,7 @@ import statistics
 from typing import Any, Optional
 
 from . import repo, schema
+from .game import GAME
 from .models import ScoutEntry
 from .scoring import phase_counts
 
@@ -304,14 +305,11 @@ def data_picklist(event_key: str) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # Scout disagreement detection ("Consensus Radar")                             #
 # --------------------------------------------------------------------------- #
-NEGATIVE_TAGS = {
-    "Died on field", "Dropped pieces", "Slow cycles", "Tippy / unstable",
-    "Penalty prone", "Struggled vs defense", "Comms issues",
-}
-POSITIVE_TAGS = {
-    "Fast cycles", "Strong auto", "Clutch climb", "Great defense",
-    "Smart driver", "Consistent", "Good under pressure", "Great partner",
-}
+# Which tags read as praise and which as criticism comes from the season
+# definition, so a new game's tags are picked up here without a second list to
+# keep in step (see app/game.py).
+NEGATIVE_TAGS = set(GAME.negative_tags)
+POSITIVE_TAGS = set(GAME.positive_tags)
 
 
 def scout_disagreements(event_key: str) -> dict[str, Any]:
@@ -320,11 +318,11 @@ def scout_disagreements(event_key: str) -> dict[str, Any]:
     Two signals, per the TideScout-style "separate individual judgment from
     consensus" idea:
 
-      1. **Numeric spread** — the same team+match scouted by 2+ scouts with a
+      1. **Numeric spread**: the same team+match scouted by 2+ scouts with a
          big point gap means someone missed cycles (or padded them).
-      2. **Quant vs qual gap** — a team whose scored output ranks high while
+      2. **Quant vs qual gap**: a team whose scored output ranks high while
          its qualitative signals (driver/speed ratings, negative tags,
-         failures) rank low — or vice versa. Those are exactly the teams to
+         failures) rank low: or vice versa. Those are exactly the teams to
          re-watch on film before locking a picklist.
     """
 

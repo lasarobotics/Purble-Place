@@ -143,7 +143,7 @@ async def place_bet(
     potential = payout_for(body.wager, o["multiplier"])
 
     # Escrow the wager immediately. Two documents, written directly (not
-    # coalesced) — a balance the user can see must be durable before the
+    # coalesced): a balance the user can see must be durable before the
     # response returns.
     scouter.bucks -= body.wager
     bet = Bet(

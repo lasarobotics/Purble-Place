@@ -18,12 +18,14 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
+from .game import GAME
+
 # Repo paths -----------------------------------------------------------------
 APP_DIR = Path(__file__).resolve().parent
 BACKEND_DIR = APP_DIR.parent
 
 # Cloud Run's filesystem is read-only except /tmp. Nothing durable is written
-# there — Firestore holds the data — but the dev fallback store needs a home.
+# there: Firestore holds the data: but the dev fallback store needs a home.
 IS_CLOUD_RUN = bool(os.environ.get("K_SERVICE"))
 DATA_DIR = Path("/tmp/data") if IS_CLOUD_RUN else BACKEND_DIR / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -116,7 +118,9 @@ class Settings:
     # Identity / branding
     APP_NAME: str = "HazeHub"
     BRAND_COLOR: str = "#663399"  # Purple Haze
-    SEASON: int = int(os.getenv("HAZEHUB_SEASON", "2026"))
+    # The season in play comes from app/game.py, which is the one file
+    # that changes when FRC changes the game.
+    SEASON: int = GAME.season
 
     # Home teams: FRC 418 Purple Haze / FRC 436 Purple Rain
     HOME_TEAMS: list[int] = [
@@ -177,7 +181,7 @@ class Settings:
         """True when a real Firestore database (not the dev file) is in use."""
         return self.ENVIRONMENT in ("firebase", "cloud-run", "emulator")
 
-    # CORS — local dev front-ends plus the project's Firebase Hosting domains.
+    # CORS: local dev front-ends plus the project's Firebase Hosting domains.
     #
     # In the normal deployment this is unused: the same process serves the web
     # app and the API, so every request is same-origin. It matters for

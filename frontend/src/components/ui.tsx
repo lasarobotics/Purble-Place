@@ -13,7 +13,7 @@ type TeamLike = AvatarTeam | ({ team: number } & Partial<Team>);
 const teamProfileCache = new Map<number, AvatarTeam>();
 const pendingProfiles = new Map<number, Promise<AvatarTeam | null>>();
 
-export function Loading({ label = "Loading…" }: { label?: string }) {
+export function Loading({ label = "Loading..." }: { label?: string }) {
   return (
     <div className="loading-wrap">
       <div style={{ textAlign: "center" }}>

@@ -1,7 +1,7 @@
 """Key/value app settings (``app_settings`` collection).
 
 Kept as its own module because the settings are read on nearly every request
-(``current_event`` resolves the default event) — they live in the cache, so a
+(``current_event`` resolves the default event): they live in the cache, so a
 read here is a dict lookup, not a Firestore operation.
 """
 from __future__ import annotations

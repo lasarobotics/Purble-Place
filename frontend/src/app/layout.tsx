@@ -13,11 +13,13 @@ const inter = Inter({
 
 export const metadata: Metadata = {
   title: "HazeHub. FRC Scouting",
-  description: "Purple Haze scouting, strategy & picklist hub for FRC.",
+  description: "Purple Haze scouting, strategy and picklist hub for FRC.",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: { capable: true, title: "HazeHub", statusBarStyle: "black-translucent" },
 };
 
 export const viewport: Viewport = {
-  themeColor: "#0e0d12",
+  themeColor: "#0a0b0d",
   width: "device-width",
   initialScale: 1,
   maximumScale: 5,

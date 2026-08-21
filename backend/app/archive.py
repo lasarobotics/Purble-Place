@@ -1,0 +1,142 @@
+"""Freeze a finished event into one durable document.
+
+The raw scouting is never deleted, but only the *current* event is mirrored
+into RAM (see ``schema.EVENT_SCOPED_CACHED``): that is what keeps a season of
+data off the free tier's read budget. The cost is that the moment an admin
+switches to the next event, last event's records stop being readable without a
+bulk re-read of the whole collection.
+
+So when an event ends, everything worth keeping about it is rolled up into a
+single ``event_archives`` document: per-team aggregates, the final pick order,
+the totals, and the game it was played under. One read gets you the whole
+event back, which is what makes "how did 254 look at their last regional"
+answerable in the pit at the next one.
+
+Archiving is idempotent. Running it twice recomputes and overwrites, so an
+event can be archived mid-competition for a checkpoint and again at the end.
+"""
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone
+from typing import Any
+
+from . import repo
+from .analytics import event_teams, team_summary
+from .game import game_for
+from .models import EventArchive
+
+log = logging.getLogger("hazehub.archive")
+
+
+def _final_picklists(event_key: str) -> list[dict[str, Any]]:
+    """The pick orders the team actually settled on, master and final."""
+    out = []
+    for row in repo.picklists(event_key):
+        if not row.is_master or not row.items:
+            continue
+        out.append(
+            {
+                "owner_id": row.owner_id,
+                "name": row.name,
+                "pick_round": row.pick_round,
+                "items": row.items,
+            }
+        )
+    return out
+
+
+def build_archive(event_key: str) -> EventArchive:
+    """Roll an event up. Reads only what is already in memory."""
+    event_key = (event_key or "").strip()
+    if not event_key:
+        raise ValueError("An event key is required to archive")
+
+    entries = repo.scouting_for_event(event_key)
+    matches = repo.matches_for_event(event_key)
+    pits = repo.pits_for_event(event_key)
+    event = repo.event(event_key)
+
+    # Per-team aggregates are the point of the archive: they are what somebody
+    # looks up next season, and they are two orders of magnitude smaller than
+    # the submissions they came from.
+    teams = {}
+    for team in event_teams(event_key):
+        summary = team_summary(event_key, team)
+        # Two things are dropped, both for size. A Firestore document
+        # is capped at 1 MiB and a champs-sized event is 60+ teams, so the
+        # archive has to stay lean or it stops being writable at exactly the
+        # event you most want to keep.
+        #   match_points: a per-match series nobody reads off an archive
+        #   avatar: a base64 PNG that already lives in team_cache, which is
+        #           global and outlives the event anyway
+        summary.pop("match_points", None)
+        summary.pop("avatar", None)
+        teams[str(team)] = summary
+
+    pit_rows = [
+        {
+            "team_number": p.team_number,
+            "archetype": p.archetype,
+            "drivetrain": p.drivetrain,
+            "weight_lbs": p.weight_lbs,
+            "can_climb": p.can_climb,
+            "notes": p.notes,
+        }
+        for p in pits
+    ]
+
+    played = [m for m in matches if m.winner]
+    game = game_for(event.season if event and getattr(event, "season", None) else None)
+
+    return EventArchive(
+        event_key=event_key,
+        name=(event.name if event else "") or event_key,
+        season=game.season,
+        game_name=game.name,
+        archived_at=datetime.now(timezone.utc),
+        counts={
+            "matches": len(matches),
+            "matches_played": len(played),
+            "scouting_entries": len(entries),
+            "pit_reports": len(pits),
+            "teams": len(teams),
+        },
+        teams=teams,
+        pit=pit_rows,
+        picklists=_final_picklists(event_key),
+    )
+
+
+def archive_event(event_key: str) -> EventArchive:
+    """Build and store the archive for one event."""
+    archive = build_archive(event_key)
+    repo.save_archive(archive)
+    log.info(
+        "archived %s: %d teams, %d entries",
+        event_key, archive.counts.get("teams", 0), archive.counts.get("scouting_entries", 0),
+    )
+    return archive
+
+
+def archive_if_worthwhile(event_key: str) -> EventArchive | None:
+    """Archive an event on the way out, unless there is nothing to keep.
+
+    Called when an admin switches to a new event, which is the moment the
+    outgoing one stops being readable from the cache. An event with no
+    scouting was a mistyped key or a dry run, and writing a document for it
+    would just be noise in the archive list.
+    """
+    event_key = (event_key or "").strip()
+    if not event_key:
+        return None
+    if not repo.scouting_for_event(event_key):
+        return None
+    try:
+        return archive_event(event_key)
+    except Exception as exc:  # noqa: BLE001
+        # Never block an event change on the archive: the raw documents are
+        # still in the datastore either way, and the admin is standing at a
+        # competition waiting for the new schedule.
+        log.warning("could not archive %s: %s", event_key, exc)
+        return None

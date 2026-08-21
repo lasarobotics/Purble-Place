@@ -3,26 +3,26 @@
 Credentials are resolved in the order that makes each environment work with
 no configuration of its own:
 
-1. ``FIRESTORE_EMULATOR_HOST`` — local development against
+1. ``FIRESTORE_EMULATOR_HOST``: local development against
    ``firebase emulators:start``. No credentials needed at all.
-2. ``FIREBASE_SERVICE_ACCOUNT`` — either a path to a service-account JSON file
+2. ``FIREBASE_SERVICE_ACCOUNT``: either a path to a service-account JSON file
    or the JSON itself (handy for a single secret in Cloud Run / CI).
-3. ``GOOGLE_APPLICATION_CREDENTIALS`` — the standard Google variable.
-4. Application Default Credentials — what Cloud Run uses; the service's own
+3. ``GOOGLE_APPLICATION_CREDENTIALS``: the standard Google variable.
+4. Application Default Credentials: what Cloud Run uses; the service's own
    service account is picked up automatically with nothing to configure.
 
 Why the counters exist
 ----------------------
 Firestore's always-free daily allowance is 50,000 document reads, 20,000
 writes and 20,000 deletes. Those are *document* operations, not requests, and
-the failure mode is silent until the day's quota is gone — so every Firestore
+the failure mode is silent until the day's quota is gone: so every Firestore
 call in HazeHub goes through :func:`count` and is visible on the admin System
 Health panel and at ``GET /api/admin/firestore-usage``.
 
 :class:`QuotaGuard` turns that accounting into a safety net. As the day's
 budget is consumed it sheds optional work (presence heartbeats, network
 snapshots, external-cache persistence) while never blocking a scouting
-submission — losing a scout's match data to save a write would be exactly the
+submission: losing a scout's match data to save a write would be exactly the
 wrong trade.
 """
 from __future__ import annotations
@@ -55,7 +55,7 @@ def _pacific_now() -> datetime:
         from zoneinfo import ZoneInfo
 
         return datetime.now(ZoneInfo("America/Los_Angeles"))
-    except Exception:  # noqa: BLE001 — no tzdb; the approximation is fine here
+    except Exception:  # noqa: BLE001: no tzdb; the approximation is fine here
         return datetime.now(timezone(timedelta(hours=-8)))
 
 
@@ -109,7 +109,7 @@ class QuotaGuard:
         """May ``n`` operations of ``kind`` proceed?
 
         Essential work (scouting submissions, bets, picklists, sign-in) is
-        always allowed — the guard is there to protect them by shedding
+        always allowed: the guard is there to protect them by shedding
         everything else first.
         """
         if essential:
@@ -122,7 +122,7 @@ class QuotaGuard:
             return False
 
     def pressure(self, kind: str) -> float:
-        """0.0–1.0+ — how much of the day's budget for ``kind`` is spent."""
+        """0.0-1.0+: how much of the day's budget for ``kind`` is spent."""
         with self._lock:
             self._roll()
             return round(self.counts.get(kind, 0) / max(1, self.budget(kind)), 4)
@@ -174,7 +174,7 @@ def _emulator_credential():
 
     The emulator accepts any project and never checks a token, but the Admin
     SDK still resolves Application Default Credentials before building a
-    client — which fails on a laptop with no gcloud login. Handing it
+    client: which fails on a laptop with no gcloud login. Handing it
     anonymous credentials is what makes ``firebase emulators:start`` work with
     zero setup.
     """
@@ -207,7 +207,7 @@ def _credentials():
                 ) from exc
         if not os.path.exists(raw):
             # Without this, firebase_admin raises a bare FileNotFoundError
-            # naming the value — which is baffling when someone has pasted the
+            # naming the value: which is baffling when someone has pasted the
             # wrong secret into the variable.
             hint = f"{raw[:12]}..." if len(raw) > 12 else raw
             raise ValueError(
@@ -287,7 +287,7 @@ def init_error() -> str:
 
 
 #: The connectivity probe is a network round trip, and /api/health is hit by
-#: the host's uptime checker every few seconds — thousands of times a day.
+#: the host's uptime checker every few seconds: thousands of times a day.
 #: Caching the result keeps that from being a constant background cost on a
 #: small instance, while still surfacing an outage within half a minute.
 _PROBE_TTL_S = 30.0
@@ -335,7 +335,7 @@ def status() -> dict[str, Any]:
         out["error"] = error
     if not out["configured"]:
         out["warning"] = (
-            "No Firebase project configured — set FIREBASE_PROJECT_ID (and "
+            "No Firebase project configured: set FIREBASE_PROJECT_ID (and "
             "FIREBASE_SERVICE_ACCOUNT outside Google Cloud). See instructions.txt."
         )
     return out
@@ -362,7 +362,7 @@ def delete_field():
 
 
 def field_filter(path: str, op: str, value: Any):
-    """``FieldFilter`` — the non-deprecated form of ``.where()``."""
+    """``FieldFilter``: the non-deprecated form of ``.where()``."""
     from google.cloud.firestore_v1.base_query import FieldFilter
 
     return FieldFilter(path, op, value)
