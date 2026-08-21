@@ -164,6 +164,49 @@ export function Modal({ children, onClose }: { children: React.ReactNode; onClos
   );
 }
 
+/**
+ * Yes/no dialog for a change that quietly ruins data if it was a mis-tap.
+ *
+ * Used by the alliance and station switches on the scouting page: those two
+ * controls decide which robot every following submission is about, and a
+ * thumb brushing them mid-match sends the rest of the day's scouting to the
+ * wrong team without anything looking wrong on screen.
+ */
+export function Confirm({
+  title,
+  body,
+  confirmLabel = "Yes, change it",
+  cancelLabel = "Cancel",
+  onConfirm,
+  onCancel,
+}: {
+  title: string;
+  body?: React.ReactNode;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onCancel(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+
+  return (
+    <Modal onClose={onCancel}>
+      <div className="confirm">
+        <h3>{title}</h3>
+        {body && <div className="confirm-body">{body}</div>}
+        <div className="confirm-actions">
+          <button type="button" className="btn ghost" onClick={onCancel}>{cancelLabel}</button>
+          <button type="button" className="btn primary" onClick={onConfirm} autoFocus>{confirmLabel}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 export function Bar({ value, max = 1 }: { value: number; max?: number }) {
   const w = Math.max(0, Math.min(100, (value / (max || 1)) * 100));
   return (

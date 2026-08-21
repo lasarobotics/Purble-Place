@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from ..auth import (
     create_token,
     current_scouter,
-    get_or_create_scouter,
+    get_account,
     verify_team_password,
 )
 from ..config import settings
@@ -50,7 +50,8 @@ def login(body: LoginIn) -> LoginOut:
         raise HTTPException(status_code=400, detail="Scouter ID required")
     if not verify_team_password(body.team_password):
         raise HTTPException(status_code=401, detail="Incorrect team password")
-    scouter = get_or_create_scouter(scout_id)
+    # Refuses anything that is not on the team's roster (403).
+    scouter = get_account(scout_id)
     token = create_token(scouter.scout_id, scouter.is_admin)
     return _scouter_out(scouter, token)
 

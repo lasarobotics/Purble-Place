@@ -45,15 +45,29 @@ def _aware(dt: datetime) -> datetime:
 
 
 def _reconciliation(event_key: str, current_match: int) -> dict:
-    """Schedule vs received submissions for played qual matches."""
+    """Schedule vs received submissions for played qual matches.
+
+    Reported per *slot*, not per match. Six robots play every match and each
+    one is somebody's assignment, so "Q12 is missing" is not actionable while
+    "Q12 red 2 (team 254)" tells the strategy lead exactly which chair was
+    empty and who to ask. A match with five of six reports used to look
+    completely clean here.
+
+    Two reports on the same robot are *not* a fault. Every submission is kept
+    — nothing here or anywhere else deletes one — and double-scouting is what
+    feeds the Consensus Radar, so they are counted separately as coverage
+    rather than mixed into the findings total.
+    """
+    empty = {
+        "checked_matches": 0,
+        "missing": {"count": 0, "matches": [], "slots": []},
+        "duplicates": {"count": 0, "items": []},
+        "double_scouted": {"count": 0, "items": []},
+        "wrong_team": {"count": 0, "items": []},
+        "by_match": [],
+    }
     if not event_key or current_match <= 0:
-        return {
-            "checked_matches": 0,
-            "missing": {"count": 0, "matches": []},
-            "duplicates": {"count": 0, "items": []},
-            "wrong_team": {"count": 0, "items": []},
-            "by_match": [],
-        }
+        return empty
 
     matches = {
         int(m.match_number): m
@@ -66,23 +80,46 @@ def _reconciliation(event_key: str, current_match: int) -> dict:
         if e.comp_level == "qm" and e.match_number in by_match:
             by_match[e.match_number].append(e)
 
-    missing = [n for n, group in sorted(by_match.items()) if not group]
-
-    duplicates = []
+    missing_slots: list[dict] = []
+    missing_matches: list[int] = []
+    double_scouted = []
     wrong_team = []
+
     for n, group in sorted(by_match.items()):
         match = matches[n]
+        # A no-show report still means somebody was in that chair watching,
+        # so it counts as covered.
+        covered = {e.team_number for e in group}
         on_field = set(match.red) | set(match.blue)
+
+        # Walk the schedule so every gap carries its driver station, which is
+        # how scouting assignments are handed out in the first place.
+        for alliance, teams in (("red", match.red), ("blue", match.blue)):
+            for station, team in enumerate(teams, 1):
+                if not team or team in covered:
+                    continue
+                missing_slots.append(
+                    {"match": n, "alliance": alliance, "station": station, "team": team}
+                )
+        if not group:
+            missing_matches.append(n)
+
         seen: dict[int, int] = {}
         for e in group:
             seen[e.team_number] = seen.get(e.team_number, 0) + 1
             if on_field and e.team_number not in on_field:
                 wrong_team.append(
-                    {"match": n, "team": e.team_number, "scout_id": e.scout_id}
+                    {
+                        "match": n,
+                        "team": e.team_number,
+                        "scout_id": e.scout_id,
+                        "alliance": e.alliance,
+                        "station": e.station,
+                    }
                 )
         for team, count in seen.items():
             if count > 1:
-                duplicates.append({"match": n, "team": team, "count": count})
+                double_scouted.append({"match": n, "team": team, "count": count})
 
     per_match = [
         {"match": n, "submissions": len(group), "teams_covered": len({e.team_number for e in group})}
@@ -91,8 +128,17 @@ def _reconciliation(event_key: str, current_match: int) -> dict:
 
     return {
         "checked_matches": len(matches),
-        "missing": {"count": len(missing), "matches": missing[:40]},
-        "duplicates": {"count": len(duplicates), "items": duplicates[:20]},
+        "missing": {
+            # The count is now slots, not whole matches, so a match scouted by
+            # five people out of six still shows up as one finding.
+            "count": len(missing_slots),
+            "matches": missing_matches[:40],
+            "slots": missing_slots[:60],
+        },
+        # Kept under the old key so an older client still renders, but these
+        # are reports we deliberately keep, not records to clean up.
+        "duplicates": {"count": len(double_scouted), "items": double_scouted[:20]},
+        "double_scouted": {"count": len(double_scouted), "items": double_scouted[:20]},
         "wrong_team": {"count": len(wrong_team), "items": wrong_team[:20]},
         "by_match": per_match[-25:],
     }

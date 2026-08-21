@@ -7,15 +7,17 @@ import { useLiveEvents } from "@/lib/ws";
 import { emitBus } from "@/lib/bus";
 import { flushQueue } from "@/lib/sync";
 import { pendingCount, requestPersistentStorage } from "@/lib/db";
+import { useBattery } from "@/lib/battery";
 import { Loading } from "./ui";
 import { Icon } from "./icons";
 import { ROLE_LABEL } from "@/lib/types";
 
+// Betting is not in here on purpose: it lives on the scouting page now, next
+// to the match it is about, rather than behind a tab of its own.
 const MAIN_NAV = [
   { href: "/home", label: "Home", icon: "home" },
   { href: "/scout", label: "Scout", icon: "clipboard" },
-  { href: "/prematch", label: "Pre-Match", icon: "bot" },
-  { href: "/betting", label: "Betting", icon: "coins" },
+  { href: "/pit", label: "Pit Scout", icon: "wrench" },
   { href: "/picklists", label: "Picklists", icon: "list" },
   { href: "/status", label: "Device Status", icon: "refresh" },
   { href: "/account", label: "Account", icon: "user" },
@@ -46,9 +48,9 @@ const ADMIN_NAV = [
 const MOBILE_NAV = [
   { href: "/home", label: "Home", icon: "home" },
   { href: "/scout", label: "Scout", icon: "clipboard" },
-  { href: "/prematch", label: "Match", icon: "bot" },
+  { href: "/pit", label: "Pit", icon: "wrench" },
   { href: "/picklists", label: "Picks", icon: "list" },
-  { href: "/betting", label: "Bets", icon: "coins" },
+  { href: "/status", label: "Devices", icon: "refresh" },
 ];
 
 export function Shell({ children }: { children: React.ReactNode }) {
@@ -58,6 +60,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const [online, setOnline] = useState(true);
   const [pending, setPending] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
+  const battery = useBattery();
 
   useEffect(() => {
     if (!loading && !session) router.replace("/login");
@@ -189,6 +192,19 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <span className="badge muted" title={online ? "Online" : "Offline, saving locally"}>
               <span className={"dot " + (online ? "green" : "red")} /> {online ? "Live" : "Offline"}
             </span>
+            {/* A flat battery is what actually ends a scout's day, so the
+                level sits next to the thing they already glance at. Absent
+                entirely on browsers without the Battery Status API rather
+                than showing a guess. */}
+            {battery && (
+              <span
+                className={"badge battery" + (battery.percent <= 20 && !battery.charging ? " low" : "")}
+                title={battery.charging ? "Charging" : "On battery"}
+              >
+                <Icon name={battery.charging ? "sparkles" : "battery"} size={12} />
+                {battery.percent}%
+              </span>
+            )}
             <span className="badge haze">{session.bucks} PB</span>
           </div>
         </header>

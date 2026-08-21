@@ -1,8 +1,10 @@
 """Authentication: sign-in with Scouter ID + shared team password.
 
 The team password is the same for everyone (HazeRain!).  The Scouter ID
-identifies the user and ``admin`` is privileged.  Accounts are auto-provisioned
-on first successful sign-in (just like the old PurpleScout betting accounts).
+identifies the user and decides what the account can do.  The roster is
+closed: ``settings.ACCOUNTS`` lists every ID that exists, those documents are
+written to Firestore at startup, and an ID that is not on the list is refused
+rather than provisioned.
 
 Tokens are stateless HMAC-signed blobs — no extra dependency required, and no
 datastore round trip to validate one.
@@ -89,9 +91,36 @@ def verify_team_password(password: str) -> bool:
     return hmac.compare_digest(password or "", settings.TEAM_PASSWORD)
 
 
+def canonical_account_id(scout_id: str) -> Optional[str]:
+    """Map whatever was typed onto a roster ID, or ``None`` if it is not one.
+
+    Matching is case-insensitive because people type "admin" and "Admin"
+    interchangeably on a phone keyboard, and the roster's own spelling is what
+    gets stored, so there is exactly one document per account no matter how it
+    was entered.
+    """
+    key = (scout_id or "").strip()
+    if not key:
+        return None
+    lowered = key.lower()
+    for canonical in settings.ACCOUNTS:
+        if canonical.lower() == lowered:
+            return canonical
+    aliased = settings.ACCOUNT_ALIASES.get(lowered)
+    if aliased and aliased in settings.ACCOUNTS:
+        return aliased
+    return None
+
+
 def role_for_new_account(scout_id: str) -> str:
-    """The role a brand new account starts with, from configuration."""
-    key = scout_id.lower()
+    """The role an account on the roster gets."""
+    canonical = canonical_account_id(scout_id) or scout_id
+    role = settings.ACCOUNTS.get(canonical, "")
+    if role in (ROLE_ADMIN, ROLE_STRATEGY, ROLE_PICKLIST, ROLE_SCOUTER):
+        return role
+    # Fall back to the older per-role ID lists so a custom deployment that
+    # still sets HAZEHUB_ADMIN_IDS keeps working.
+    key = canonical.lower()
     if key in settings.ADMIN_IDS:
         return ROLE_ADMIN
     if key in settings.STRATEGY_IDS:
@@ -101,21 +130,46 @@ def role_for_new_account(scout_id: str) -> str:
     return ROLE_SCOUTER
 
 
-def get_or_create_scouter(scout_id: str) -> Scouter:
-    scout_id = normalize_id(scout_id)
-    scouter = repo.scouter(scout_id)
+#: Shown when someone types an ID that is not on the roster. It deliberately
+#: does not list the valid IDs -- the team knows them, and the shared password
+#: means anyone who could read this list could use it.
+UNKNOWN_ACCOUNT_MESSAGE = (
+    "That Scouter ID does not exist. HazeHub only has the accounts the team "
+    "set up, and new ones cannot be created by signing in. Check the "
+    "spelling, or ask an admin which account to use."
+)
+
+
+def get_account(scout_id: str) -> Scouter:
+    """Look up a roster account and stamp it as seen.
+
+    Signing in never creates an account any more. The roster lives in
+    configuration and is written to the ``scouters`` collection at startup, so
+    an unknown ID is a mistake to report rather than a person to enrol.
+    """
+    canonical = canonical_account_id(scout_id)
+    if canonical is None:
+        raise HTTPException(status_code=403, detail=UNKNOWN_ACCOUNT_MESSAGE)
+    canonical = normalize_id(canonical)
+    scouter = repo.scouter(canonical)
     if scouter is None:
+        # On the roster but not in the datastore yet: seeding runs at startup,
+        # so this only happens on a database that was wiped mid-run.
         scouter = Scouter(
-            scout_id=scout_id,
+            scout_id=canonical,
             s_number=next_s_number(),
-            display_name=scout_id,
-            role=role_for_new_account(scout_id),
+            display_name=canonical,
+            role=role_for_new_account(canonical),
             bucks=settings.STARTING_BUCKS,
         )
     scouter.last_seen = datetime.now(timezone.utc)
     repo.save_scouter(scouter)
     repo.touch_presence(scouter.scout_id)
     return scouter
+
+
+#: Kept under the old name for callers that predate the closed roster.
+get_or_create_scouter = get_account
 
 
 # --------------------------------------------------------------------------- #
@@ -135,9 +189,22 @@ PICKLIST_ALLOWED_PREFIXES = (
     "/api/matches",
 )
 
+#: Read-only paths that need a method check as well as a prefix. Picklist
+#: justifications can reference a match ("@42"), and reading that reference is
+#: the whole point of the meeting screen — but the same prefix is how scouting
+#: gets submitted, so only the GETs are let through.
+#: ``/api/pit`` is here rather than above because the team detail popup
+#: reads a robot's pit report, but a projector account must not be able to
+#: submit one.
+PICKLIST_ALLOWED_READS = ("/api/scout/match", "/api/pit")
 
-def _picklist_account_may_reach(path: str) -> bool:
-    return any(path.startswith(prefix) for prefix in PICKLIST_ALLOWED_PREFIXES)
+
+def _picklist_account_may_reach(path: str, method: str = "GET") -> bool:
+    if any(path.startswith(prefix) for prefix in PICKLIST_ALLOWED_PREFIXES):
+        return True
+    return method.upper() in ("GET", "HEAD") and any(
+        path.startswith(prefix) for prefix in PICKLIST_ALLOWED_READS
+    )
 
 
 # --- FastAPI dependencies --------------------------------------------------- #
@@ -154,7 +221,9 @@ def current_scouter(
     scouter = repo.scouter(body["sub"])
     if scouter is None:
         raise HTTPException(status_code=401, detail="Unknown scouter")
-    if scouter.picklist_only and not _picklist_account_may_reach(request.url.path):
+    if scouter.picklist_only and not _picklist_account_may_reach(
+        request.url.path, request.method
+    ):
         raise HTTPException(
             status_code=403,
             detail="This is a picklist meeting account. It can only view teams "

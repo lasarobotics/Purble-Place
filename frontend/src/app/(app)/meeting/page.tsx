@@ -14,10 +14,11 @@ import { useToast } from "@/lib/toast";
 import { onBus } from "@/lib/bus";
 import { timeAgo } from "@/lib/format";
 import type { MeetingPicklists, Picklist, PicklistItem, Team } from "@/lib/types";
-import { Loading } from "@/components/ui";
+import { Loading, Modal } from "@/components/ui";
 import { PicklistBoard } from "@/components/PicklistBoard";
 import { ClickableTeam } from "@/components/TeamDetailModal";
 import { FinalPicklists } from "@/components/FinalPicklists";
+import { NoteText } from "@/components/MatchRef";
 
 export default function MeetingPage() {
   const { session } = useAuth();
@@ -27,6 +28,10 @@ export default function MeetingPage() {
   const [pool, setPool] = useState<number[]>([]);
   const [round, setRound] = useState<1 | 2>(1);
   const [saving, setSaving] = useState(false);
+  // The list somebody tapped to read in full. Strategy lists are shown
+  // side by side to save projector space, which truncates the reasoning
+  // exactly when the room is arguing about it.
+  const [expanded, setExpanded] = useState<Picklist | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -126,7 +131,9 @@ export default function MeetingPage() {
           <p className="faint">No strategy lists for this pick yet.</p>
         ) : (
           <div className="grid cols-2">
-            {strategy.map((l) => <ListCard key={l.id} list={l} teams={teams} size="lg" />)}
+            {strategy.map((l) => (
+              <ListCard key={l.id} list={l} teams={teams} size="lg" onExpand={setExpanded} />
+            ))}
           </div>
         )}
       </section>
@@ -137,17 +144,44 @@ export default function MeetingPage() {
           <p className="faint">No scouter lists for this pick yet.</p>
         ) : (
           <div className="scouter-strip">
-            {scouters.map((l) => <ListCard key={l.id} list={l} teams={teams} size="sm" />)}
+            {scouters.map((l) => (
+              <ListCard key={l.id} list={l} teams={teams} size="sm" onExpand={setExpanded} />
+            ))}
           </div>
         )}
       </section>
+
+      {expanded && (
+        <ListDetail list={expanded} teams={teams} onClose={() => setExpanded(null)} />
+      )}
     </div>
   );
 }
 
-function ListCard({ list, teams, size }: { list: Picklist; teams: Record<number, Team>; size: "lg" | "sm" }) {
+function ListCard({
+  list,
+  teams,
+  size,
+  onExpand,
+}: {
+  list: Picklist;
+  teams: Record<number, Team>;
+  size: "lg" | "sm";
+  onExpand?: (list: Picklist) => void;
+}) {
+  const expandable = !!onExpand && list.items.length > 0;
   return (
-    <article className={"card tight list-card " + size}>
+    <article
+      className={"card tight list-card " + size + (expandable ? " expandable" : "")}
+      onClick={expandable ? () => onExpand!(list) : undefined}
+      role={expandable ? "button" : undefined}
+      tabIndex={expandable ? 0 : undefined}
+      onKeyDown={
+        expandable
+          ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onExpand!(list); } }
+          : undefined
+      }
+    >
       <div className="card-h">
         <h3 style={{ margin: 0 }}>{list.owner_name}</h3>
         <span className="faint" style={{ fontSize: "0.72rem" }}>{timeAgo(list.updated_at)}</span>
@@ -165,12 +199,65 @@ function ListCard({ list, teams, size }: { list: Picklist; teams: Record<number,
                   team={teams[it.team] || { team_number: it.team, nickname: "" }}
                   showNickname={size === "lg"}
                 />
-                {size === "lg" && note && <span className="pick-why">{note}</span>}
+                {size === "lg" && note && (
+                  <span className="pick-why"><NoteText note={note} team={it.team} /></span>
+                )}
               </li>
             );
           })}
         </ol>
       )}
+      {expandable && <span className="list-card-more faint">Tap for the full list</span>}
     </article>
+  );
+}
+
+/** One list at readable size, with every rank and every reason. */
+function ListDetail({
+  list,
+  teams,
+  onClose,
+}: {
+  list: Picklist;
+  teams: Record<number, Team>;
+  onClose: () => void;
+}) {
+  return (
+    <Modal onClose={onClose}>
+      <div className="list-detail">
+        <div className="card-h">
+          <div>
+            <h3 style={{ margin: 0 }}>{list.owner_name}</h3>
+            <span className="faint" style={{ fontSize: "0.76rem" }}>
+              {list.pick_round === 1 ? "First pick" : "Second pick"} · {list.items.length} ranked ·
+              updated {timeAgo(list.updated_at)}
+            </span>
+          </div>
+          <button className="btn sm ghost" onClick={onClose}>Close</button>
+        </div>
+        {list.items.length === 0 ? (
+          <p className="faint" style={{ margin: 0 }}>This list is empty.</p>
+        ) : (
+          <ol className="list-detail-items">
+            {list.items.map((it, i) => {
+              const note = it.justification ?? it.note ?? "";
+              return (
+                <li key={it.team}>
+                  <span className="rank-chip">{i + 1}</span>
+                  <div className="list-detail-body">
+                    <ClickableTeam team={teams[it.team] || { team_number: it.team, nickname: "" }} />
+                    {note ? (
+                      <p className="list-detail-why"><NoteText note={note} team={it.team} /></p>
+                    ) : (
+                      <p className="list-detail-why faint">No reason written.</p>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        )}
+      </div>
+    </Modal>
   );
 }

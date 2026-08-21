@@ -4,7 +4,8 @@ import { api } from "@/lib/api";
 import { useToast } from "@/lib/toast";
 import { onBus } from "@/lib/bus";
 import { matchLabel } from "@/lib/format";
-import type { Bet, MatchRec } from "@/lib/types";
+import type { Bet, MatchRec, Role } from "@/lib/types";
+import { ROLE_LABEL } from "@/lib/types";
 import { Loading, Stat, Stepper, TeamIdentity } from "@/components/ui";
 
 // environment: "cloud-run" | "firebase" | "emulator" | "local"
@@ -16,7 +17,7 @@ const ENV_LABEL: Record<string, string> = {
   emulator: "Emulator",
   local: "Local",
 };
-interface ScouterRow { scout_id: string; display_name: string; is_admin: boolean; bucks: number; matches_scouted: number; }
+interface ScouterRow { scout_id: string; display_name: string; role: string; is_admin: boolean; bucks: number; matches_scouted: number; }
 interface AdminBet extends Bet { scout_name?: string; }
 
 export default function AdminDashboard() {
@@ -105,16 +106,15 @@ export default function AdminDashboard() {
           {ENV_LABEL[s.environment] || s.environment} · {s.season}
         </span>
       </div>
-      <p className="page-sub">Control the event, match flow, betting and scouts.</p>
+      <p className="page-sub">Control the event, the match schedule and the accounts. Betting settings are at the bottom.</p>
 
       <div className="grid cols-4" style={{ marginBottom: 18 }}>
         <Stat label="Event" value={s.current_event || "-"} />
         <Stat label="Current Match" value={s.current_match || "-"} accent />
-        <Stat label="Open Bets" value={bets.filter((b) => b.status === "open").length} />
-        <Stat label="Betting" value={s.betting_enabled ? "ON" : "OFF"} />
+        <Stat label="Accounts" value={scouters.length} />
+        <Stat label="Matches Scouted" value={scouters.reduce((a, sc) => a + sc.matches_scouted, 0)} />
       </div>
 
-      <div className="grid cols-2">
         <div className="card">
           <h3>Event</h3>
           <label className="field"><span>TBA Event Key</span>
@@ -124,32 +124,8 @@ export default function AdminDashboard() {
           <p className="faint" style={{ fontSize: "0.75rem", marginTop: 8 }}>Pulls the match schedule + teams from The Blue Alliance.</p>
         </div>
 
-        <div className="card">
-          <h3>Betting Recovery</h3>
-          <p className="muted">Bets lock when scouting starts. Winners settle from TBA results; payouts use Statbotics odds captured when the bet was placed.</p>
-          <div className="seg" style={{ marginBottom: 12 }}>
-            <button
-              className={s.betting_enabled ? "on" : ""}
-              onClick={() => toggleBetting(true)}
-              disabled={busy === "betting-toggle" || s.betting_enabled}
-            >
-              Turn On
-            </button>
-            <button
-              className={!s.betting_enabled ? "on red" : ""}
-              onClick={() => toggleBetting(false)}
-              disabled={busy === "betting-toggle" || !s.betting_enabled}
-            >
-              Turn Off
-            </button>
-          </div>
-          <button className="btn danger block" onClick={resetBetting}>Reset everyone to 100 Purple Bucks</button>
-          <p className="faint" style={{ fontSize: "0.75rem", marginTop: 8 }}>Use reset only for event setup/testing mistakes. Individual bad bets can be deleted below.</p>
-        </div>
-      </div>
-
       <div className="card" style={{ marginTop: 16 }}>
-        <div className="card-h"><h3>Match Flow</h3>
+        <div className="card-h"><h3>Match Schedule</h3>
           <div className="row" style={{ gap: 10 }}>
             <span className="muted">Current match on field</span>
             <Stepper value={curMatch} onChange={saveCurrent} />
@@ -192,6 +168,57 @@ export default function AdminDashboard() {
       </div>
 
       <div className="card" style={{ marginTop: 16 }}>
+        <div className="card-h"><h3>Accounts</h3><span className="badge muted">{scouters.length}</span></div>
+        <div className="table-wrap">
+          <table className="data">
+            <thead><tr><th>Account</th><th>Role</th><th className="num">Matches</th><th className="num">Bucks</th></tr></thead>
+            <tbody>
+              {scouters.map((sc) => (
+                <tr key={sc.scout_id}>
+                  <td>{sc.display_name} <span className="faint mono">{sc.scout_id}</span></td>
+                  <td>
+                    <span className={"badge " + (sc.role === "admin" || sc.role === "strategy" ? "haze" : "muted")}>
+                      {ROLE_LABEL[sc.role as Role] || "Scouter"}
+                    </span>
+                  </td>
+                  <td className="num mono">{sc.matches_scouted}</td>
+                  <td className="num mono">{sc.bucks}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Betting is the last thing that matters at an event: it does not
+          affect a single scouting decision, and putting it up top pushed the
+          event and schedule controls below the fold. */}
+      <div className="admin-betting">
+        <h2 className="admin-section-title">Betting</h2>
+      <div className="card">
+        <h3>Betting Recovery</h3>
+        <p className="muted">Bets lock when scouting starts. Winners settle from TBA results; payouts use Statbotics odds captured when the bet was placed.</p>
+        <div className="seg" style={{ marginBottom: 12 }}>
+          <button
+            className={s.betting_enabled ? "on" : ""}
+            onClick={() => toggleBetting(true)}
+            disabled={busy === "betting-toggle" || s.betting_enabled}
+          >
+            Turn On
+          </button>
+          <button
+            className={!s.betting_enabled ? "on red" : ""}
+            onClick={() => toggleBetting(false)}
+            disabled={busy === "betting-toggle" || !s.betting_enabled}
+          >
+            Turn Off
+          </button>
+        </div>
+        <button className="btn danger block" onClick={resetBetting}>Reset everyone to 100 Purple Bucks</button>
+        <p className="faint" style={{ fontSize: "0.75rem", marginTop: 8 }}>Use reset only for event setup/testing mistakes. Individual bad bets can be deleted below.</p>
+      </div>
+
+      <div className="card" style={{ marginTop: 16 }}>
         <div className="card-h"><h3>Bets</h3><span className="badge muted">{bets.length}</span></div>
         {bets.length === 0 ? (
           <p className="muted">No bets yet.</p>
@@ -217,24 +244,6 @@ export default function AdminDashboard() {
           </div>
         )}
       </div>
-
-      <div className="card" style={{ marginTop: 16 }}>
-        <div className="card-h"><h3>Scouts</h3></div>
-        <div className="table-wrap">
-          <table className="data">
-            <thead><tr><th>Scout</th><th>Role</th><th className="num">Matches</th><th className="num">Bucks</th></tr></thead>
-            <tbody>
-              {scouters.map((sc) => (
-                <tr key={sc.scout_id}>
-                  <td>{sc.display_name}</td>
-                  <td>{sc.is_admin ? <span className="badge haze">admin</span> : <span className="badge muted">scout</span>}</td>
-                  <td className="num mono">{sc.matches_scouted}</td>
-                  <td className="num mono">{sc.bucks}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
       </div>
     </div>
   );

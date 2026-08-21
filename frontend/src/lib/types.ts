@@ -70,6 +70,24 @@ export interface ScoutEntry {
   created_at?: string;
 }
 
+/** A pit report: one per team per event. */
+export interface PitEntry {
+  team_number: number;
+  drivetrain?: string;
+  archetype?: string;
+  weight_lbs?: number | null;
+  width_in?: number | null;
+  length_in?: number | null;
+  can_climb?: string;
+  auto_routine?: string;
+  capabilities?: string[];
+  robot_photo?: string;
+  has_photo?: boolean;
+  notes?: string;
+  scout_id?: string;
+  updated_at?: string;
+}
+
 export interface Team {
   team_number: number;
   nickname: string;
@@ -181,6 +199,12 @@ export interface Picklist {
   pick_round: PickRound;
   items: PicklistItem[];
   updated_at: string;
+}
+
+/** One scouting report as the server returns it, used by the @match
+ *  references inside picklist notes. */
+export interface MatchReport extends ScoutEntry {
+  scout_id?: string;
 }
 
 export interface MeetingPicklists {

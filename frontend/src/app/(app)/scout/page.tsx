@@ -7,7 +7,8 @@ import { markAcknowledged, markStatus, queueScout, uuid } from "@/lib/db";
 import { flushQueue, payloadHash } from "@/lib/sync";
 import type { HeatPoint, MatchRec, ScoutEntry } from "@/lib/types";
 import { FieldInput } from "@/components/Field";
-import { Segmented, Stepper, Rating, TeamIdentity } from "@/components/ui";
+import { Confirm, Segmented, Stepper, Rating, TeamIdentity } from "@/components/ui";
+import { BettingPanel } from "@/components/BettingPanel";
 import { matchLabel } from "@/lib/format";
 
 const STATION_KEY = "hazehub.station";
@@ -56,6 +57,11 @@ const blank = (): ScoutEntry => ({
   notes: "",
 });
 
+/** A pending alliance/station switch, held until the scout confirms it. */
+type SlotChange =
+  | { kind: "alliance"; value: "red" | "blue" }
+  | { kind: "station"; value: number };
+
 function Step({ n, title, hint, children }: { n: number; title: string; hint?: string; children: React.ReactNode }) {
   return (
     <section className="card step-card">
@@ -78,6 +84,7 @@ export default function ScoutPage() {
   const [scheduleSource, setScheduleSource] = useState<ScheduleSource>("none");
   const [scheduleSavedAt, setScheduleSavedAt] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  const [pendingSlot, setPendingSlot] = useState<SlotChange | null>(null);
   const set = <K extends keyof ScoutEntry>(k: K, v: ScoutEntry[K]) => setF((p) => ({ ...p, [k]: v }));
 
   // Restore remembered alliance/station, then refine from the server.
@@ -124,6 +131,24 @@ export default function ScoutPage() {
 
   function rememberStation(alliance: "red" | "blue", station: number) {
     localStorage.setItem(STATION_KEY, JSON.stringify({ alliance, station }));
+  }
+
+  /**
+   * Alliance and station decide which robot every following submission is
+   * about, and they are remembered across matches precisely so nobody has to
+   * think about them. A thumb brushing one of these on a phone would silently
+   * re-point the rest of the day's scouting at the wrong team, so the switch
+   * is held here until it is confirmed.
+   */
+  function applySlotChange(change: SlotChange) {
+    if (change.kind === "alliance") {
+      set("alliance", change.value);
+      rememberStation(change.value, f.station);
+    } else {
+      set("station", change.value);
+      rememberStation(f.alliance, change.value);
+    }
+    setPendingSlot(null);
   }
 
   async function submit() {
@@ -173,13 +198,26 @@ export default function ScoutPage() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  const stationLabel = `${f.alliance === "red" ? "Red" : "Blue"} ${f.station}`;
+
   return (
-    <div className="scout-flow">
-      <div className="page-title"><h1>Scout a Match</h1></div>
-      <p className="page-sub">Top to bottom, done in a minute.</p>
+    // The alliance tint is the fastest way to notice you are on the wrong
+    // side of the field: the whole page leans red or blue, so a scout glancing
+    // down mid-match sees it without reading anything.
+    <div className={`scout-flow alliance-${f.alliance}`}>
+      <div className="scout-head">
+        <div className="page-title" style={{ margin: 0 }}>
+          <h1>Scout a Match</h1>
+          <span className="badge alliance-tag">{stationLabel}</span>
+        </div>
+        <span className="faint scout-head-sub">
+          {matchLabel(f.comp_level, f.match_number)}
+          {f.team_number ? ` · Team ${f.team_number}` : ""}
+        </span>
+      </div>
 
       {scheduleSource === "cache" && (
-        <div className="card tight" style={{ borderColor: "var(--amber)", marginBottom: 12 }}>
+        <div className="card tight scout-banner" style={{ borderColor: "var(--amber)" }}>
           <span className="dot amber" style={{ marginRight: 8 }} />
           Using the schedule saved on this device
           {scheduleSavedAt ? ` from ${new Date(scheduleSavedAt).toLocaleTimeString()}` : ""}.
@@ -187,184 +225,205 @@ export default function ScoutPage() {
         </div>
       )}
       {scheduleSource === "none" && (
-        <div className="card tight" style={{ borderColor: "var(--red)", marginBottom: 12 }}>
+        <div className="card tight scout-banner" style={{ borderColor: "var(--red)" }}>
           <span className="dot red" style={{ marginRight: 8 }} />
           No schedule on this device yet. Type the team number in by hand, and open
           this page once while online so the schedule is saved for later.
         </div>
       )}
 
-      {/* 1, who are you watching */}
-      <Step n={1} title="Your robot" hint="The team number fills in from the schedule.">
-        <div className="slot-grid">
-          <label className="field" style={{ margin: 0 }}>
-            <span>Match #</span>
-            <input
-              type="number"
-              inputMode="numeric"
-              value={f.match_number}
-              onChange={(e) => set("match_number", parseInt(e.target.value || "0", 10))}
-            />
-          </label>
-          <div className="field" style={{ margin: 0 }}>
-            <span>Alliance</span>
-            <Segmented
-              options={[{ value: "red", label: "Red" }, { value: "blue", label: "Blue" }]}
-              value={f.alliance}
-              onChange={(v) => { set("alliance", v); rememberStation(v, f.station); }}
-              color={(v) => (v as any)}
-            />
-          </div>
-          <div className="field" style={{ margin: 0 }}>
-            <span>Station</span>
-            <Segmented
-              options={[{ value: "1", label: "1" }, { value: "2", label: "2" }, { value: "3", label: "3" }]}
-              value={String(f.station)}
-              onChange={(v) => { const s = parseInt(v, 10); set("station", s); rememberStation(f.alliance, s); }}
-            />
-          </div>
-        </div>
-
-        <div className="watching">
-          {scheduledTeamProfile && f.team_number === scheduledTeam ? (
-            <div className="watching-team">
-              <span className="step-hint" style={{ margin: "0 0 6px" }}>You're watching</span>
-              <TeamIdentity team={scheduledTeamProfile} size="lg" />
-            </div>
-          ) : (
-            <label className="field" style={{ margin: 0, flex: 1 }}>
-              <span>Team #{scheduledTeam ? ` (schedule says ${scheduledTeam})` : " (no schedule loaded)"}</span>
-              <input
-                type="number"
-                inputMode="numeric"
-                value={f.team_number || ""}
-                onChange={(e) => set("team_number", parseInt(e.target.value || "0", 10))}
-                placeholder="0000"
-              />
-            </label>
-          )}
-          <div className="watching-actions">
-            {scheduledTeamProfile && f.team_number === scheduledTeam && (
-              <button className="btn sm ghost" type="button" onClick={() => set("team_number", 0)}>
-                Wrong team?
-              </button>
-            )}
-            <label className={"pill-check no-show" + (f.no_show ? " on" : "")}>
-              <input type="checkbox" checked={f.no_show} onChange={(e) => set("no_show", e.target.checked)} />
-              Robot never showed up
-            </label>
-          </div>
-        </div>
-      </Step>
-
-      {f.no_show ? (
-        <div className="card step-card noshow-note">
-          <p style={{ margin: 0 }}>
-            That's all we need, hit <b>Submit</b> below. The no-show is tracked as a
-            reliability flag and won't drag down the team's scoring averages.
-          </p>
-        </div>
-      ) : (
-        <>
-          {/* 2, score the match */}
-          <Step n={2} title="Score the match" hint="Tap the field where each attempt happened. Switch Auto/Teleop and Made/Missed as you go.">
-            <FieldInput points={f.heatmap} onChange={(pts: HeatPoint[]) => set("heatmap", pts)} />
-            <div className="row" style={{ gap: 10, marginTop: 14 }}>
-              <label className={"pill-check" + (f.auto_leave ? " on" : "")}>
-                <input type="checkbox" checked={f.auto_leave} onChange={(e) => set("auto_leave", e.target.checked)} /> Left start zone in Auto
+      {/* Two columns on anything wider than a phone: the field map and the
+          slot pickers need the width, the ratings and notes do not, and the
+          page used to run to three screens of scrolling because everything
+          was stacked in one narrow strip. */}
+      <div className="scout-cols">
+        <div className="scout-col">
+          {/* 1, who are you watching */}
+          <Step n={1} title="Your robot" hint="The team number fills in from the schedule.">
+            <div className="slot-grid">
+              <label className="field" style={{ margin: 0 }}>
+                <span>Match #</span>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  value={f.match_number}
+                  onChange={(e) => set("match_number", parseInt(e.target.value || "0", 10))}
+                />
               </label>
-              <label className={"pill-check" + (f.auto_climb ? " on" : "")}>
-                <input type="checkbox" checked={f.auto_climb} onChange={(e) => set("auto_climb", e.target.checked)} /> Auto climb
-              </label>
+              <div className="field" style={{ margin: 0 }}>
+                <span>Alliance</span>
+                <Segmented
+                  options={[{ value: "red", label: "Red" }, { value: "blue", label: "Blue" }]}
+                  value={f.alliance}
+                  onChange={(v) => { if (v !== f.alliance) setPendingSlot({ kind: "alliance", value: v }); }}
+                  color={(v) => (v as any)}
+                />
+              </div>
+              <div className="field" style={{ margin: 0 }}>
+                <span>Station</span>
+                <Segmented
+                  options={[{ value: "1", label: "1" }, { value: "2", label: "2" }, { value: "3", label: "3" }]}
+                  value={String(f.station)}
+                  onChange={(v) => {
+                    const s = parseInt(v, 10);
+                    if (s !== f.station) setPendingSlot({ kind: "station", value: s });
+                  }}
+                />
+              </div>
             </div>
-          </Step>
 
-          {/* 3, endgame */}
-          <Step n={3} title="Endgame climb">
-            <Segmented
-              options={[
-                { value: "none", label: "No climb" },
-                { value: "l1", label: "L1" },
-                { value: "l2", label: "L2" },
-                { value: "l3", label: "L3" },
-              ]}
-              value={f.climb}
-              onChange={(v) => set("climb", v)}
-            />
-          </Step>
-
-          {/* 4, how did they look */}
-          <Step n={4} title="How did they look?" hint="Gut ratings. 3 is average.">
-            <div className="rate-row">
-              <span>Driver skill</span>
-              <Rating value={f.driver_skill} onChange={(v) => set("driver_skill", v)} />
-            </div>
-            <div className="rate-row">
-              <span>Speed / cycling</span>
-              <Rating value={f.speed_rating} onChange={(v) => set("speed_rating", v)} />
-            </div>
-            <label className={"pill-check" + (f.played_defense ? " on" : "")} style={{ marginTop: 4 }}>
-              <input type="checkbox" checked={f.played_defense} onChange={(e) => set("played_defense", e.target.checked)} /> Played defense
-            </label>
-            {f.played_defense && (
-              <div className="defense-extra">
-                <div className="rate-row">
-                  <span>Defense quality</span>
-                  <Rating value={f.defense_rating} onChange={(v) => set("defense_rating", v)} />
+            <div className="watching">
+              {scheduledTeamProfile && f.team_number === scheduledTeam ? (
+                <div className="watching-team">
+                  <span className="step-hint" style={{ margin: "0 0 6px" }}>You&apos;re watching</span>
+                  <TeamIdentity team={scheduledTeamProfile} size="lg" />
                 </div>
-                <div className="rate-row">
-                  <span>Successful stops</span>
-                  <Stepper value={f.successful_stops} onChange={(v) => set("successful_stops", v)} />
-                </div>
-                <label className="field" style={{ margin: 0 }}>
-                  <span>Who did they defend?</span>
-                  <input value={f.defense_on} onChange={(e) => set("defense_on", e.target.value)} placeholder="e.g. 254, 1678" />
+              ) : (
+                <label className="field" style={{ margin: 0, flex: 1 }}>
+                  <span>Team #{scheduledTeam ? ` (schedule says ${scheduledTeam})` : " (no schedule loaded)"}</span>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    value={f.team_number || ""}
+                    onChange={(e) => set("team_number", parseInt(e.target.value || "0", 10))}
+                    placeholder="0000"
+                  />
+                </label>
+              )}
+              <div className="watching-actions">
+                {scheduledTeamProfile && f.team_number === scheduledTeam && (
+                  <button className="btn sm ghost" type="button" onClick={() => set("team_number", 0)}>
+                    Wrong team?
+                  </button>
+                )}
+                <label className={"pill-check no-show" + (f.no_show ? " on" : "")}>
+                  <input type="checkbox" checked={f.no_show} onChange={(e) => set("no_show", e.target.checked)} />
+                  Robot never showed up
                 </label>
               </div>
-            )}
-          </Step>
-
-          {/* 5, quick tags */}
-          <Step n={5} title="Quick tags" hint="Tap anything you saw, these build the team's profile.">
-            <div className="tag-list">
-              {QUICK_TAGS.map(({ tag, tone }) => {
-                const on = f.tags.includes(tag);
-                return (
-                  <button
-                    key={tag}
-                    type="button"
-                    className={"chip " + tone + (on ? " on" : "")}
-                    onClick={() => set("tags", on ? f.tags.filter((t) => t !== tag) : [...f.tags, tag])}
-                  >
-                    {tag}
-                  </button>
-                );
-              })}
             </div>
           </Step>
 
-          {/* 6, problems + notes */}
-          <Step n={6} title="Problems &amp; notes" hint="Only if something happened, otherwise skip straight to Submit.">
-            <div className="rate-row">
-              <span>Fouls</span>
-              <Stepper value={f.fouls} onChange={(v) => set("fouls", v)} />
+          {f.no_show ? (
+            <div className="card step-card noshow-note">
+              <p style={{ margin: 0 }}>
+                That&apos;s all we need, hit <b>Submit</b> below. The no-show is tracked as a
+                reliability flag and won&apos;t drag down the team&apos;s scoring averages.
+              </p>
             </div>
-            <label className={"pill-check" + (f.failure ? " on" : "")} style={{ margin: "4px 0 10px" }}>
-              <input type="checkbox" checked={f.failure} onChange={(e) => set("failure", e.target.checked)} /> Robot broke / died
-            </label>
-            {f.failure && (
-              <label className="field">
-                <span>What failed?</span>
-                <input value={f.failure_details} onChange={(e) => set("failure_details", e.target.value)} placeholder="e.g. lost comms, drivetrain" />
-              </label>
-            )}
-            <label className="field" style={{ margin: 0 }}>
-              <span>Anything the numbers miss?</span>
-              <textarea value={f.notes} onChange={(e) => set("notes", e.target.value)} placeholder="Strategy, partner compatibility, driver decisions…" />
-            </label>
-          </Step>
-        </>
-      )}
+          ) : (
+            /* 2, score the match */
+            <Step n={2} title="Score the match" hint="Tap the field where each attempt happened. Switch Auto/Teleop and Made/Missed as you go.">
+              <FieldInput points={f.heatmap} onChange={(pts: HeatPoint[]) => set("heatmap", pts)} />
+              <div className="row" style={{ gap: 10, marginTop: 14 }}>
+                <label className={"pill-check" + (f.auto_leave ? " on" : "")}>
+                  <input type="checkbox" checked={f.auto_leave} onChange={(e) => set("auto_leave", e.target.checked)} /> Left start zone in Auto
+                </label>
+                <label className={"pill-check" + (f.auto_climb ? " on" : "")}>
+                  <input type="checkbox" checked={f.auto_climb} onChange={(e) => set("auto_climb", e.target.checked)} /> Auto climb
+                </label>
+              </div>
+            </Step>
+          )}
+        </div>
+
+        <div className="scout-col">
+          {!f.no_show && (
+            <>
+              {/* 3, endgame */}
+              <Step n={3} title="Endgame climb">
+                <Segmented
+                  options={[
+                    { value: "none", label: "No climb" },
+                    { value: "l1", label: "L1" },
+                    { value: "l2", label: "L2" },
+                    { value: "l3", label: "L3" },
+                  ]}
+                  value={f.climb}
+                  onChange={(v) => set("climb", v)}
+                />
+              </Step>
+
+              {/* 4, how did they look */}
+              <Step n={4} title="How did they look?" hint="Gut ratings. 3 is average.">
+                <div className="rate-row">
+                  <span>Driver skill</span>
+                  <Rating value={f.driver_skill} onChange={(v) => set("driver_skill", v)} />
+                </div>
+                <div className="rate-row">
+                  <span>Speed / cycling</span>
+                  <Rating value={f.speed_rating} onChange={(v) => set("speed_rating", v)} />
+                </div>
+                <label className={"pill-check" + (f.played_defense ? " on" : "")} style={{ marginTop: 4 }}>
+                  <input type="checkbox" checked={f.played_defense} onChange={(e) => set("played_defense", e.target.checked)} /> Played defense
+                </label>
+                {f.played_defense && (
+                  <div className="defense-extra">
+                    <div className="rate-row">
+                      <span>Defense quality</span>
+                      <Rating value={f.defense_rating} onChange={(v) => set("defense_rating", v)} />
+                    </div>
+                    <div className="rate-row inline">
+                      <span>Successful stops</span>
+                      <Stepper value={f.successful_stops} onChange={(v) => set("successful_stops", v)} />
+                    </div>
+                    <label className="field" style={{ margin: 0 }}>
+                      <span>Who did they defend?</span>
+                      <input value={f.defense_on} onChange={(e) => set("defense_on", e.target.value)} placeholder="e.g. 254, 1678" />
+                    </label>
+                  </div>
+                )}
+              </Step>
+
+              {/* 5, quick tags */}
+              <Step n={5} title="Quick tags" hint="Tap anything you saw, these build the team's profile.">
+                <div className="tag-list">
+                  {QUICK_TAGS.map(({ tag, tone }) => {
+                    const on = f.tags.includes(tag);
+                    return (
+                      <button
+                        key={tag}
+                        type="button"
+                        className={"chip " + tone + (on ? " on" : "")}
+                        onClick={() => set("tags", on ? f.tags.filter((t) => t !== tag) : [...f.tags, tag])}
+                      >
+                        {tag}
+                      </button>
+                    );
+                  })}
+                </div>
+              </Step>
+
+              {/* 6, problems + notes */}
+              <Step n={6} title="Problems &amp; notes" hint="Only if something happened, otherwise skip straight to Submit.">
+                {/* The counter sits against its label rather than pushed to
+                    the far edge, so the two read as one control. */}
+                <div className="rate-row inline">
+                  <span>Fouls</span>
+                  <Stepper value={f.fouls} onChange={(v) => set("fouls", v)} />
+                </div>
+                <label className={"pill-check" + (f.failure ? " on" : "")} style={{ margin: "4px 0 10px" }}>
+                  <input type="checkbox" checked={f.failure} onChange={(e) => set("failure", e.target.checked)} /> Robot broke / died
+                </label>
+                {f.failure && (
+                  <label className="field">
+                    <span>What failed?</span>
+                    <input value={f.failure_details} onChange={(e) => set("failure_details", e.target.value)} placeholder="e.g. lost comms, drivetrain" />
+                  </label>
+                )}
+                <label className="field" style={{ margin: 0 }}>
+                  <span>Comments?</span>
+                  <textarea value={f.notes} onChange={(e) => set("notes", e.target.value)} placeholder="Strategy, partner compatibility, driver decisions…" />
+                </label>
+              </Step>
+            </>
+          )}
+
+          {/* Betting lives here now instead of behind its own tab: the match
+              you are about to scout is the one you want to bet on. */}
+          <BettingPanel matchNumber={f.match_number} />
+        </div>
+      </div>
 
       {/* sticky submit bar */}
       <div className="submit-bar">
@@ -379,6 +438,31 @@ export default function ScoutPage() {
           {busy ? "Saving…" : "Submit →"}
         </button>
       </div>
+
+      {pendingSlot && (
+        <Confirm
+          title={pendingSlot.kind === "alliance" ? "Change your alliance?" : "Change your driver station?"}
+          body={
+            pendingSlot.kind === "alliance" ? (
+              <>
+                You are set to <b>{stationLabel}</b>. Switching to{" "}
+                <b>{pendingSlot.value === "red" ? "Red" : "Blue"} {f.station}</b> changes which
+                robot you are scouting for this match and every one after it.
+              </>
+            ) : (
+              <>
+                You are set to <b>{stationLabel}</b>. Switching to{" "}
+                <b>{f.alliance === "red" ? "Red" : "Blue"} {pendingSlot.value}</b> changes which
+                robot you are scouting for this match and every one after it.
+              </>
+            )
+          }
+          confirmLabel="Yes, change it"
+          cancelLabel="No, keep it"
+          onConfirm={() => applySlotChange(pendingSlot)}
+          onCancel={() => setPendingSlot(null)}
+        />
+      )}
     </div>
   );
 }

@@ -587,6 +587,10 @@ class PitEntry:
     team_number: int
     scout_id: str = ""
     drivetrain: str = ""
+    #: Free text: what kind of robot this is ("fast cycler", "defense bot",
+    #: "climber"). Typed rather than picked from a list, because the useful
+    #: archetypes change with the game and nobody knows them in week one.
+    archetype: str = ""
     weight_lbs: Optional[float] = None
     width_in: Optional[float] = None
     length_in: Optional[float] = None
@@ -609,6 +613,7 @@ class PitEntry:
             "team_num": _int(self.team_number),
             "scouter_id": self.scout_id or "",
             "drivetrain": self.drivetrain or "",
+            "archetype": self.archetype or "",
             "weight_lbs": self.weight_lbs,
             "width_in": self.width_in,
             "length_in": self.length_in,
@@ -627,6 +632,7 @@ class PitEntry:
             team_number=_int(d.get("team_num")),
             scout_id=d.get("scouter_id") or "",
             drivetrain=d.get("drivetrain") or "",
+            archetype=d.get("archetype") or "",
             weight_lbs=d.get("weight_lbs"),
             width_in=d.get("width_in"),
             length_in=d.get("length_in"),

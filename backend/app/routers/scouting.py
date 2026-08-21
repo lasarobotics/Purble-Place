@@ -294,6 +294,7 @@ class PitIn(BaseModel):
     event_key: Optional[str] = None
     team_number: int
     drivetrain: str = ""
+    archetype: str = ""
     weight_lbs: Optional[float] = None
     width_in: Optional[float] = None
     length_in: Optional[float] = None
@@ -330,6 +331,48 @@ def submit_pit(
     return {"ok": True}
 
 
+def _pit_dict(row) -> dict:
+    return {
+        "team_number": row.team_number,
+        "drivetrain": row.drivetrain,
+        "archetype": row.archetype,
+        "weight_lbs": row.weight_lbs,
+        "width_in": row.width_in,
+        "length_in": row.length_in,
+        "can_climb": row.can_climb,
+        "auto_routine": row.auto_routine,
+        "capabilities": row.capabilities,
+        "robot_photo": row.robot_photo,
+        "notes": row.notes,
+        "scout_id": row.scout_id,
+        "updated_at": row.updated_at.isoformat(),
+    }
+
+
+@pit_router.get("")
+def list_pit(
+    event: str | None = None,
+    photos: bool = False,
+    _: Scouter = Depends(current_scouter),
+) -> list[dict]:
+    """Every pit report at this event.
+
+    Photos are base64 blobs measured in hundreds of KiB, so the list omits
+    them unless asked; the page that shows one fetches that team on its own.
+    """
+    event_key = repo.resolve_event(event)
+    out = []
+    for row in repo.pits_for_event(event_key):
+        data = _pit_dict(row)
+        if not photos:
+            data["robot_photo"] = ""
+            data["has_photo"] = bool(row.robot_photo)
+        else:
+            data["has_photo"] = bool(row.robot_photo)
+        out.append(data)
+    return out
+
+
 @pit_router.get("/{team_number}")
 def get_pit(
     team_number: int,
@@ -340,15 +383,4 @@ def get_pit(
     row = repo.pit(event_key, team_number)
     if not row:
         return None
-    return {
-        "team_number": row.team_number,
-        "drivetrain": row.drivetrain,
-        "weight_lbs": row.weight_lbs,
-        "width_in": row.width_in,
-        "length_in": row.length_in,
-        "can_climb": row.can_climb,
-        "auto_routine": row.auto_routine,
-        "capabilities": row.capabilities,
-        "robot_photo": row.robot_photo,
-        "notes": row.notes,
-    }
+    return _pit_dict(row)

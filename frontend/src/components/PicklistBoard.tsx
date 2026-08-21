@@ -12,6 +12,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Picklist, PicklistItem, Team } from "@/lib/types";
 import { TeamIdentity } from "@/components/ui";
 import { TeamDetailModal } from "@/components/TeamDetailModal";
+import { NoteEditor } from "@/components/MatchRef";
 
 export interface BoardProps {
   list: Picklist;
@@ -129,13 +130,13 @@ export function PicklistBoard({ list, teams, pool, canEdit, onChange }: BoardPro
                   </div>
                 )}
 
-                <textarea
-                  className="pick-note"
+                {/* Typing "@42" here offers the scouting data from qual 42
+                    for this team, so the reason carries its evidence. */}
+                <NoteEditor
                   value={justificationOf(it)}
-                  onChange={(e) => setNote(i, e.target.value)}
+                  onChange={(v) => setNote(i, v)}
+                  team={it.team}
                   placeholder="Why this team, at this rank"
-                  rows={2}
-                  maxLength={1000}
                   readOnly={!canEdit}
                 />
               </li>

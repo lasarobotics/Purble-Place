@@ -11,9 +11,10 @@ import { onBus } from "@/lib/bus";
 import { timeAgo } from "@/lib/format";
 import { useToast } from "@/lib/toast";
 import type { MeetingPicklists, Picklist, Team } from "@/lib/types";
-import { Loading, Empty } from "@/components/ui";
+import { Confirm, Loading, Empty } from "@/components/ui";
 import { ClickableTeam } from "@/components/TeamDetailModal";
 import { FinalPicklists } from "@/components/FinalPicklists";
+import { NoteText } from "@/components/MatchRef";
 
 const FINAL_DIVISIONS = ["418", "436"] as const;
 const isFinalList = (p: Picklist) => p.owner_id.startsWith("final-");
@@ -27,6 +28,7 @@ export default function AllPicklistsPage() {
   const [teams, setTeams] = useState<Record<number, Team>>({});
   const [round, setRound] = useState<1 | 2>(1);
   const [loading, setLoading] = useState(true);
+  const [clearing, setClearing] = useState<Picklist | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -66,6 +68,18 @@ export default function AllPicklistsPage() {
     }
   }
 
+  async function clearFinal(list: Picklist) {
+    const division = finalDivision(list);
+    setClearing(null);
+    try {
+      await api(`/api/picklists/finals/${division}?pick_round=${list.pick_round}`, { method: "DELETE" });
+      toast(`Cleared Final ${division}`, "ok");
+      load();
+    } catch (e: any) {
+      toast(e.message || "Could not clear the final picklist", "err");
+    }
+  }
+
   if (loading) return <Loading />;
 
   const forRound = (rows: Picklist[]) => rows.filter((l) => l.pick_round === round);
@@ -95,10 +109,26 @@ export default function AllPicklistsPage() {
         <Empty icon="list" title="No picklists yet" sub="They appear here as people build them." />
       ) : (
         <>
-          <Group title="Master and final lists" lists={master} teams={teams} onFinal={makeFinal} big />
-          <Group title="Strategy lists" lists={strategy} teams={teams} onFinal={makeFinal} big />
-          <Group title="Scouter lists" lists={scouter} teams={teams} onFinal={makeFinal} />
+          <Group title="Master and final lists" lists={master} teams={teams} onFinal={makeFinal} onClearFinal={setClearing} big />
+          <Group title="Strategy lists" lists={strategy} teams={teams} onFinal={makeFinal} onClearFinal={setClearing} big />
+          <Group title="Scouter lists" lists={scouter} teams={teams} onFinal={makeFinal} onClearFinal={setClearing} />
         </>
+      )}
+
+      {clearing && (
+        <Confirm
+          title={`Delete Final ${finalDivision(clearing)}?`}
+          body={
+            <>
+              This empties the <b>{finalDivision(clearing)} {clearing.pick_round === 1 ? "first" : "second"} pick</b>{" "}
+              list for everyone. The list it was copied from is not touched, so you can
+              promote it again.
+            </>
+          }
+          confirmLabel="Yes, delete it"
+          onConfirm={() => clearFinal(clearing)}
+          onCancel={() => setClearing(null)}
+        />
       )}
     </div>
   );
@@ -109,12 +139,14 @@ function Group({
   lists,
   teams,
   onFinal,
+  onClearFinal,
   big,
 }: {
   title: string;
   lists: Picklist[];
   teams: Record<number, Team>;
   onFinal: (d: "418" | "436", p: Picklist) => void;
+  onClearFinal: (p: Picklist) => void;
   big?: boolean;
 }) {
   if (!lists.length) return null;
@@ -154,7 +186,9 @@ function Group({
                       showNickname={!!big}
                     />
                     {big && justificationOf(it) && (
-                      <span className="pick-why">{justificationOf(it)}</span>
+                      <span className="pick-why">
+                        <NoteText note={justificationOf(it)} team={it.team} />
+                      </span>
                     )}
                   </li>
                 ))}
@@ -171,6 +205,13 @@ function Group({
                     Final {d}
                   </button>
                 ))}
+              </div>
+            )}
+            {isFinalList(p) && p.items.length > 0 && (
+              <div className="btn-row" style={{ marginTop: 10 }}>
+                <button className="btn sm danger" onClick={() => onClearFinal(p)}>
+                  Delete Final {finalDivision(p)}
+                </button>
               </div>
             )}
           </div>

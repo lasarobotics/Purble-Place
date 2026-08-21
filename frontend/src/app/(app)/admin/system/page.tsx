@@ -23,9 +23,17 @@ interface Health {
   records: { scouting_total: number };
   reconciliation: {
     checked_matches: number;
-    missing: { count: number; matches: number[] };
+    missing: {
+      count: number;
+      matches: number[];
+      /** Every unscouted chair: which match, which alliance, which station. */
+      slots: { match: number; alliance: "red" | "blue"; station: number; team: number }[];
+    };
+    /** Robots scouted by more than one person. Kept on purpose — this is
+     *  coverage, not a fault — so it is reported apart from the findings. */
+    double_scouted?: { count: number; items: { match: number; team: number; count: number }[] };
     duplicates: { count: number; items: { match: number; team: number; count: number }[] };
-    wrong_team: { count: number; items: { match: number; team: number; scout_id: string }[] };
+    wrong_team: { count: number; items: { match: number; team: number; scout_id: string; alliance?: string; station?: number }[] };
     by_match: { match: number; submissions: number; teams_covered: number }[];
   };
   scouts: {
@@ -81,8 +89,10 @@ export default function SystemHealthPage() {
 
   const dbOk = h.database.reachable;
   const rec = h.reconciliation;
-  const issues = rec.missing.count + rec.duplicates.count + rec.wrong_team.count;
-  const stale = h.scouts.filter((s) => s.potentially_stale);
+  // Double-scouted robots are excluded on purpose: every report is kept, and
+  // counting them as problems used to invite people to go and delete one.
+  const issues = rec.missing.count + rec.wrong_team.count;
+  const doubled = rec.double_scouted ?? rec.duplicates;
   const quota = h.quota?.operations ?? {};
   // Worst-case share of the day's free-tier allowance, projected over 12 hours.
   const quotaPct = Math.max(
@@ -108,9 +118,9 @@ export default function SystemHealthPage() {
 
       <div className="grid cols-4" style={{ marginBottom: 16 }}>
         <Stat label="Cloud records" value={h.records.scouting_total} />
-        <Stat label="Missing matches" value={rec.missing.count} accent={rec.missing.count > 0} />
-        <Stat label="Data issues" value={rec.duplicates.count + rec.wrong_team.count} accent={rec.duplicates.count + rec.wrong_team.count > 0} />
-        <Stat label="Quiet scouts" value={stale.length} accent={stale.length > 0} />
+        <Stat label="Missing reports" value={rec.missing.count} accent={rec.missing.count > 0} />
+        <Stat label="Wrong team" value={rec.wrong_team.count} accent={rec.wrong_team.count > 0} />
+        <Stat label="Double scouted" value={doubled.count} />
       </div>
 
       <div className="grid cols-2">
@@ -183,18 +193,45 @@ export default function SystemHealthPage() {
                 <b>{issues === 0 ? `All ${rec.checked_matches} played matches look clean` : `${issues} finding(s) across ${rec.checked_matches} played matches`}</b>
               </p>
               {rec.missing.count > 0 && (
-                <div style={{ marginBottom: 8 }}>
-                  <div className="faint" style={{ marginBottom: 4 }}>No scouting at all:</div>
-                  <div className="tag-list">
-                    {rec.missing.matches.map((m) => <span key={m} className="chip static sm">Q{m}</span>)}
+                <div style={{ marginBottom: 10 }}>
+                  <div className="faint" style={{ marginBottom: 6 }}>
+                    Nobody scouted these robots. The station is the chair that was
+                    empty, so this is who to go and ask:
                   </div>
+                  <div className="missing-slots">
+                    {(rec.missing.slots ?? []).map((slot) => (
+                      <span
+                        key={`${slot.match}-${slot.alliance}-${slot.station}`}
+                        className={`missing-slot ${slot.alliance}`}
+                      >
+                        <b>Q{slot.match}</b>
+                        <span className={`badge ${slot.alliance}`}>
+                          {slot.alliance.toUpperCase()} {slot.station}
+                        </span>
+                        <span className="mono">{slot.team}</span>
+                      </span>
+                    ))}
+                  </div>
+                  {rec.missing.count > (rec.missing.slots?.length ?? 0) && (
+                    <p className="faint" style={{ margin: "6px 0 0", fontSize: "0.78rem" }}>
+                      and {rec.missing.count - (rec.missing.slots?.length ?? 0)} more.
+                    </p>
+                  )}
                 </div>
               )}
-              {rec.duplicates.items.map((d, i) => (
-                <p key={i} className="faint" style={{ margin: "2px 0" }}>Duplicate: Q{d.match} team {d.team} scouted {d.count}×</p>
-              ))}
+              {doubled.count > 0 && (
+                <p className="faint" style={{ margin: "8px 0 2px" }}>
+                  <b>{doubled.count}</b> robot{doubled.count === 1 ? " was" : "s were"} scouted by
+                  more than one person. Every report is kept and feeds the Consensus Radar:{" "}
+                  {doubled.items.map((d) => `Q${d.match} team ${d.team} (${d.count}×)`).join(", ")}
+                  {doubled.count > doubled.items.length ? ", and more" : ""}.
+                </p>
+              )}
               {rec.wrong_team.items.map((w, i) => (
-                <p key={i} className="faint" style={{ margin: "2px 0" }}>Wrong team: Q{w.match}. {w.team} isn't on the field ({w.scout_id})</p>
+                <p key={i} className="faint" style={{ margin: "2px 0" }}>
+                  Wrong team: Q{w.match}
+                  {w.alliance ? ` ${w.alliance} ${w.station}` : ""}. {w.team} isn&apos;t on the field ({w.scout_id})
+                </p>
               ))}
             </>
           )}

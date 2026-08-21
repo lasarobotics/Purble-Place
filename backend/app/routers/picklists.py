@@ -246,6 +246,35 @@ def set_final(
     return _dict(final)
 
 
+@router.delete("/finals/{division}")
+def clear_final(
+    division: str,
+    pick_round: int = PICK_FIRST,
+    event: str | None = None,
+    scouter: Scouter = Depends(current_scouter),
+) -> dict:
+    """Empty a final list so it disappears from the meeting screens again.
+
+    The document itself is kept rather than deleted: ``/finals`` only returns
+    lists that have teams in them, so emptying is what "delete" means here,
+    and keeping the row means the next promotion reuses the same ID instead of
+    leaving orphans behind.
+    """
+    if scouter.role not in ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail="Admin or strategy only")
+    if division not in {"418", "436"}:
+        raise HTTPException(status_code=400, detail="Final picklist must be for 418 or 436")
+
+    event_key = repo.resolve_event(event)
+    found = repo.find_picklist_round(event_key, f"final-{division}", pick_round, True)
+    if not found:
+        raise HTTPException(status_code=404, detail=f"No final {division} list for this pick")
+    found.items = []
+    repo.save_picklist(found)
+    emit("picklist_changed", {"id": found.id, "master": True, "final": division})
+    return {"ok": True, "division": division, "pick_round": pick_round}
+
+
 @router.post("")
 def create(
     body: PicklistIn,

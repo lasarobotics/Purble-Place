@@ -1,4 +1,11 @@
 "use client";
+// The scout's landing screen.
+//
+// Deliberately thin. A row of tiles used to duplicate the sidebar, one link
+// per destination, which made the page look busy while telling nobody
+// anything they could not already see in the nav. What is left is the three
+// things a scout actually opens this page to find out: which match is on,
+// where they stand in the betting, and how the last few matches went.
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { api } from "@/lib/api";
@@ -8,33 +15,38 @@ import { matchLabel, num, pct } from "@/lib/format";
 import type { LeaderRow, MatchRec, Team, Bet } from "@/lib/types";
 import { Loading, TeamAvatar, Modal } from "@/components/ui";
 import { TeamDetail } from "@/components/TeamDetail";
-import { Icon } from "@/components/icons";
 
-const ACTIONS = [
-  { href: "/prematch", icon: "bot", title: "Pre-Match", sub: "Robots in the next match" },
-  { href: "/film", icon: "film", title: "Film", sub: "Video + scouting, side by side" },
-  { href: "/betting", icon: "coins", title: "Betting", sub: "Wager your Purple Bucks" },
-  { href: "/picklists", icon: "list", title: "Picklists", sub: "Build & share pick lists" },
-];
+/** How many finished matches the results strip shows. */
+const RECENT_RESULTS = 5;
 
 export default function HomePage() {
   const { session } = useAuth();
   const [board, setBoard] = useState<LeaderRow[]>([]);
   const [cur, setCur] = useState<{ current: MatchRec | null; on_deck: MatchRec[]; event: string; current_number: number } | null>(null);
   const [bets, setBets] = useState<Bet[]>([]);
+  const [recent, setRecent] = useState<MatchRec[]>([]);
   const [loading, setLoading] = useState(true);
   const [expand, setExpand] = useState<Team | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [b, c, mine] = await Promise.all([
+      const [b, c, mine, all] = await Promise.all([
         api<LeaderRow[]>("/api/betting/leaderboard"),
         api<any>("/api/matches/current"),
         api<{ bets: Bet[] }>("/api/betting/mine"),
+        api<{ matches: MatchRec[] }>("/api/matches").catch(() => ({ matches: [] as MatchRec[] })),
       ]);
       setBoard(b);
       setCur(c);
       setBets(mine.bets);
+      // Newest decided matches first. The schedule is already ordered, so
+      // this is a filter and a reverse rather than a second request.
+      setRecent(
+        all.matches
+          .filter((m) => m.winner != null || m.red_score != null)
+          .slice(-RECENT_RESULTS)
+          .reverse()
+      );
     } catch {}
     setLoading(false);
   }, []);
@@ -55,7 +67,6 @@ export default function HomePage() {
 
   return (
     <div className="landing">
-      {/* Hero */}
       <section className="hero">
         <p className="hero-kicker">
           {cur?.event ? <>Live at <b>{cur.event}</b></> : "No event set yet"}
@@ -66,11 +77,6 @@ export default function HomePage() {
             ? <>let&apos;s scout <span className="haze-text">{matchLabel(nextMatch.comp_level, nextMatch.match_number)}</span></>
             : <>ready when <span className="haze-text">the schedule is</span></>}
         </h1>
-        <p className="hero-sub">
-          {nextMatch
-            ? "One page, top to bottom. Your alliance and station are already remembered."
-            : "An admin sets the event in the Dashboard, then everything lights up."}
-        </p>
         <div className="hero-cta">
           <Link href="/scout" className="btn primary lg">Scout the next match →</Link>
           {me && (
@@ -82,55 +88,72 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Big, obvious destinations */}
-      <section className="action-tiles">
-        {ACTIONS.map((a) => (
-          <Link key={a.href} href={a.href} className="action-tile">
-            <span className="action-ico"><Icon name={a.icon} size={22} /></span>
-            <b>{a.title}</b>
-            <span className="action-sub">{a.sub}</span>
-          </Link>
-        ))}
-      </section>
-
       <div className="grid cols-2">
         {/* On the field */}
         <div className="card">
           <div className="card-h">
             <h3>On The Field</h3>
-            <Link href="/prematch" className="btn sm ghost">Pre-Match →</Link>
+            {nextMatch && (
+              <span className="badge muted">
+                {cur?.current ? "Now" : "Up next"} · {matchLabel(nextMatch.comp_level, nextMatch.match_number)}
+              </span>
+            )}
           </div>
           {!cur?.event ? (
             <p className="muted" style={{ margin: 0 }}>No event selected yet.</p>
           ) : nextMatch ? (
-            <>
-              <div className="muted" style={{ fontSize: "0.78rem", marginBottom: 8 }}>
-                {cur.current ? "Now" : "Up next"} · {matchLabel(nextMatch.comp_level, nextMatch.match_number)}
-              </div>
-              <MatchPreview m={nextMatch} onExpand={setExpand} />
-            </>
+            <MatchPreview m={nextMatch} onExpand={setExpand} />
           ) : (
             <p className="muted" style={{ margin: 0 }}>Schedule not published yet, check back soon.</p>
           )}
         </div>
 
-        {/* Leaderboard, trimmed */}
-        <div className="card">
-          <div className="card-h"><h3>Top Bettors</h3><Link href="/betting" className="btn sm ghost">Betting →</Link></div>
-          <div className="table-wrap">
-            <table className="data">
-              <thead><tr><th>#</th><th>Scout</th><th className="num">Bucks</th><th className="num">Win%</th></tr></thead>
-              <tbody>
-                {board.slice(0, 5).map((r) => (
-                  <tr key={r.scout_id} style={r.scout_id === session?.scout_id ? { background: "rgba(102,51,153,0.25)" } : {}}>
-                    <td><span className={r.rank <= 3 ? `rank-chip ${["gold", "silver", "bronze"][r.rank - 1]}` : "rank-chip"}>{r.rank}</span></td>
-                    <td>{r.display_name}</td>
-                    <td className="num mono">{r.bucks}</td>
-                    <td className="num mono">{r.bets ? pct(r.win_rate) : "-"}</td>
-                  </tr>
+        <div className="home-side">
+          {/* Leaderboard, cut to the podium plus your own row. The full board
+              is not something anyone needs on the way to a match. */}
+          <div className="card tight">
+            <div className="card-h"><h3>Top Bettors</h3></div>
+            <ol className="mini-board">
+              {board.slice(0, 3).map((r) => (
+                <li key={r.scout_id} className={r.scout_id === session?.scout_id ? "me" : ""}>
+                  <span className={`rank-chip sm ${["gold", "silver", "bronze"][r.rank - 1] || ""}`}>{r.rank}</span>
+                  <span className="mini-board-name">{r.display_name}</span>
+                  <span className="mono">{r.bucks}</span>
+                  <span className="faint mono">{r.bets ? pct(r.win_rate) : "-"}</span>
+                </li>
+              ))}
+              {me && me.rank > 3 && (
+                <li className="me">
+                  <span className="rank-chip sm">{me.rank}</span>
+                  <span className="mini-board-name">{me.display_name}</span>
+                  <span className="mono">{me.bucks}</span>
+                  <span className="faint mono">{me.bets ? pct(me.win_rate) : "-"}</span>
+                </li>
+              )}
+              {board.length === 0 && <li className="faint">No bets placed yet.</li>}
+            </ol>
+          </div>
+
+          {/* Previous match scores */}
+          <div className="card tight">
+            <div className="card-h"><h3>Recent Results</h3></div>
+            {recent.length === 0 ? (
+              <p className="faint" style={{ margin: 0, fontSize: "0.82rem" }}>No finished matches yet.</p>
+            ) : (
+              <ul className="result-list">
+                {recent.map((m) => (
+                  <li key={m.match_key}>
+                    <span className="result-match">{matchLabel(m.comp_level, m.match_number)}</span>
+                    <span className={"result-score" + (m.winner === "red" ? " won" : "")}>{m.red_score ?? "-"}</span>
+                    <span className="faint">-</span>
+                    <span className={"result-score blue" + (m.winner === "blue" ? " won" : "")}>{m.blue_score ?? "-"}</span>
+                    <span className={`badge ${m.winner === "red" ? "red" : m.winner === "blue" ? "blue" : "muted"}`}>
+                      {m.winner ? m.winner : "tie"}
+                    </span>
+                  </li>
                 ))}
-              </tbody>
-            </table>
+              </ul>
+            )}
           </div>
         </div>
       </div>
@@ -138,7 +161,7 @@ export default function HomePage() {
       {/* My open bets, only when there are any */}
       {openBets.length > 0 && (
         <div className="card" style={{ marginTop: 16 }}>
-          <div className="card-h"><h3>My Open Bets</h3><Link href="/betting" className="btn sm ghost">Betting →</Link></div>
+          <div className="card-h"><h3>My Open Bets</h3><Link href="/scout" className="btn sm ghost">Bet on the next match →</Link></div>
           <div className="grid auto">
             {openBets.map((b) => (
               <div key={b.id} className={`stat ${b.pick === "red" ? "alliance-red" : "alliance-blue"}`}>

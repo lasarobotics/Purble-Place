@@ -323,6 +323,17 @@ def pit(event_key: str, team_number: int) -> Optional[PitEntry]:
     return store.get(schema.PIT_SCOUTING, schema.pit_id(event_key, team_number))
 
 
+def pits_for_event(event_key: str) -> list[PitEntry]:
+    """Every pit report at this event, lowest team number first.
+
+    The collection is mirrored into RAM scoped to the current event, so this
+    is a list comprehension rather than a query.
+    """
+    key = (event_key or "").strip()
+    rows = [r for r in store.all(schema.PIT_SCOUTING) if not key or r.event_key == key]
+    return sorted(rows, key=lambda r: r.team_number)
+
+
 def save_pit(row: PitEntry) -> None:
     photo = row.robot_photo or ""
     if len(photo.encode("utf-8")) > schema.MAX_PHOTO_BYTES:
