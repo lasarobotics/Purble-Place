@@ -246,6 +246,8 @@ backend/
     auth.py            sign-in + tokens
     external.py        TBA + Statbotics clients (cached)
     game.py            the season: scoring, endgame, tags  <- edit this each year
+    forms.py           field types, validation, diffing, the starting forms
+    form_store.py      form history: append-only, attributed, revertible
     scoring.py         turns a scouting entry into points, reading game.py
     archive.py         rolls a finished event into one durable document
     analytics.py       summaries, rank, strength-of-schedule, compare
@@ -260,6 +262,43 @@ frontend/
   public/
     sw.js              service worker: the app keeps working with no signal
 ```
+
+## 🧱 Form Builder
+
+**Admin > Form Builder** designs the scouting forms in the app. No code, no
+deploy: the scouting and pit pages render whatever the forms say, so a new
+game is a form change.
+
+Fourteen field types, none of which name a game element: counters, ratings,
+choose-one and choose-many, quick tags, a stopwatch, a team picker, a camera
+field, a field map, and plain text. Between them they express every scouting
+form the team has run, from stacking games to shooting games to grid games.
+
+Fields can carry point values, so a form scores a game this build has never
+heard of. They can also be conditional ("only ask the defense rating if they
+played defense"). A live preview sits beside the editor and is rendered by the
+same component the scouts use, so what you are designing is the form itself.
+
+**Version history works like git.**
+
+| | |
+|---|---|
+| Save | Writes a new version. Nothing is ever edited in place. |
+| Author + message | Every version records who and why. |
+| Diff | Field by field, keyed on the field, so a reshuffle reads as a move. |
+| Publish | Separate from saving, so a change can be drafted first. |
+| Revert | Writes a *new* version copying an old one. The versions in between stay, so a revert is itself revertible. |
+| Delete | Archives. The history is kept and the form can be restored. |
+
+Two guard rails. A field's key is the name its answers are stored under
+forever, so it is locked once saved: renaming the label is free, renaming the
+key is not offered. And dropping a field the built-in analytics read is
+allowed but never silent, because "where did the climb rate go" is a question
+somebody asks three weeks later.
+
+Answers to fields that have no column of their own are stored in the
+submission's `responses` map with the form version that collected them, so a
+form rebuilt for a new game needs no schema change.
 
 ## 🗓️ Rolling over to a new season
 
@@ -276,7 +315,8 @@ it. Everything game-specific lives in **one file**: `backend/app/game.py`.
 That is the whole job. No TypeScript changes: the scouting form fetches the
 definition from `GET /api/game` and renders the endgame buttons and tag chips
 from it, caching a copy on each device so a scout with no signal still gets
-the right form. Scoring, the analytics and the insight rules all read the same
+the right form. `game.py` also seeds the starting forms, which the Form
+Builder above then edits. Scoring, the analytics and the insight rules all read the same
 object, and each stored entry keeps the season it was collected under, so last
 year's numbers are not silently rewritten by this year's rules.
 

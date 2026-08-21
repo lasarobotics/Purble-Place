@@ -311,6 +311,15 @@ def entries_for_team(
 # Pit scouting                                                                 #
 # --------------------------------------------------------------------------- #
 class PitIn(BaseModel):
+    """A pit report.
+
+    Two ways in. The named fields are the ones the analytics and the team
+    detail popup read. ``answers`` is what the pit form actually collected,
+    keyed by field key: anything whose key matches a named field is folded
+    into it, and everything else is kept in ``responses`` so a form built for
+    a new game does not need a schema change to store its questions.
+    """
+
     event_key: Optional[str] = None
     team_number: int
     drivetrain: str = ""
@@ -323,6 +332,15 @@ class PitIn(BaseModel):
     capabilities: list[str] = Field(default_factory=list)
     robot_photo: str = ""
     notes: str = ""
+    answers: dict[str, Any] = Field(default_factory=dict)
+    form_version: int = 0
+
+
+#: PitEntry columns that a form field may fill in by using the same key.
+PIT_COLUMNS = {
+    "drivetrain", "archetype", "weight_lbs", "width_in", "length_in",
+    "can_climb", "auto_routine", "capabilities", "robot_photo", "notes",
+}
 
 
 pit_router = APIRouter(prefix="/api/pit", tags=["pit"])
@@ -339,8 +357,24 @@ def submit_pit(
     )
     data = body.model_dump()
     data.pop("event_key", None)
+    answers = data.pop("answers", None) or {}
+    form_version = data.pop("form_version", 0)
+
     for k, v in data.items():
         setattr(row, k, v)
+
+    # Split what the form collected: known keys fill their column so the
+    # existing screens keep working, the rest is kept verbatim.
+    extra = {}
+    for key, value in answers.items():
+        if key in PIT_COLUMNS:
+            setattr(row, key, value)
+        elif key != "team_number":
+            extra[key] = value
+    if answers:
+        row.responses = extra
+        row.form_version = int(form_version or 0)
+
     row.event_key = event_key
     row.scout_id = scouter.scout_id
     try:
@@ -364,6 +398,8 @@ def _pit_dict(row) -> dict:
         "capabilities": row.capabilities,
         "robot_photo": row.robot_photo,
         "notes": row.notes,
+        "responses": row.responses,
+        "form_version": row.form_version,
         "scout_id": row.scout_id,
         "updated_at": row.updated_at.isoformat(),
     }

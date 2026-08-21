@@ -24,7 +24,11 @@ from .database import close_db, init_db
 from .firestore_db import guard
 from .firestore_db import status as firestore_status
 from .realtime import hub
-from .routers import admin, auth, betting, events, matches, picklists, scouting, sync, system, teams
+from .routers import (
+    admin, auth, betting, events, forms, matches, picklists, scouting, sync,
+    system, teams,
+)
+from .form_store import seed_builtin_forms
 from .seed import seed
 
 logging.basicConfig(level=logging.INFO)
@@ -53,6 +57,9 @@ async def lifespan(app: FastAPI):
     try:
         init_db()
         seed()
+        # The scouting and pit pages render from these, so a fresh install
+        # needs them before anyone signs in.
+        seed_builtin_forms()
         # The event pointer decides what every screen shows. If it has gone
         # stale the app looks empty while the data sits in the datastore under
         # another key, so it is checked here rather than discovered at an event.
@@ -87,6 +94,7 @@ for r in (
     scouting.pit_router,
     betting.router,
     picklists.router,
+    forms.router,
     admin.router,
     sync.router,
     system.router,

@@ -43,6 +43,7 @@ const ADMIN_NAV = [
   { href: "/film", label: "Film Review", icon: "film" },
   { href: "/meeting", label: "Picklist Meeting", icon: "folder" },
   { href: "/admin/picklists", label: "All Pick Lists", icon: "folder" },
+  { href: "/admin/forms", label: "Form Builder", icon: "clipboard" },
   { href: "/admin/system", label: "System Health", icon: "refresh" },
 ];
 

@@ -598,6 +598,13 @@ class PitEntry:
     capabilities: list[str] = field(default_factory=list)
     robot_photo: str = ""
     notes: str = ""
+    #: Answers to fields the pit form asks that have no column here. A form
+    #: built for a new game invents its own questions, and they have to be
+    #: stored somewhere without a schema change per season.
+    responses: dict[str, Any] = field(default_factory=dict)
+    #: Which version of the pit form produced this report, so a report can
+    #: still be read against the questions that were actually asked.
+    form_version: int = 0
     updated_at: datetime = field(default_factory=_now)
 
     COLLECTION = schema.PIT_SCOUTING
@@ -621,6 +628,8 @@ class PitEntry:
             "capabilities": list(self.capabilities or []),
             "robot_photo": self.robot_photo or "",
             "notes": self.notes or "",
+            "responses": dict(self.responses or {}),
+            "form_version": _int(self.form_version),
             "updated_at": as_utc(self.updated_at),
         }
 
@@ -640,6 +649,8 @@ class PitEntry:
             capabilities=list(d.get("capabilities") or []),
             robot_photo=d.get("robot_photo") or "",
             notes=d.get("notes") or "",
+            responses=dict(d.get("responses") or {}),
+            form_version=_int(d.get("form_version")),
             updated_at=as_utc(d.get("updated_at")) or _now(),
         )
 
@@ -1101,6 +1112,136 @@ class EventArchive:
         )
 
 
+# --------------------------------------------------------------------------- #
+# forms + form_revisions                                                       #
+# --------------------------------------------------------------------------- #
+@dataclass
+class Form:
+    """``forms``: the current state of one form. Document ID is ``form_id``.
+
+    Deliberately thin. This is a pointer plus metadata; the definitions
+    themselves live in ``form_revisions`` and are never edited in place, so
+    this document changes only when a different version is published.
+    """
+
+    form_id: str
+    kind: str = "custom"
+    name: str = ""
+    description: str = ""
+    #: The revision scouts are currently filling in.
+    published_version: int = 0
+    #: The highest revision written, published or not.
+    latest_version: int = 0
+    #: Soft delete. Archived forms keep their whole history and can be
+    #: restored, because deleting a season of form design to fix a mistake is
+    #: not a recoverable action.
+    archived: bool = False
+    created_at: datetime = field(default_factory=_now)
+    updated_at: datetime = field(default_factory=_now)
+    updated_by: str = ""
+
+    COLLECTION = schema.FORMS
+
+    @property
+    def doc_id(self) -> str:
+        return self.form_id
+
+    def to_doc(self) -> dict[str, Any]:
+        return {
+            "form_id": self.form_id,
+            "kind": self.kind or "custom",
+            "name": self.name or self.form_id,
+            "description": self.description or "",
+            "published_version": _int(self.published_version),
+            "latest_version": _int(self.latest_version),
+            "archived": bool(self.archived),
+            "created_at": as_utc(self.created_at),
+            "updated_at": as_utc(self.updated_at),
+            "updated_by": self.updated_by or "",
+        }
+
+    @classmethod
+    def from_doc(cls, doc_id: str, d: dict[str, Any]) -> "Form":
+        return cls(
+            form_id=d.get("form_id") or doc_id,
+            kind=d.get("kind") or "custom",
+            name=d.get("name") or doc_id,
+            description=d.get("description") or "",
+            published_version=_int(d.get("published_version")),
+            latest_version=_int(d.get("latest_version")),
+            archived=bool(d.get("archived")),
+            created_at=as_utc(d.get("created_at")) or _now(),
+            updated_at=as_utc(d.get("updated_at")) or _now(),
+            updated_by=d.get("updated_by") or "",
+        )
+
+
+@dataclass
+class FormRevision:
+    """``form_revisions``: one immutable version of a form.
+
+    Append-only, like a commit. Editing a form writes a new revision with the
+    author, a message and a pointer to what it came from; nothing ever
+    overwrites a revision. Reverting writes another revision whose definition
+    is a copy of an older one, so the history stays a straight line and the
+    fact that a revert happened is itself recorded.
+
+    Document ID is ``{form_id}@{version}``, which sorts naturally and makes a
+    single revision fetchable without a query.
+    """
+
+    form_id: str
+    version: int
+    definition: dict[str, Any] = field(default_factory=dict)
+    #: What this revision came from. 0 for the first.
+    parent_version: int = 0
+    #: Why. Free text the author typed, like a commit message.
+    message: str = ""
+    author_id: str = ""
+    author_name: str = ""
+    created_at: datetime = field(default_factory=_now)
+    #: Set when this revision was made by reverting to an older one.
+    reverted_from: int = 0
+    #: A one-line summary of what changed against the parent, computed at
+    #: write time so the history list needs no diffing to render.
+    summary: str = ""
+
+    COLLECTION = schema.FORM_REVISIONS
+
+    @property
+    def doc_id(self) -> str:
+        return f"{self.form_id}@{int(self.version):06d}"
+
+    def to_doc(self) -> dict[str, Any]:
+        return {
+            "form_id": self.form_id,
+            "version": _int(self.version),
+            "definition": dict(self.definition or {}),
+            "parent_version": _int(self.parent_version),
+            "message": self.message or "",
+            "author_id": self.author_id or "",
+            "author_name": self.author_name or "",
+            "created_at": as_utc(self.created_at),
+            "reverted_from": _int(self.reverted_from),
+            "summary": self.summary or "",
+        }
+
+    @classmethod
+    def from_doc(cls, doc_id: str, d: dict[str, Any]) -> "FormRevision":
+        return cls(
+            form_id=d.get("form_id") or doc_id.split("@")[0],
+            version=_int(d.get("version")),
+            definition=dict(d.get("definition") or {}),
+            parent_version=_int(d.get("parent_version")),
+            message=d.get("message") or "",
+            author_id=d.get("author_id") or "",
+            author_name=d.get("author_name") or "",
+            created_at=as_utc(d.get("created_at")) or _now(),
+            reverted_from=_int(d.get("reverted_from")),
+            summary=d.get("summary") or "",
+        )
+
+
 MODEL_FOR_COLLECTION = {
     schema.SCOUTERS: Scouter,
     schema.EVENTS: Event,
@@ -1114,4 +1255,6 @@ MODEL_FOR_COLLECTION = {
     schema.NETWORK_STATUS: NetworkStatus,
     schema.SYNC_OUTBOX: OutboxRecord,
     schema.EVENT_ARCHIVES: EventArchive,
+    schema.FORMS: Form,
+    schema.FORM_REVISIONS: FormRevision,
 }

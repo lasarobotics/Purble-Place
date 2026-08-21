@@ -19,12 +19,35 @@ function isSupported(): boolean {
   return window.isSecureContext;
 }
 
+/**
+ * The worker is a production-only thing, deliberately.
+ *
+ * Static assets are cached first, which is right in production because every
+ * `/_next/static/` URL carries a build hash and therefore never changes
+ * content. The dev server serves those same paths *unhashed* and recompiles
+ * them in place, so cache-first pins whatever chunk was cached first and the
+ * browser silently runs stale code through every edit. That is an afternoon
+ * lost to "my change is not showing up", so development does not get a worker
+ * at all.
+ */
+const ENABLED = process.env.NODE_ENV === "production";
+
 export function useOffline(): OfflineState {
   const [ready, setReady] = useState(false);
   const [supported, setSupported] = useState(false);
 
   useEffect(() => {
     if (!isSupported()) return;
+
+    if (!ENABLED) {
+      // Clear out a worker left behind by a production build served from the
+      // same origin, or the developer inherits exactly the staleness above.
+      navigator.serviceWorker.getRegistrations()
+        .then((regs) => regs.forEach((r) => r.unregister()))
+        .catch(() => {});
+      return;
+    }
+
     setSupported(true);
 
     let alive = true;

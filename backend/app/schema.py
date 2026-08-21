@@ -69,6 +69,9 @@ NETWORK_STATUS = "network_status"
 DEVICES = "devices"
 #: One rolled-up document per finished event (see app/archive.py).
 EVENT_ARCHIVES = "event_archives"
+#: Form definitions and their append-only history (see app/forms.py).
+FORMS = "forms"
+FORM_REVISIONS = "form_revisions"
 
 ALL_COLLECTIONS = (
     SCOUTERS,
@@ -84,10 +87,17 @@ ALL_COLLECTIONS = (
     NETWORK_STATUS,
     DEVICES,
     EVENT_ARCHIVES,
+    FORMS,
+    FORM_REVISIONS,
 )
 
 #: Collections mirrored into RAM in full. Small, global, read on every page.
-GLOBAL_CACHED = (SCOUTERS, EVENTS, TEAM_CACHE, APP_SETTINGS, DEVICES, EVENT_ARCHIVES)
+# Forms are global and read on every scouting page load, so the current
+# definitions are mirrored. The revision history is not: it is append-only,
+# grows without bound, and is only read on the builder's history panel.
+GLOBAL_CACHED = (
+    SCOUTERS, EVENTS, TEAM_CACHE, APP_SETTINGS, DEVICES, EVENT_ARCHIVES, FORMS,
+)
 
 #: Collections mirrored into RAM filtered to the current event. These grow
 #: with the competition, so scoping the listener to one event keeps both the
@@ -95,7 +105,7 @@ GLOBAL_CACHED = (SCOUTERS, EVENTS, TEAM_CACHE, APP_SETTINGS, DEVICES, EVENT_ARCH
 EVENT_SCOPED_CACHED = (MATCHES, MATCH_SCOUTING, PICKLISTS, BETS, PIT_SCOUTING)
 
 #: Written but never listened to: nothing in the UI reads them hot.
-WRITE_ONLY = (SYNC_OUTBOX, NETWORK_STATUS)
+WRITE_ONLY = (SYNC_OUTBOX, NETWORK_STATUS, FORM_REVISIONS)
 
 
 # --------------------------------------------------------------------------- #

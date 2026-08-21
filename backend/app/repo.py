@@ -25,6 +25,8 @@ from .models import (
     Device,
     Event,
     EventArchive,
+    Form,
+    FormRevision,
     MatchRecord,
     NetworkStatus,
     OutboxRecord,
@@ -198,6 +200,69 @@ def events() -> list[Event]:
         key=lambda e: (e.start_date is not None, e.start_date, e.event_key),
         reverse=True,
     )
+
+
+# --------------------------------------------------------------------------- #
+# forms + form_revisions                                                       #
+# --------------------------------------------------------------------------- #
+def form(form_id: str) -> Optional[Form]:
+    return store.get(schema.FORMS, (form_id or "").strip())
+
+
+def forms(*, include_archived: bool = False) -> list[Form]:
+    rows = store.all(schema.FORMS)
+    if not include_archived:
+        rows = [f for f in rows if not f.archived]
+    return sorted(rows, key=lambda f: (f.kind, f.name.lower()))
+
+
+def save_form(row: Form) -> None:
+    store.write(row)
+
+
+def form_revision(form_id: str, version: int) -> Optional[FormRevision]:
+    key = f"{(form_id or '').strip()}@{int(version):06d}"
+    row = store.get(schema.FORM_REVISIONS, key)
+    if row is not None:
+        return row
+    # The history is write-only (see schema.WRITE_ONLY), so it is not mirrored
+    # into RAM and has to be read from the datastore on demand.
+    return _load_revision(key)
+
+
+def _load_revision(doc_id: str) -> Optional[FormRevision]:
+    try:
+        raw = store.backend.load(schema.FORM_REVISIONS, None)
+    except Exception:  # noqa: BLE001
+        return None
+    data = raw.get(doc_id)
+    return FormRevision.from_doc(doc_id, data) if data else None
+
+
+def form_revisions(form_id: str, limit: int = 100) -> list[FormRevision]:
+    """A form's history, newest first.
+
+    Reads the collection rather than a cache: history is opened by one admin
+    on one screen, so paying for it there is much cheaper than mirroring an
+    append-only log that grows all season.
+    """
+    form_id = (form_id or "").strip()
+    try:
+        raw = store.backend.load(schema.FORM_REVISIONS, None)
+    except Exception:  # noqa: BLE001
+        return []
+    rows = [
+        FormRevision.from_doc(doc_id, data)
+        for doc_id, data in raw.items()
+        if (data or {}).get("form_id") == form_id
+    ]
+    rows.sort(key=lambda r: r.version, reverse=True)
+    return rows[:limit]
+
+
+def save_form_revision(row: FormRevision) -> None:
+    """Write a revision. Never overwrites: a version number is used once."""
+    store.write(row)
 
 
 # --------------------------------------------------------------------------- #

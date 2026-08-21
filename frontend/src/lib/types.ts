@@ -84,6 +84,10 @@ export interface PitEntry {
   robot_photo?: string;
   has_photo?: boolean;
   notes?: string;
+  /** Answers to questions the pit form asks that have no column of their own. */
+  responses?: Record<string, any>;
+  /** Which version of the pit form produced this report. */
+  form_version?: number;
   scout_id?: string;
   updated_at?: string;
 }
