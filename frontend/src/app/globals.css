@@ -1285,3 +1285,146 @@ table.data th.num { text-align: right; }
 .diff-row.move   { background: var(--panel-2); border-left-color: var(--border-strong); }
 .diff-prop { display: block; font-size: 0.72rem; color: var(--faint); padding-left: 8px; }
 .diff-prop s { opacity: 0.7; }
+
+/* ===========================================================================
+   Repeatable actions, the generic control for "this game involves doing a
+   thing over and over". Sized for a thumb in a noisy gym: the result buttons
+   are the biggest targets on the page, because they are pressed most.
+   =========================================================================== */
+.action-group {
+  display: grid; gap: 8px; padding: 10px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius);
+  background: var(--bg-2);
+}
+.action-group-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 10px; flex-wrap: wrap;
+}
+.action-group-head > span:first-child {
+  font-size: 0.68rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--muted);
+}
+.action-tally { display: flex; gap: 10px; font-size: 0.74rem; color: var(--faint); }
+.action-tally b { color: var(--text); font-size: 0.86rem; }
+
+.action-picker { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.action-picker > span {
+  font-size: 0.68rem; color: var(--faint); font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.07em; min-width: 44px;
+}
+
+.action-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
+/* Large on purpose: this is the control a scout hits a hundred times a match,
+   often without looking down. */
+.action-buttons .btn { flex: 1 1 90px; min-height: 40px; font-size: 0.88rem; }
+.action-buttons .btn.ghost { flex: 0 0 auto; min-width: 72px; }
+
+.action-log { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; }
+.action-log li {
+  display: grid; grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: 8px; align-items: center; padding: 3px 6px;
+  font-size: 0.76rem; border-radius: 3px;
+}
+.action-log li:nth-child(odd) { background: var(--panel); }
+.action-log li > span:first-child { color: var(--faint); font-size: 0.7rem; }
+
+.slider-field { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 150px; }
+.slider-field input[type="range"] { flex: 1; accent-color: var(--accent); }
+.slider-field b { min-width: 26px; text-align: right; }
+
+.ranking-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+.ranking-list li {
+  display: flex; align-items: center; gap: 8px; padding: 4px 7px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--panel-2); font-size: 0.82rem;
+}
+
+.form-divider { border: 0; border-top: 1px solid var(--border); margin: 4px 0; }
+
+/* ===========================================================================
+   Seasons
+   =========================================================================== */
+.seasons-page { max-width: 1400px; }
+.seasons-layout {
+  display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 10px;
+  align-items: start;
+}
+@media (max-width: 900px) { .seasons-layout { grid-template-columns: 1fr; } }
+
+.season-list { display: grid; gap: 3px; align-content: start; padding: 10px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); }
+.season-item {
+  display: grid; gap: 1px; text-align: left; padding: 7px 8px; cursor: pointer;
+  background: transparent; border: 1px solid transparent;
+  border-left: 2px solid transparent; border-radius: var(--radius-sm);
+  color: var(--muted); font: inherit;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+.season-item:hover { background: var(--panel-2); color: var(--text); }
+.season-item.on { background: var(--panel-2); border-left-color: var(--accent); color: var(--text); }
+.season-item-name { display: flex; align-items: center; gap: 6px; font-size: 0.88rem; }
+.season-item-name b { font-family: var(--font-num); }
+.season-item-meta { font-size: 0.68rem; color: var(--faint); }
+
+.season-main { min-width: 0; display: grid; gap: 10px; }
+.season-toolbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 10px; background: var(--panel);
+  border: 1px solid var(--border); border-radius: var(--radius);
+}
+.season-toolbar .season-status { margin-left: auto; }
+
+/* The setup checklist. Read off the definition, so it can never disagree
+   with the thing it describes. */
+.checklist { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.checklist li {
+  display: grid; grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px; align-items: baseline; padding: 4px 6px;
+  border-radius: 3px; font-size: 0.82rem;
+}
+.checklist li.done { color: var(--muted); }
+.checklist li .mark { font-family: var(--font-num); font-weight: 700; }
+.checklist li.done .mark { color: var(--green); }
+.checklist li:not(.done) .mark { color: var(--faint); }
+.checklist li .hint { display: block; font-size: 0.72rem; color: var(--faint); }
+.checklist-progress {
+  height: 3px; border-radius: 2px; background: var(--panel-3);
+  overflow: hidden; margin-bottom: 8px;
+}
+.checklist-progress > span { display: block; height: 100%; background: var(--green); }
+
+/* The game editor: one panel per concept. */
+.game-editor { display: grid; gap: 10px; }
+.game-groups {
+  display: grid; gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+.game-group {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 10px;
+}
+.game-group h3 {
+  margin: 0 0 8px; font-size: 0.68rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.09em; color: var(--muted);
+}
+.game-rows { display: grid; gap: 4px; }
+.game-row {
+  display: grid; gap: 4px; align-items: center;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+}
+.game-row.wide { grid-template-columns: minmax(0, 1fr); }
+.game-row input, .game-row select { font-size: 0.8rem; }
+.game-row .btn { padding: 2px 7px; }
+
+/* A scoring rule reads as a sentence, because that is how somebody checks it. */
+.rule-row {
+  display: grid; gap: 5px; padding: 8px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--panel-2);
+}
+.rule-line { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; font-size: 0.78rem; }
+.rule-line select, .rule-line input { width: auto; min-width: 88px; font-size: 0.78rem; }
+.rule-line .rule-points { width: 66px; }
+.rule-word { color: var(--faint); }
+
+.season-empty { padding: 20px; text-align: center; }

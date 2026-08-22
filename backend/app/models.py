@@ -392,6 +392,21 @@ class ScoutEntry:
     #: Legacy alias the older clients still send; always equals submission_id.
     client_uuid: Optional[str] = None
 
+    # --- provenance ---------------------------------------------------- #
+    # What this report was collected under. Pinned at submission time and
+    # never rewritten, so a rule change or a form edit next week cannot
+    # change what this report meant when somebody actually watched the match.
+    season_id: str = ""
+    form_id: str = ""
+    form_version: int = 0
+    game_version: int = 0
+    #: Answers to questions the form asked that have no column here. A form
+    #: rebuilt for a new game invents its own questions.
+    responses: dict[str, Any] = field(default_factory=dict)
+    #: Repeated actions, the generic shape described in app/gamedef.py:
+    #: ``{action, phase, object, location, result, quantity, x, y, t}``.
+    actions: list[dict[str, Any]] = field(default_factory=list)
+
     COLLECTION = schema.MATCH_SCOUTING
 
     @property
@@ -414,6 +429,12 @@ class ScoutEntry:
             "station": _int(self.station, 1),
             "scouter_id": self.scout_id,
             "data": dict(self.data or {}),
+            "season_id": self.season_id or "",
+            "form_id": self.form_id or "",
+            "form_version": _int(self.form_version),
+            "game_version": _int(self.game_version),
+            "responses": dict(self.responses or {}),
+            "actions": list(self.actions or []),
             "no_show": bool(self.no_show),
             "comments": self.notes or "",
             "submitted_at": as_utc(self.created_at),
@@ -443,6 +464,12 @@ class ScoutEntry:
             station=_int(d.get("station"), 1),
             scout_id=d.get("scouter_id") or "",
             data=dict(d.get("data") or {}),
+            season_id=d.get("season_id") or "",
+            form_id=d.get("form_id") or "",
+            form_version=_int(d.get("form_version")),
+            game_version=_int(d.get("game_version")),
+            responses=dict(d.get("responses") or {}),
+            actions=list(d.get("actions") or []),
             no_show=bool(d.get("no_show")),
             notes=d.get("comments") or "",
             created_at=as_utc(d.get("submitted_at")) or _now(),
@@ -572,6 +599,12 @@ class ScoutEntry:
             no_show=bool(sub.get("no_show", False)),
             notes=sub.get("notes", "") or "",
             points=_float(sub.get("points")),
+            season_id=sub.get("season_id") or "",
+            form_id=sub.get("form_id") or "",
+            form_version=_int(sub.get("form_version")),
+            game_version=_int(sub.get("game_version")),
+            responses=dict(sub.get("responses") or {}),
+            actions=list(sub.get("actions") or []),
         )
 
 
@@ -602,9 +635,12 @@ class PitEntry:
     #: built for a new game invents its own questions, and they have to be
     #: stored somewhere without a schema change per season.
     responses: dict[str, Any] = field(default_factory=dict)
-    #: Which version of the pit form produced this report, so a report can
-    #: still be read against the questions that were actually asked.
+    #: Which version of which form produced this report, and under which
+    #: season, so it can still be read against the questions that were
+    #: actually asked.
+    form_id: str = ""
     form_version: int = 0
+    season_id: str = ""
     updated_at: datetime = field(default_factory=_now)
 
     COLLECTION = schema.PIT_SCOUTING
@@ -629,7 +665,9 @@ class PitEntry:
             "robot_photo": self.robot_photo or "",
             "notes": self.notes or "",
             "responses": dict(self.responses or {}),
+            "form_id": self.form_id or "",
             "form_version": _int(self.form_version),
+            "season_id": self.season_id or "",
             "updated_at": as_utc(self.updated_at),
         }
 
@@ -650,7 +688,9 @@ class PitEntry:
             robot_photo=d.get("robot_photo") or "",
             notes=d.get("notes") or "",
             responses=dict(d.get("responses") or {}),
+            form_id=d.get("form_id") or "",
             form_version=_int(d.get("form_version")),
+            season_id=d.get("season_id") or "",
             updated_at=as_utc(d.get("updated_at")) or _now(),
         )
 
@@ -1113,6 +1153,146 @@ class EventArchive:
 
 
 # --------------------------------------------------------------------------- #
+# seasons + season_revisions                                                   #
+# --------------------------------------------------------------------------- #
+#: A season being built, in play, or finished. The status is what stops an
+#: admin configuring next year's game into this year's live event.
+SEASON_SETUP = "setup"
+SEASON_ACTIVE = "active"
+SEASON_ARCHIVED = "archived"
+SEASON_STATUSES = (SEASON_SETUP, SEASON_ACTIVE, SEASON_ARCHIVED)
+
+
+@dataclass
+class Season:
+    """``seasons``: one FRC season. Document ID is ``season_id``.
+
+    A season owns its game definition, its forms, its events and everything
+    scouted under them. It is the boundary that keeps 2026 data meaning what
+    it meant in 2026 after the 2027 game lands.
+
+    The definition is stored inline because it is small, read on nearly every
+    request, and always wanted whole. Its history lives in
+    ``season_revisions``, the same append-only shape forms use.
+    """
+
+    season_id: str
+    year: int = 0
+    game_name: str = ""
+    status: str = SEASON_SETUP
+    #: The generic game definition (see app/gamedef.py) as a plain dict.
+    definition: dict[str, Any] = field(default_factory=dict)
+    #: Bumped on every saved change, and pinned onto every submission so a
+    #: scoring change cannot rewrite history.
+    game_version: int = 0
+    #: Which season the game configuration was copied from, if any.
+    copied_from: str = ""
+    notes: str = ""
+    created_at: datetime = field(default_factory=_now)
+    updated_at: datetime = field(default_factory=_now)
+    updated_by: str = ""
+
+    COLLECTION = schema.SEASONS
+
+    @property
+    def doc_id(self) -> str:
+        return self.season_id
+
+    @property
+    def is_archived(self) -> bool:
+        return self.status == SEASON_ARCHIVED
+
+    def to_doc(self) -> dict[str, Any]:
+        return {
+            "season_id": self.season_id,
+            "year": _int(self.year),
+            "game_name": self.game_name or "",
+            "status": self.status or SEASON_SETUP,
+            "definition": dict(self.definition or {}),
+            "game_version": _int(self.game_version),
+            "copied_from": self.copied_from or "",
+            "notes": self.notes or "",
+            "created_at": as_utc(self.created_at),
+            "updated_at": as_utc(self.updated_at),
+            "updated_by": self.updated_by or "",
+        }
+
+    @classmethod
+    def from_doc(cls, doc_id: str, d: dict[str, Any]) -> "Season":
+        return cls(
+            season_id=d.get("season_id") or doc_id,
+            year=_int(d.get("year")),
+            game_name=d.get("game_name") or "",
+            status=d.get("status") or SEASON_SETUP,
+            definition=dict(d.get("definition") or {}),
+            game_version=_int(d.get("game_version")),
+            copied_from=d.get("copied_from") or "",
+            notes=d.get("notes") or "",
+            created_at=as_utc(d.get("created_at")) or _now(),
+            updated_at=as_utc(d.get("updated_at")) or _now(),
+            updated_by=d.get("updated_by") or "",
+        )
+
+
+@dataclass
+class SeasonRevision:
+    """``season_revisions``: one immutable version of a game definition.
+
+    Exactly the contract form revisions have, for the same reason: a scoring
+    change must never reach backwards. A submission records the game version
+    it was collected under, and that version can always be read back.
+
+    Document ID is ``{season_id}@{version}``.
+    """
+
+    season_id: str
+    version: int
+    definition: dict[str, Any] = field(default_factory=dict)
+    parent_version: int = 0
+    message: str = ""
+    author_id: str = ""
+    author_name: str = ""
+    created_at: datetime = field(default_factory=_now)
+    reverted_from: int = 0
+    summary: str = ""
+
+    COLLECTION = schema.SEASON_REVISIONS
+
+    @property
+    def doc_id(self) -> str:
+        return f"{self.season_id}@{int(self.version):06d}"
+
+    def to_doc(self) -> dict[str, Any]:
+        return {
+            "season_id": self.season_id,
+            "version": _int(self.version),
+            "definition": dict(self.definition or {}),
+            "parent_version": _int(self.parent_version),
+            "message": self.message or "",
+            "author_id": self.author_id or "",
+            "author_name": self.author_name or "",
+            "created_at": as_utc(self.created_at),
+            "reverted_from": _int(self.reverted_from),
+            "summary": self.summary or "",
+        }
+
+    @classmethod
+    def from_doc(cls, doc_id: str, d: dict[str, Any]) -> "SeasonRevision":
+        return cls(
+            season_id=d.get("season_id") or doc_id.split("@")[0],
+            version=_int(d.get("version")),
+            definition=dict(d.get("definition") or {}),
+            parent_version=_int(d.get("parent_version")),
+            message=d.get("message") or "",
+            author_id=d.get("author_id") or "",
+            author_name=d.get("author_name") or "",
+            created_at=as_utc(d.get("created_at")) or _now(),
+            reverted_from=_int(d.get("reverted_from")),
+            summary=d.get("summary") or "",
+        )
+
+
+# --------------------------------------------------------------------------- #
 # forms + form_revisions                                                       #
 # --------------------------------------------------------------------------- #
 @dataclass
@@ -1128,6 +1308,9 @@ class Form:
     kind: str = "custom"
     name: str = ""
     description: str = ""
+    #: The season this form was built for. Scouting a 2027 event must not
+    #: hand somebody a form designed around the 2026 game.
+    season_id: str = ""
     #: The revision scouts are currently filling in.
     published_version: int = 0
     #: The highest revision written, published or not.
@@ -1152,6 +1335,7 @@ class Form:
             "kind": self.kind or "custom",
             "name": self.name or self.form_id,
             "description": self.description or "",
+            "season_id": self.season_id or "",
             "published_version": _int(self.published_version),
             "latest_version": _int(self.latest_version),
             "archived": bool(self.archived),
@@ -1167,6 +1351,7 @@ class Form:
             kind=d.get("kind") or "custom",
             name=d.get("name") or doc_id,
             description=d.get("description") or "",
+            season_id=d.get("season_id") or "",
             published_version=_int(d.get("published_version")),
             latest_version=_int(d.get("latest_version")),
             archived=bool(d.get("archived")),
@@ -1257,4 +1442,6 @@ MODEL_FOR_COLLECTION = {
     schema.EVENT_ARCHIVES: EventArchive,
     schema.FORMS: Form,
     schema.FORM_REVISIONS: FormRevision,
+    schema.SEASONS: Season,
+    schema.SEASON_REVISIONS: SeasonRevision,
 }

@@ -23,8 +23,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .analytics import (
-    NEGATIVE_TAGS,
-    POSITIVE_TAGS,
+    negative_tags,
+    positive_tags,
     all_summaries,
     team_entries,
     team_summary,
@@ -164,10 +164,10 @@ def _rules_insight(ev: dict[str, Any]) -> dict[str, Any]:
     # --- Tags ---
     for row in s["tags"][:6]:
         share = row["count"] / max(1, n)
-        if row["tag"] in POSITIVE_TAGS and share >= 0.4:
+        if row["tag"] in positive_tags() and share >= 0.4:
             add(strengths, f'Scouts keep tagging it "{row["tag"]}".',
                 f"{row['count']} of {n} reports")
-        elif row["tag"] in NEGATIVE_TAGS and share >= 0.3:
+        elif row["tag"] in negative_tags() and share >= 0.3:
             add(concerns, f'Recurring "{row["tag"]}" tag from the stands.',
                 f"{row['count']} of {n} reports")
 

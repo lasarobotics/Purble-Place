@@ -16,7 +16,7 @@ import statistics
 from typing import Any, Optional
 
 from . import repo, schema
-from .game import GAME
+from . import seasons
 from .models import ScoutEntry
 from .scoring import phase_counts
 
@@ -305,11 +305,16 @@ def data_picklist(event_key: str) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # Scout disagreement detection ("Consensus Radar")                             #
 # --------------------------------------------------------------------------- #
-# Which tags read as praise and which as criticism comes from the season
-# definition, so a new game's tags are picked up here without a second list to
-# keep in step (see app/game.py).
-NEGATIVE_TAGS = set(GAME.negative_tags)
-POSITIVE_TAGS = set(GAME.positive_tags)
+# Which tags read as praise and which as criticism comes from the season's game
+# definition, so a new game's tags are picked up without a second list to keep
+# in step. Resolved per call rather than at import: the definition lives in the
+# datastore, which is not up yet when this module is first imported.
+def negative_tags() -> set[str]:
+    return set(seasons.definition().negative_tags)
+
+
+def positive_tags() -> set[str]:
+    return set(seasons.definition().positive_tags)
 
 
 def scout_disagreements(event_key: str) -> dict[str, Any]:
@@ -347,9 +352,9 @@ def scout_disagreements(event_key: str) -> dict[str, Any]:
             tag_bal = 0.0
             total_reports = max(1, s["matches"])
             for row in s["tags"]:
-                if row["tag"] in POSITIVE_TAGS:
+                if row["tag"] in positive_tags():
                     tag_bal += row["count"] / total_reports
-                elif row["tag"] in NEGATIVE_TAGS:
+                elif row["tag"] in negative_tags():
                     tag_bal -= row["count"] / total_reports
             # Blend ratings (1-5 → 0-1), failure rate and tag balance.
             ratings = ((s["avg_driver"] + s["avg_speed"]) / 2 - 1) / 4

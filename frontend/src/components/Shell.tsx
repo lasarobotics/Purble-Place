@@ -15,7 +15,9 @@ import { ROLE_LABEL } from "@/lib/types";
 
 // Betting is not in here on purpose: it lives on the scouting page now, next
 // to the match it is about, rather than behind a tab of its own.
-const MAIN_NAV = [
+interface NavItem { href: string; label: string; icon: string }
+
+const MAIN_NAV: NavItem[] = [
   { href: "/home", label: "Home", icon: "home" },
   { href: "/scout", label: "Scout", icon: "clipboard" },
   { href: "/pit", label: "Pit Scout", icon: "wrench" },
@@ -32,20 +34,46 @@ const PICKLIST_NAV = [
   { href: "/account", label: "Account", icon: "user" },
 ];
 
-const ADMIN_NAV = [
-  { href: "/admin", label: "Dashboard", icon: "sliders" },
-  { href: "/admin/team-search", label: "Team Search", icon: "search" },
-  { href: "/admin/team-rank", label: "Team Rank", icon: "chart" },
-  { href: "/admin/data-picklist", label: "Data Picklist", icon: "trend" },
-  { href: "/admin/compare", label: "Compare Robots", icon: "scale" },
-  { href: "/admin/consensus", label: "Consensus Radar", icon: "radar" },
-  // Film review is a strategy tool, not something a scout needs mid-match.
-  { href: "/film", label: "Film Review", icon: "film" },
-  { href: "/meeting", label: "Picklist Meeting", icon: "folder" },
-  { href: "/admin/picklists", label: "All Pick Lists", icon: "folder" },
-  { href: "/admin/forms", label: "Form Builder", icon: "clipboard" },
-  { href: "/admin/system", label: "System Health", icon: "refresh" },
+// The admin side has grown to fifteen screens, which as one flat list was
+// impossible to scan. Grouped by what somebody is actually trying to do:
+// run the event, look at data, decide picks, configure the platform.
+const ADMIN_GROUPS: { title: string; items: NavItem[] }[] = [
+  {
+    title: "Event",
+    items: [
+      { href: "/admin", label: "Dashboard", icon: "sliders" },
+      { href: "/admin/system", label: "System Health", icon: "refresh" },
+    ],
+  },
+  {
+    title: "Analysis",
+    items: [
+      { href: "/admin/team-search", label: "Team Search", icon: "search" },
+      { href: "/admin/team-rank", label: "Team Rank", icon: "chart" },
+      { href: "/admin/compare", label: "Compare Robots", icon: "scale" },
+      { href: "/admin/consensus", label: "Consensus Radar", icon: "radar" },
+      { href: "/film", label: "Film Review", icon: "film" },
+    ],
+  },
+  {
+    title: "Picklists",
+    items: [
+      { href: "/meeting", label: "Picklist Meeting", icon: "folder" },
+      { href: "/admin/picklists", label: "All Pick Lists", icon: "folder" },
+      { href: "/admin/data-picklist", label: "Data Picklist", icon: "trend" },
+    ],
+  },
+  {
+    title: "Configure",
+    items: [
+      { href: "/admin/seasons", label: "Seasons & Game", icon: "calendar" },
+      { href: "/admin/forms", label: "Form Builder", icon: "clipboard" },
+    ],
+  },
 ];
+
+//: Flattened, for the active-link check and the mobile sheet.
+const ADMIN_NAV = ADMIN_GROUPS.flatMap((g) => g.items);
 
 const MOBILE_NAV = [
   { href: "/home", label: "Home", icon: "home" },
@@ -130,10 +158,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const sheetGroups = picklistOnly
     ? [{ title: "Picklist Meeting", items: PICKLIST_NAV }]
     : session.is_admin
-      ? [
-          { title: "Scouting", items: MAIN_NAV },
-          { title: "Strategy", items: ADMIN_NAV },
-        ]
+      ? [{ title: "Scouting", items: MAIN_NAV }, ...ADMIN_GROUPS]
       : [{ title: "Scouting", items: MAIN_NAV }];
   const mobileNav = picklistOnly
     ? PICKLIST_NAV
@@ -154,16 +179,21 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <span className="ico"><Icon name={n.icon} /></span> {n.label}
           </Link>
         ))}
-        {session.is_admin && (
-          <>
-            <div className="nav-section">Strategy</div>
-            {ADMIN_NAV.map((n) => (
-              <Link key={n.href} href={n.href} className={"nav-link" + (isActive(n.href) ? " active" : "")}>
-                <span className="ico"><Icon name={n.icon} /></span> {n.label}
-              </Link>
-            ))}
-          </>
-        )}
+        {session.is_admin &&
+          ADMIN_GROUPS.map((group) => (
+            <div key={group.title}>
+              <div className="nav-section">{group.title}</div>
+              {group.items.map((n) => (
+                <Link
+                  key={n.href}
+                  href={n.href}
+                  className={"nav-link" + (isActive(n.href) ? " active" : "")}
+                >
+                  <span className="ico"><Icon name={n.icon} /></span> {n.label}
+                </Link>
+              ))}
+            </div>
+          ))}
         <div className="sidebar-foot">
           <div className="divider" />
           <div className="row" style={{ justifyContent: "space-between" }}>
@@ -261,8 +291,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
     </div>
   );
 }
-
-interface NavItem { href: string; label: string; icon: string }
 
 /**
  * Full-screen tab picker for phones.

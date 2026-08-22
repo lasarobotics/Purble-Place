@@ -72,6 +72,11 @@ EVENT_ARCHIVES = "event_archives"
 #: Form definitions and their append-only history (see app/forms.py).
 FORMS = "forms"
 FORM_REVISIONS = "form_revisions"
+#: Seasons and their versioned game definitions (see app/seasons.py). A season
+#: is the unit that owns a game, its forms, its scouting and its analytics, so
+#: that last year's data keeps meaning what it meant last year.
+SEASONS = "seasons"
+SEASON_REVISIONS = "season_revisions"
 
 ALL_COLLECTIONS = (
     SCOUTERS,
@@ -89,6 +94,8 @@ ALL_COLLECTIONS = (
     EVENT_ARCHIVES,
     FORMS,
     FORM_REVISIONS,
+    SEASONS,
+    SEASON_REVISIONS,
 )
 
 #: Collections mirrored into RAM in full. Small, global, read on every page.
@@ -97,6 +104,7 @@ ALL_COLLECTIONS = (
 # grows without bound, and is only read on the builder's history panel.
 GLOBAL_CACHED = (
     SCOUTERS, EVENTS, TEAM_CACHE, APP_SETTINGS, DEVICES, EVENT_ARCHIVES, FORMS,
+    SEASONS,
 )
 
 #: Collections mirrored into RAM filtered to the current event. These grow
@@ -105,7 +113,7 @@ GLOBAL_CACHED = (
 EVENT_SCOPED_CACHED = (MATCHES, MATCH_SCOUTING, PICKLISTS, BETS, PIT_SCOUTING)
 
 #: Written but never listened to: nothing in the UI reads them hot.
-WRITE_ONLY = (SYNC_OUTBOX, NETWORK_STATUS, FORM_REVISIONS)
+WRITE_ONLY = (SYNC_OUTBOX, NETWORK_STATUS, FORM_REVISIONS, SEASON_REVISIONS)
 
 
 # --------------------------------------------------------------------------- #

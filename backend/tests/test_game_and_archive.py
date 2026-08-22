@@ -1,98 +1,18 @@
-"""The season definition, the event archive, and the event pointer.
+"""The event archive and the current-event pointer.
 
-All three exist so that one thing does not silently break another:
+Both exist so that one thing does not silently break another: an event that
+ends still has to be readable next season, and the current event pointer
+decides what every screen shows, so a stale one makes a working install look
+completely empty.
 
-* Scoring values live in one file so a new game is one edit, not a hunt.
-* An event that ends still has to be readable next season.
-* The current event pointer decides what every screen shows, so a stale one
-  makes a working install look completely empty.
+The game definition itself moved out of code and into seasons; it is covered by
+test_seasons.py and test_future_season.py.
 """
 from __future__ import annotations
 
 import pytest
 
-from app import game as game_mod
-from app.game import GAME, Game, EndgameLevel, Tag, game_for
 from app.models import EventArchive
-from app.scoring import attempt_value, compute_points
-
-
-# --------------------------------------------------------------------------- #
-# The season definition                                                        #
-# --------------------------------------------------------------------------- #
-def test_scoring_reads_every_value_from_the_game():
-    """A whole invented season should score correctly with no code change.
-
-    This is the actual promise of app/game.py: next January is an edit to that
-    file. If scoring ever hardcodes a number again, this fails.
-    """
-    invented = Game(
-        season=2099,
-        name="Test Game",
-        auto_made=10.0,
-        teleop_made=1.0,
-        auto_leave=7.0,
-        auto_endgame_bonus=5.0,
-        stop_bonus=2.0,
-        foul_penalty=3.0,
-        endgame_label="Docking",
-        endgame=[
-            EndgameLevel("none", "Not docked", 0.0),
-            EndgameLevel("docked", "Docked", 20.0),
-        ],
-        scoring_noun="cube",
-        tags=[Tag("Fast", "good"), Tag("Broke", "bad")],
-    )
-    game_mod.GAMES[2099] = invented
-    try:
-        entry = {
-            "heatmap": [
-                {"phase": "auto", "result": "made"},      # 10
-                {"phase": "teleop", "result": "made"},    # 1
-                {"phase": "teleop", "result": "missed"},  # 0
-            ],
-            "auto_leave": True,        # 7
-            "auto_climb": True,        # 5
-            "climb": "docked",         # 20
-            "successful_stops": 2,     # 4
-            "fouls": 1,                # -3
-        }
-        assert compute_points(entry, season=2099) == 44.0
-    finally:
-        game_mod.GAMES.pop(2099, None)
-
-
-def test_an_explicit_attempt_value_wins():
-    # A game with several scoring heights records the real number per tap,
-    # and the game file does not need to know the field layout.
-    assert attempt_value({"phase": "teleop", "result": "made", "value": 9}) == 9.0
-    assert attempt_value({"phase": "teleop", "result": "missed", "value": 9}) == 0.0
-
-
-def test_unknown_endgame_level_scores_nothing_rather_than_raising():
-    # Data collected under last year's game must not crash this year's scoring.
-    assert compute_points({"climb": "traversal"}) == 0.0
-
-
-def test_game_for_falls_back_to_the_season_in_play():
-    assert game_for(None) is GAME
-    assert game_for(1999) is GAME
-
-
-def test_endgame_none_is_the_first_level():
-    assert GAME.endgame_none == GAME.endgame[0].key
-
-
-def test_tags_split_by_tone():
-    assert set(GAME.positive_tags) | set(GAME.negative_tags) == set(GAME.tag_names)
-    assert not set(GAME.positive_tags) & set(GAME.negative_tags)
-
-
-def test_the_api_shape_carries_what_the_form_needs_to_render():
-    data = GAME.to_dict()
-    for key in ("season", "endgame", "endgame_none", "endgame_label", "tags", "phases"):
-        assert key in data, key
-    assert data["endgame"][0]["key"] == data["endgame_none"]
 
 
 # --------------------------------------------------------------------------- #

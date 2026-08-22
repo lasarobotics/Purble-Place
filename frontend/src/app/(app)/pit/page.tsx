@@ -10,7 +10,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useToast } from "@/lib/toast";
 import { onBus } from "@/lib/bus";
-import { blankAnswers, useFormDefinition } from "@/lib/formdef";
+import { blankAnswers, useActiveForm } from "@/lib/formdef";
 import type { PitEntry } from "@/lib/types";
 import { Empty, Loading, TeamIdentity } from "@/components/ui";
 import { FormRenderer } from "@/components/FormRenderer";
@@ -27,7 +27,7 @@ const REUSABLE_COLUMNS = [
 
 export default function PitScoutPage() {
   const toast = useToast();
-  const { form, loading, fromCache } = useFormDefinition("pit");
+  const { form, loading, fromCache } = useActiveForm("pit");
   const [answers, setAnswers] = useState<Record<string, any>>({});
   const [done, setDone] = useState<PitEntry[]>([]);
   const [busy, setBusy] = useState(false);
@@ -36,6 +36,7 @@ export default function PitScoutPage() {
   const definition = form?.definition;
   const teamNumber = Number(answers[TEAM_KEY]) || 0;
   const publishedVersion = form?.published_version;
+  const game = form?.game ?? null;
 
   // Reset whenever the published form changes underneath, so an edit does not
   // leave a half-filled form from the old questions.
@@ -87,7 +88,12 @@ export default function PitScoutPage() {
         body: {
           team_number: teamNumber,
           answers,
+          // Provenance: which form, which version, which season. Pinned here
+          // so this report can always be read against the questions it was
+          // actually collected with.
+          form_id: form?.form_id ?? "",
           form_version: publishedVersion ?? 0,
+          season_id: form?.season_id ?? "",
         },
       });
       toast(`Pit report saved for ${teamNumber}`, "ok");
@@ -133,6 +139,7 @@ export default function PitScoutPage() {
           <FormRenderer
             definition={definition}
             answers={answers}
+            game={game}
             onChange={(key, value) => setAnswers((cur) => ({ ...cur, [key]: value }))}
           />
           <button className="btn primary block" type="submit" disabled={busy}>

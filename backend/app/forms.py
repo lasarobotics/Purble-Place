@@ -9,9 +9,9 @@ that means every January is a code change, a deploy, and a strategy lead
 waiting on whoever writes TypeScript.
 
 So the form is data. An admin builds it in the app, the scouting page renders
-whatever it says, and submissions are stored against it. ``app/game.py`` still
-holds the season's scoring constants for the built-in analytics, but the
-*shape* of what gets collected lives here.
+whatever it says, and submissions are stored against it. The season's game
+definition (``app/gamedef.py``) says what a game contains; this module says
+what the scouts are asked about it.
 
 Why the field types are what they are
 -------------------------------------
@@ -43,7 +43,7 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
-from .game import GAME
+from .gamedef import GameDefinition, bootstrap_2026
 
 # --------------------------------------------------------------------------- #
 # Field types                                                                  #
@@ -51,27 +51,55 @@ from .game import GAME
 #: ``key -> (label, what it is for)``. The builder renders this list, so adding
 #: a type here is the only place a new control has to be declared on the server.
 FIELD_TYPES: dict[str, dict[str, str]] = {
-    "text":        {"label": "Short text",   "hint": "One line, e.g. a strategy note"},
-    "textarea":    {"label": "Long text",    "hint": "Several lines of comments"},
-    "number":      {"label": "Number",       "hint": "Typed number, e.g. a weight"},
-    "counter":     {"label": "Counter",      "hint": "Plus and minus, e.g. pieces scored"},
-    "toggle":      {"label": "Yes / no",     "hint": "A single checkbox"},
-    "rating":      {"label": "Rating",       "hint": "1 to N, e.g. driver skill"},
-    "select":      {"label": "Choose one",   "hint": "e.g. endgame level, start position"},
-    "multiselect": {"label": "Choose many",  "hint": "e.g. capabilities"},
-    "tags":        {"label": "Quick tags",   "hint": "One-tap good and bad observations"},
-    "timer":       {"label": "Stopwatch",    "hint": "Seconds, e.g. how long a climb took"},
-    "team":        {"label": "Team number",  "hint": "A team picker"},
-    "photo":       {"label": "Photo",        "hint": "Camera capture, e.g. the robot"},
-    "heatmap":     {"label": "Field map",    "hint": "Tap the field where things happened"},
-    "note":        {"label": "Instructions", "hint": "Static text, collects nothing"},
+    # Basic
+    "text":        {"label": "Short text",    "hint": "One line, e.g. a strategy note"},
+    "textarea":    {"label": "Long text",     "hint": "Several lines of comments"},
+    "number":      {"label": "Number",        "hint": "Typed number, e.g. a weight"},
+    "decimal":     {"label": "Decimal",       "hint": "A number with a fractional part"},
+    "toggle":      {"label": "Yes / no",      "hint": "A single checkbox"},
+    "rating":      {"label": "Rating",        "hint": "1 to N, e.g. driver skill"},
+    "slider":      {"label": "Slider",        "hint": "A value along a range"},
+    "datetime":    {"label": "Date and time", "hint": "When something happened"},
+    # Choice
+    "select":      {"label": "Choose one",    "hint": "e.g. endgame level, start position"},
+    "dropdown":    {"label": "Dropdown",      "hint": "Choose one, from a long list"},
+    "multiselect": {"label": "Choose many",   "hint": "e.g. capabilities"},
+    "tags":        {"label": "Quick tags",    "hint": "One-tap good and bad observations"},
+    "ranking":     {"label": "Ranking",       "hint": "Put options in order"},
+    # Scouting primitives
+    "counter":     {"label": "Counter",       "hint": "Plus and minus, e.g. pieces scored"},
+    "timer":       {"label": "Stopwatch",     "hint": "Seconds, e.g. how long an endgame took"},
+    "team":        {"label": "Team number",   "hint": "A team picker"},
+    "match":       {"label": "Match number",  "hint": "Which match this is about"},
+    "alliance":    {"label": "Alliance",      "hint": "Red or blue"},
+    "station":     {"label": "Driver station","hint": "1, 2 or 3"},
+    "phase":       {"label": "Phase",         "hint": "Which period of the match"},
+    "piece":       {"label": "Game piece",    "hint": "Which object, from the season's game"},
+    "location":    {"label": "Location",      "hint": "Where, from the season's game"},
+    "heatmap":     {"label": "Field map",     "hint": "Tap the field where things happened"},
+    "photo":       {"label": "Photo",         "hint": "Camera capture, e.g. the robot"},
+    # Repeated data
+    "actions":     {"label": "Repeatable actions",
+                    "hint": "Add a row per attempt: phase, piece, location, result"},
+    # Structure
+    "note":        {"label": "Instructions",  "hint": "Static text, collects nothing"},
+    "divider":     {"label": "Divider",       "hint": "A visual break, collects nothing"},
 }
 
 #: Types that hold no answer, so they are skipped by validation and scoring.
-DISPLAY_ONLY = {"note"}
+DISPLAY_ONLY = {"note", "divider"}
 
 #: Types whose answer is one of a fixed set, so they need ``options``.
-NEEDS_OPTIONS = {"select", "multiselect"}
+NEEDS_OPTIONS = {"select", "dropdown", "multiselect", "ranking"}
+
+#: Types whose choices come from the season's game definition instead of from
+#: options typed into the builder. This is the seam that keeps the form engine
+#: game agnostic: the form says "ask which game piece", the season says which
+#: pieces exist.
+FROM_GAME = {"phase": "phases", "piece": "pieces", "location": "locations"}
+
+#: Types that hold a list of records rather than a single answer.
+REPEATABLE = {"actions"}
 
 #: Submission columns a field may feed. Everything here is read by the built-in
 #: analytics, which is exactly why they are named rather than inferred.
@@ -199,6 +227,15 @@ def _validate_field(
     else:
         seen_keys[key] = label or key
 
+    # A field that draws its choices from the season's game does not carry
+    # options of its own, and must not be asked for any: the whole point is
+    # that the game says what the choices are.
+    if ftype in FROM_GAME and field.get("options"):
+        problems.append(
+            f"{where} ({label}) takes its choices from the season's game, so it "
+            "should not have its own options."
+        )
+
     if ftype in NEEDS_OPTIONS:
         options = field.get("options")
         if not isinstance(options, list) or not options:
@@ -222,7 +259,16 @@ def _validate_field(
         if not isinstance(scale, int) or not 2 <= scale <= 10:
             problems.append(f"{where} ({label}) needs a rating scale between 2 and 10.")
 
-    if ftype in ("counter", "number"):
+    if ftype == "actions":
+        # A repeatable action group is the generic answer to "this game
+        # involves doing a thing over and over". It has to say which thing.
+        if not str(field.get("action") or "").strip():
+            problems.append(
+                f"{where} ({label}) needs to say which action it records. "
+                "Pick one from the season's game."
+            )
+
+    if ftype in ("counter", "number", "decimal", "slider"):
         low, high = field.get("min"), field.get("max")
         if isinstance(low, (int, float)) and isinstance(high, (int, float)) and low > high:
             problems.append(f"{where} ({label}) has a minimum above its maximum.")
@@ -356,109 +402,142 @@ def summarize_diff(diff: dict[str, Any]) -> str:
 # --------------------------------------------------------------------------- #
 # The forms a fresh install starts with                                        #
 # --------------------------------------------------------------------------- #
-def _tag_options() -> list[dict[str, Any]]:
-    return [{"value": t.tag, "label": t.tag, "tone": t.tone} for t in GAME.tags]
+def _tag_options(game: GameDefinition) -> list[dict[str, Any]]:
+    return [{"value": t.tag, "label": t.tag, "tone": t.tone} for t in game.tags]
 
 
-def _endgame_options() -> list[dict[str, Any]]:
+def _endgame_options(game: GameDefinition) -> list[dict[str, Any]]:
     return [
-        {"value": level.key, "label": level.label, "points": level.points}
-        for level in GAME.endgame
+        {"value": s.key, "label": s.label, "points": s.points} for s in game.endgame
     ]
 
 
-def default_match_form() -> dict[str, Any]:
-    """The built-in match form, generated from the season definition.
+def _rule_points(game: GameDefinition, rule_id: str) -> float | None:
+    rule = next((r for r in game.rules if r.rule_id == rule_id), None)
+    return rule.points if rule else None
 
-    This is a starting point and not a fixed schema. An admin can rebuild it
-    field by field; the point of generating it from ``game.py`` is that a
-    fresh install already asks the right questions for the current season.
+
+def default_match_form(game: GameDefinition | None = None) -> dict[str, Any]:
+    """A match form generated from a game definition.
+
+    A starting point, not a fixed schema: an admin rebuilds it field by field
+    in the builder. Generating it from the season's game means a freshly
+    created season already asks questions that make sense for its game rather
+    than for last year's.
     """
+    game = game or bootstrap_2026()
+    sections = [
+        {
+            "title": "Your robot",
+            "hint": "The team number fills in from the schedule.",
+            "fields": [
+                {"key": "team_number", "type": "team", "label": "Team",
+                 "maps_to": "team_number", "required": True},
+                {"key": "no_show", "type": "toggle", "label": "Robot never showed up",
+                 "maps_to": "no_show"},
+            ],
+        },
+    ]
+
+    # One repeatable action group per action the game defines. This is what
+    # makes the generated form fit a stacking game as well as a shooting one:
+    # the group's options are the game's own phases, pieces and locations.
+    action_fields = []
+    for action in game.actions:
+        action_fields.append({
+            "key": f"{action.key}_actions",
+            "type": "actions",
+            "label": action.label,
+            "action": action.key,
+            "hint": "Add one for each attempt.",
+            "phases": action.phases or game.phase_keys,
+            "objects": action.objects or [p.key for p in game.pieces],
+            "locations": action.locations or [l.key for l in game.locations],
+            "results": action.results or ["made", "missed"],
+        })
+
+    if game.field_map.image:
+        action_fields.insert(0, {
+            "key": "heatmap", "type": "heatmap", "label": "Scoring map",
+            "maps_to": "heatmap",
+        })
+
+    if action_fields:
+        sections.append({
+            "title": "Score the match",
+            "hint": "Record what the robot actually did.",
+            "fields": action_fields,
+        })
+
+    if game.endgame:
+        sections.append({
+            "title": game.endgame_label,
+            "fields": [
+                {"key": "climb", "type": "select", "label": game.endgame_label,
+                 "maps_to": "climb", "default": game.endgame_none,
+                 "options": _endgame_options(game)},
+            ],
+        })
+
+    sections.append({
+        "title": "How did they look?",
+        "hint": "Gut ratings. 3 is average.",
+        "fields": [
+            {"key": "driver_skill", "type": "rating", "label": "Driver skill",
+             "maps_to": "driver_skill", "max": 5, "default": 3},
+            {"key": "speed_rating", "type": "rating", "label": "Speed / cycling",
+             "maps_to": "speed_rating", "max": 5, "default": 3},
+            {"key": "played_defense", "type": "toggle", "label": "Played defense",
+             "maps_to": "played_defense"},
+            {"key": "defense_rating", "type": "rating", "label": "Defense quality",
+             "maps_to": "defense_rating", "max": 5,
+             "visible_if": {"field": "played_defense", "equals": True}},
+            {"key": "successful_stops", "type": "counter", "label": "Successful stops",
+             "maps_to": "successful_stops", "min": 0,
+             "points": _rule_points(game, "stops"),
+             "visible_if": {"field": "played_defense", "equals": True}},
+            {"key": "defense_on", "type": "text", "label": "Who did they defend?",
+             "maps_to": "defense_on",
+             "visible_if": {"field": "played_defense", "equals": True}},
+        ],
+    })
+
+    if game.tags:
+        sections.append({
+            "title": "Quick tags",
+            "hint": "Tap anything you saw, these build the team's profile.",
+            "fields": [
+                {"key": "tags", "type": "tags", "label": "Quick tags",
+                 "maps_to": "tags", "options": _tag_options(game)},
+            ],
+        })
+
+    sections.append({
+        "title": "Problems and notes",
+        "hint": "Only if something happened.",
+        "fields": [
+            {"key": "fouls", "type": "counter", "label": "Fouls",
+             "maps_to": "fouls", "min": 0, "points": _rule_points(game, "fouls")},
+            {"key": "failure", "type": "toggle", "label": "Robot broke / died",
+             "maps_to": "failure"},
+            {"key": "failure_details", "type": "text", "label": "What failed?",
+             "maps_to": "failure_details",
+             "visible_if": {"field": "failure", "equals": True}},
+            {"key": "notes", "type": "textarea", "label": "Comments?",
+             "maps_to": "notes"},
+        ],
+    })
+
     return {
         "name": "Match Scouting",
-        "description": "What a scout fills in during a qualification match.",
-        "sections": [
-            {
-                "title": "Your robot",
-                "hint": "The team number fills in from the schedule.",
-                "fields": [
-                    {"key": "team_number", "type": "team", "label": "Team",
-                     "maps_to": "team_number", "required": True},
-                    {"key": "no_show", "type": "toggle", "label": "Robot never showed up",
-                     "maps_to": "no_show"},
-                ],
-            },
-            {
-                "title": "Score the match",
-                "hint": "Tap the field where each attempt happened.",
-                "fields": [
-                    {"key": "heatmap", "type": "heatmap", "label": "Scoring map",
-                     "maps_to": "heatmap"},
-                    {"key": "auto_leave", "type": "toggle", "label": "Left start zone in Auto",
-                     "maps_to": "auto_leave", "points": GAME.auto_leave},
-                    {"key": "auto_climb", "type": "toggle", "label": "Auto endgame",
-                     "maps_to": "auto_climb", "points": GAME.auto_endgame_bonus},
-                ],
-            },
-            {
-                "title": GAME.endgame_label,
-                "fields": [
-                    {"key": "climb", "type": "select", "label": GAME.endgame_label,
-                     "maps_to": "climb", "default": GAME.endgame_none,
-                     "options": _endgame_options()},
-                ],
-            },
-            {
-                "title": "How did they look?",
-                "hint": "Gut ratings. 3 is average.",
-                "fields": [
-                    {"key": "driver_skill", "type": "rating", "label": "Driver skill",
-                     "maps_to": "driver_skill", "max": 5, "default": 3},
-                    {"key": "speed_rating", "type": "rating", "label": "Speed / cycling",
-                     "maps_to": "speed_rating", "max": 5, "default": 3},
-                    {"key": "played_defense", "type": "toggle", "label": "Played defense",
-                     "maps_to": "played_defense"},
-                    {"key": "defense_rating", "type": "rating", "label": "Defense quality",
-                     "maps_to": "defense_rating", "max": 5,
-                     "visible_if": {"field": "played_defense", "equals": True}},
-                    {"key": "successful_stops", "type": "counter", "label": "Successful stops",
-                     "maps_to": "successful_stops", "min": 0,
-                     "points": GAME.stop_bonus,
-                     "visible_if": {"field": "played_defense", "equals": True}},
-                    {"key": "defense_on", "type": "text", "label": "Who did they defend?",
-                     "maps_to": "defense_on",
-                     "visible_if": {"field": "played_defense", "equals": True}},
-                ],
-            },
-            {
-                "title": "Quick tags",
-                "hint": "Tap anything you saw, these build the team's profile.",
-                "fields": [
-                    {"key": "tags", "type": "tags", "label": "Quick tags",
-                     "maps_to": "tags", "options": _tag_options()},
-                ],
-            },
-            {
-                "title": "Problems and notes",
-                "hint": "Only if something happened.",
-                "fields": [
-                    {"key": "fouls", "type": "counter", "label": "Fouls",
-                     "maps_to": "fouls", "min": 0, "points": -GAME.foul_penalty},
-                    {"key": "failure", "type": "toggle", "label": "Robot broke / died",
-                     "maps_to": "failure"},
-                    {"key": "failure_details", "type": "text", "label": "What failed?",
-                     "maps_to": "failure_details",
-                     "visible_if": {"field": "failure", "equals": True}},
-                    {"key": "notes", "type": "textarea", "label": "Comments?",
-                     "maps_to": "notes"},
-                ],
-            },
-        ],
+        "description": f"What a scout fills in during a match of {game.name or 'this game'}.",
+        "sections": sections,
     }
 
 
-def default_pit_form() -> dict[str, Any]:
-    """The built-in pit form."""
+def default_pit_form(game: GameDefinition | None = None) -> dict[str, Any]:
+    """The built-in pit form. Game agnostic by design: what you ask in a pit
+    barely changes year to year."""
     return {
         "name": "Pit Scouting",
         "description": "One report per robot, filled in at their pit.",
@@ -486,14 +565,6 @@ def default_pit_form() -> dict[str, Any]:
             },
         ],
     }
-
-
-#: Forms a fresh install starts with. The IDs are fixed because the two
-#: built-in pages look them up by name.
-BUILTIN_FORMS: dict[str, tuple[str, Any]] = {
-    "match": (KIND_MATCH, default_match_form),
-    "pit": (KIND_PIT, default_pit_form),
-}
 
 
 def field_type_catalogue() -> list[dict[str, Any]]:

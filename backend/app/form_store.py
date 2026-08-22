@@ -25,9 +25,10 @@ from typing import Any, Optional
 
 from . import repo
 from .forms import (
-    BUILTIN_FORMS,
     KINDS,
     KIND_CUSTOM,
+    KIND_MATCH,
+    KIND_PIT,
     diff_definitions,
     ensure_valid,
     summarize_diff,
@@ -208,6 +209,7 @@ def create_form(
     definition: dict[str, Any],
     author: Scouter,
     message: str = "Create form",
+    season_id: str = "",
 ) -> FormRevision:
     form_id = (form_id or "").strip().lower()
     if not form_id.replace("_", "").replace("-", "").isalnum():
@@ -220,12 +222,15 @@ def create_form(
         kind = KIND_CUSTOM
 
     ensure_valid(definition)
+    from . import seasons
+
     repo.save_form(
         Form(
             form_id=form_id,
             kind=kind,
             name=definition.get("name") or form_id,
             description=definition.get("description") or "",
+            season_id=season_id or seasons.current_season_id(),
             updated_by=author.display_name or author.scout_id,
         )
     )
@@ -256,30 +261,39 @@ def set_archived(form_id: str, archived: bool, author: Scouter) -> Form:
 SYSTEM = Scouter(scout_id="system", display_name="HazeHub (built in)")
 
 
-def seed_builtin_forms() -> None:
-    """Create the match and pit forms if this install has none.
+def seed_builtin_forms(season_id: str = "") -> None:
+    """Create a season's match and pit forms if it has none.
 
     Only ever creates. An install that has edited its forms must never have
     them reset by a deploy, so an existing form is left completely alone.
+
+    The templates are generated from the season's own game definition, which
+    is what makes a newly created 2027 season start with a form that asks
+    about the 2027 game rather than last year's.
     """
-    for form_id, (kind, builder) in BUILTIN_FORMS.items():
+    from . import seasons
+    from .forms import default_match_form, default_pit_form
+
+    season_id = season_id or seasons.current_season_id()
+    if not season_id:
+        return
+    game = seasons.definition(season_id)
+
+    templates = {
+        f"{season_id}_match": (KIND_MATCH, default_match_form(game)),
+        f"{season_id}_pit": (KIND_PIT, default_pit_form(game)),
+    }
+    for form_id, (kind, definition) in templates.items():
         if repo.form(form_id) is not None:
             continue
-        definition = builder()
-        repo.save_form(
-            Form(
-                form_id=form_id,
-                kind=kind,
-                name=definition["name"],
-                description=definition.get("description", ""),
-                updated_by=SYSTEM.display_name,
-            )
-        )
-        save_revision(
-            form_id,
-            definition,
-            SYSTEM,
-            "Starting form for this season, generated from app/game.py",
-            publish=True,
-        )
-        log.info("created built-in form %s", form_id)
+        # An install that predates seasons has forms called plainly "match"
+        # and "pit". Adopt those rather than creating a duplicate beside them.
+        legacy = repo.form(kind)
+        if legacy is not None and not legacy.season_id:
+            legacy.season_id = season_id
+            repo.save_form(legacy)
+            log.info("adopted legacy form %s into season %s", kind, season_id)
+            continue
+        create_form(form_id, kind, definition, SYSTEM,
+                    f"Starting {kind} form for {season_id}", season_id=season_id)
+        log.info("created %s form for season %s", kind, season_id)

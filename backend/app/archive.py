@@ -23,7 +23,7 @@ from typing import Any
 
 from . import repo
 from .analytics import event_teams, team_summary
-from .game import game_for
+from . import seasons
 from .models import EventArchive
 
 log = logging.getLogger("hazehub.archive")
@@ -87,12 +87,15 @@ def build_archive(event_key: str) -> EventArchive:
     ]
 
     played = [m for m in matches if m.winner]
-    game = game_for(event.season if event and getattr(event, "season", None) else None)
+    # The season the event actually ran under, taken from what was scouted
+    # rather than from whatever season is current when the archive is built.
+    season_id = next((e.season_id for e in entries if e.season_id), seasons.current_season_id())
+    game = seasons.definition(season_id)
 
     return EventArchive(
         event_key=event_key,
         name=(event.name if event else "") or event_key,
-        season=game.season,
+        season=game.year,
         game_name=game.name,
         archived_at=datetime.now(timezone.utc),
         counts={

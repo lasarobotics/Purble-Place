@@ -10,8 +10,9 @@ from ..auth import (
     get_account,
     verify_team_password,
 )
+from .. import repo
 from ..config import settings
-from ..game import GAME
+from .. import seasons
 from ..models import Scouter
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -81,10 +82,22 @@ game_router = APIRouter(prefix="/api/game", tags=["game"])
 
 
 @game_router.get("")
-def game_definition() -> dict:
-    """What game is being scouted: scoring values, endgame levels, tags.
+def game_definition(season: str | None = None) -> dict:
+    """The game a season is running: phases, pieces, locations, actions,
+    scoring rules, endgame states and tags.
 
-    Everything here comes from ``app/game.py``. Edit that file for a new
-    season and the scouting form follows without a frontend change.
+    Public and unauthenticated on purpose: a scouting device that has gone
+    offline mid-event needs this to render its form, and should be able to
+    fetch and cache it without a round trip through sign-in.
     """
-    return GAME.to_dict()
+    season_id = seasons.resolve(season)
+    definition = seasons.definition(season_id).to_dict()
+    row = repo.season(season_id) if season_id else None
+    return {
+        **definition,
+        "season_id": season_id,
+        "game_version": row.game_version if row else 0,
+        # Kept under the old name so a device holding a cached copy from
+        # before seasons existed still finds the year where it expects it.
+        "season": definition.get("year", 0),
+    }

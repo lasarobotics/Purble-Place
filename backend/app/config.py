@@ -18,7 +18,6 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
-from .game import GAME
 
 # Repo paths -----------------------------------------------------------------
 APP_DIR = Path(__file__).resolve().parent
@@ -118,9 +117,9 @@ class Settings:
     # Identity / branding
     APP_NAME: str = "HazeHub"
     BRAND_COLOR: str = "#663399"  # Purple Haze
-    # The season in play comes from app/game.py, which is the one file
-    # that changes when FRC changes the game.
-    SEASON: int = GAME.season
+    # A fallback only. The real season lives in the datastore (app/seasons.py);
+    # this is what a brand new install bootstraps with before one exists.
+    SEASON: int = int(os.getenv("HAZEHUB_SEASON", "2026"))
 
     # Home teams: FRC 418 Purple Haze / FRC 436 Purple Rain
     HOME_TEAMS: list[int] = [

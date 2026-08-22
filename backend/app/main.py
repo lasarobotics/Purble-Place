@@ -25,10 +25,11 @@ from .firestore_db import guard
 from .firestore_db import status as firestore_status
 from .realtime import hub
 from .routers import (
-    admin, auth, betting, events, forms, matches, picklists, scouting, sync,
-    system, teams,
+    admin, auth, betting, events, forms, matches, picklists, scouting, seasons,
+    sync, system, teams,
 )
 from .form_store import seed_builtin_forms
+from .seasons import seed_first_season
 from .seed import seed
 
 logging.basicConfig(level=logging.INFO)
@@ -57,6 +58,9 @@ async def lifespan(app: FastAPI):
     try:
         init_db()
         seed()
+        # A season owns the game, the forms and everything scouted under
+        # them, so it has to exist before any of those are looked up.
+        seed_first_season()
         # The scouting and pit pages render from these, so a fresh install
         # needs them before anyone signs in.
         seed_builtin_forms()
@@ -95,6 +99,7 @@ for r in (
     betting.router,
     picklists.router,
     forms.router,
+    seasons.router,
     admin.router,
     sync.router,
     system.router,

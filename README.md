@@ -245,7 +245,8 @@ backend/
     models.py          SQLModel tables
     auth.py            sign-in + tokens
     external.py        TBA + Statbotics clients (cached)
-    game.py            the season: scoring, endgame, tags  <- edit this each year
+    gamedef.py         the generic model of an FRC game + the scoring engine
+    seasons.py         seasons: create, configure, version, roll over
     forms.py           field types, validation, diffing, the starting forms
     form_store.py      form history: append-only, attributed, revertible
     scoring.py         turns a scouting entry into points, reading game.py

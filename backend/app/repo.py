@@ -27,6 +27,8 @@ from .models import (
     EventArchive,
     Form,
     FormRevision,
+    Season,
+    SeasonRevision,
     MatchRecord,
     NetworkStatus,
     OutboxRecord,
@@ -203,16 +205,82 @@ def events() -> list[Event]:
 
 
 # --------------------------------------------------------------------------- #
+# seasons + season_revisions                                                   #
+# --------------------------------------------------------------------------- #
+def season(season_id: str) -> Optional[Season]:
+    return store.get(schema.SEASONS, (season_id or "").strip())
+
+
+def seasons() -> list[Season]:
+    """Every season, newest year first."""
+    return sorted(store.all(schema.SEASONS), key=lambda s: (s.year, s.season_id), reverse=True)
+
+
+def save_season(row: Season) -> None:
+    store.write(row)
+
+
+def season_revision(season_id: str, version: int) -> Optional[SeasonRevision]:
+    doc_id = f"{(season_id or '').strip()}@{int(version):06d}"
+    row = store.get(schema.SEASON_REVISIONS, doc_id)
+    if row is not None:
+        return row
+    return _read_revision(schema.SEASON_REVISIONS, doc_id, SeasonRevision)
+
+
+def season_revisions(season_id: str, limit: int = 100) -> list[SeasonRevision]:
+    """A season's game history, newest first."""
+    rows = _all_revisions(schema.SEASON_REVISIONS, SeasonRevision, "season_id", season_id)
+    return rows[:limit]
+
+
+def save_season_revision(row: SeasonRevision) -> None:
+    store.write(row)
+
+
+# --------------------------------------------------------------------------- #
+# Revision history helpers                                                     #
+# --------------------------------------------------------------------------- #
+# Revision collections are append-only and grow all season, so they are not
+# mirrored into RAM (see schema.WRITE_ONLY). They are read straight from the
+# datastore, which is affordable because only a history panel asks for them.
+def _read_revision(collection: str, doc_id: str, model):
+    try:
+        raw = store.backend.load(collection, None)
+    except Exception:  # noqa: BLE001
+        return None
+    data = raw.get(doc_id)
+    return model.from_doc(doc_id, data) if data else None
+
+
+def _all_revisions(collection: str, model, owner_field: str, owner: str) -> list:
+    owner = (owner or "").strip()
+    try:
+        raw = store.backend.load(collection, None)
+    except Exception:  # noqa: BLE001
+        return []
+    rows = [
+        model.from_doc(doc_id, data)
+        for doc_id, data in raw.items()
+        if (data or {}).get(owner_field) == owner
+    ]
+    rows.sort(key=lambda r: r.version, reverse=True)
+    return rows
+
+
+# --------------------------------------------------------------------------- #
 # forms + form_revisions                                                       #
 # --------------------------------------------------------------------------- #
 def form(form_id: str) -> Optional[Form]:
     return store.get(schema.FORMS, (form_id or "").strip())
 
 
-def forms(*, include_archived: bool = False) -> list[Form]:
+def forms(*, include_archived: bool = False, season_id: str = "") -> list[Form]:
     rows = store.all(schema.FORMS)
     if not include_archived:
         rows = [f for f in rows if not f.archived]
+    if season_id:
+        rows = [f for f in rows if f.season_id == season_id]
     return sorted(rows, key=lambda f: (f.kind, f.name.lower()))
 
 
@@ -221,43 +289,16 @@ def save_form(row: Form) -> None:
 
 
 def form_revision(form_id: str, version: int) -> Optional[FormRevision]:
-    key = f"{(form_id or '').strip()}@{int(version):06d}"
-    row = store.get(schema.FORM_REVISIONS, key)
+    doc_id = f"{(form_id or '').strip()}@{int(version):06d}"
+    row = store.get(schema.FORM_REVISIONS, doc_id)
     if row is not None:
         return row
-    # The history is write-only (see schema.WRITE_ONLY), so it is not mirrored
-    # into RAM and has to be read from the datastore on demand.
-    return _load_revision(key)
-
-
-def _load_revision(doc_id: str) -> Optional[FormRevision]:
-    try:
-        raw = store.backend.load(schema.FORM_REVISIONS, None)
-    except Exception:  # noqa: BLE001
-        return None
-    data = raw.get(doc_id)
-    return FormRevision.from_doc(doc_id, data) if data else None
+    return _read_revision(schema.FORM_REVISIONS, doc_id, FormRevision)
 
 
 def form_revisions(form_id: str, limit: int = 100) -> list[FormRevision]:
-    """A form's history, newest first.
-
-    Reads the collection rather than a cache: history is opened by one admin
-    on one screen, so paying for it there is much cheaper than mirroring an
-    append-only log that grows all season.
-    """
-    form_id = (form_id or "").strip()
-    try:
-        raw = store.backend.load(schema.FORM_REVISIONS, None)
-    except Exception:  # noqa: BLE001
-        return []
-    rows = [
-        FormRevision.from_doc(doc_id, data)
-        for doc_id, data in raw.items()
-        if (data or {}).get("form_id") == form_id
-    ]
-    rows.sort(key=lambda r: r.version, reverse=True)
-    return rows[:limit]
+    """A form's history, newest first."""
+    return _all_revisions(schema.FORM_REVISIONS, FormRevision, "form_id", form_id)[:limit]
 
 
 def save_form_revision(row: FormRevision) -> None:

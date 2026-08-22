@@ -9,9 +9,18 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
 
 export type FieldType =
-  | "text" | "textarea" | "number" | "counter" | "toggle" | "rating"
-  | "select" | "multiselect" | "tags" | "timer" | "team" | "photo"
-  | "heatmap" | "note";
+  // Basic
+  | "text" | "textarea" | "number" | "decimal" | "toggle" | "rating"
+  | "slider" | "datetime"
+  // Choice
+  | "select" | "dropdown" | "multiselect" | "tags" | "ranking"
+  // Scouting primitives
+  | "counter" | "timer" | "team" | "match" | "alliance" | "station"
+  | "phase" | "piece" | "location" | "heatmap" | "photo"
+  // Repeated data
+  | "actions"
+  // Structure
+  | "note" | "divider";
 
 export interface FieldOption {
   value: string;
@@ -45,6 +54,26 @@ export interface FormField {
   /** Points per unit (counter, number) or flat (toggle). */
   points?: number;
   visible_if?: VisibleIf;
+
+  // Repeatable action groups. Which action they record, and what the scout
+  // may pick for each row. The lists come from the season's game, so a form
+  // never names a game element itself.
+  action?: string;
+  phases?: string[];
+  objects?: string[];
+  locations?: string[];
+  results?: string[];
+}
+
+/** One recorded action inside a repeatable group. */
+export interface ActionRecord {
+  action: string;
+  phase?: string;
+  object?: string;
+  location?: string;
+  result?: string;
+  quantity?: number;
+  t?: number;
 }
 
 export interface FormSection {
@@ -62,6 +91,7 @@ export interface FormDefinition {
 export interface FormSummary {
   form_id: string;
   kind: "match" | "pit" | "custom";
+  season_id: string;
   name: string;
   description: string;
   published_version: number;
@@ -73,6 +103,49 @@ export interface FormSummary {
 
 export interface FormWithDefinition extends FormSummary {
   definition: FormDefinition;
+  /** Present on the active-form lookup: the season's game, which is what
+   *  phase, piece and location fields draw their choices from. */
+  game?: GameDefinition;
+  game_version?: number;
+}
+
+// --------------------------------------------------------------------------
+// The season's game
+// --------------------------------------------------------------------------
+export interface GamePhase { key: string; label: string; order?: number; seconds?: number }
+export interface GamePieceDef { key: string; label: string; color?: string }
+export interface GameLocation { key: string; label: string; group?: string; x?: number | null; y?: number | null }
+export interface GameAction {
+  key: string; label: string;
+  phases?: string[]; objects?: string[]; locations?: string[]; results?: string[];
+}
+export interface GameEndgameState { key: string; label: string; points?: number }
+export interface GameScoringRule {
+  rule_id: string; label: string; points: number;
+  per: "each" | "once"; when: Record<string, any>;
+}
+export interface GameFieldMap {
+  image?: string;
+  zones?: { location: string; x: number; y: number; w: number; h: number }[];
+  mode?: "point" | "zone";
+  orientation?: string;
+}
+export interface GameDefinition {
+  name: string;
+  year: number;
+  phases: GamePhase[];
+  pieces: GamePieceDef[];
+  locations: GameLocation[];
+  actions: GameAction[];
+  rules: GameScoringRule[];
+  endgame: GameEndgameState[];
+  endgame_label: string;
+  endgame_none?: string;
+  tags: { tag: string; tone: "good" | "bad" }[];
+  field_map: GameFieldMap;
+  extras?: Record<string, any>;
+  season_id?: string;
+  game_version?: number;
 }
 
 export interface RevisionSummary {
@@ -127,8 +200,20 @@ export interface FormDiff {
 // --------------------------------------------------------------------------
 // API
 // --------------------------------------------------------------------------
-export const listForms = (includeArchived = false) =>
-  api<FormSummary[]>(`/api/forms?include_archived=${includeArchived}`);
+export const listForms = (includeArchived = false, season = "") =>
+  api<FormSummary[]>(
+    `/api/forms?include_archived=${includeArchived}` +
+      (season ? `&season=${encodeURIComponent(season)}` : "")
+  );
+
+/** The published form of a kind for a season, plus that season's game.
+ *
+ *  Scouting pages use this rather than a form ID: IDs are season scoped, so
+ *  hardcoding one in the frontend would defeat the point of having seasons. */
+export const activeForm = (kind: string, season = "") =>
+  api<FormWithDefinition>(
+    `/api/forms/active/${kind}` + (season ? `?season=${encodeURIComponent(season)}` : "")
+  );
 
 export const getForm = (formId: string) =>
   api<FormWithDefinition>(`/api/forms/${formId}`);
@@ -177,11 +262,12 @@ export const createForm = (
   formId: string,
   kind: string,
   definition: FormDefinition,
-  message = "Create form"
+  message = "Create form",
+  seasonId = ""
 ) =>
   api<{ form_id: string; version: number }>("/api/forms", {
     method: "POST",
-    body: { form_id: formId, kind, definition, message },
+    body: { form_id: formId, kind, definition, message, season_id: seasonId },
   });
 
 export const archiveForm = (formId: string) =>
@@ -202,7 +288,33 @@ const cacheKey = (formId: string) => `hazehub.form.${formId}`;
  * so every successful fetch is written to localStorage and every read falls
  * back to it. Returns null only on a device that has never been online.
  */
-export function useFormDefinition(formId: string): {
+export function useActiveForm(kind: string, season = ""): {
+  form: FormWithDefinition | null;
+  loading: boolean;
+  fromCache: boolean;
+  reload: () => void;
+} {
+  return useCachedForm(`kind:${kind}:${season}`, () => activeForm(kind, season));
+}
+
+export function useFormDefinition(formId: string) {
+  return useCachedForm(`id:${formId}`, () => getForm(formId));
+}
+
+/**
+ * A published form, cached per device, refreshed in the background.
+ *
+ * A scout who opens the app with no signal still has to get the right form,
+ * so every successful fetch is written to localStorage and every read falls
+ * back to it. Returns null only on a device that has never been online.
+ *
+ * The cache key includes what was asked for, so switching season does not
+ * hand somebody last season's form out of the cache.
+ */
+function useCachedForm(
+  cacheId: string,
+  fetcher: () => Promise<FormWithDefinition>
+): {
   form: FormWithDefinition | null;
   loading: boolean;
   fromCache: boolean;
@@ -217,10 +329,11 @@ export function useFormDefinition(formId: string): {
 
   useEffect(() => {
     let alive = true;
+    const key = cacheKey(cacheId);
 
     // Show the cached copy immediately, then correct it from the network.
     try {
-      const raw = window.localStorage.getItem(cacheKey(formId));
+      const raw = window.localStorage.getItem(key);
       if (raw) {
         setForm(JSON.parse(raw));
         setFromCache(true);
@@ -228,20 +341,21 @@ export function useFormDefinition(formId: string): {
       }
     } catch {}
 
-    getForm(formId)
+    fetcher()
       .then((fresh) => {
         if (!alive) return;
         setForm(fresh);
         setFromCache(false);
         try {
-          window.localStorage.setItem(cacheKey(formId), JSON.stringify(fresh));
+          window.localStorage.setItem(key, JSON.stringify(fresh));
         } catch {}
       })
       .catch(() => {})
       .finally(() => { if (alive) setLoading(false); });
 
     return () => { alive = false; };
-  }, [formId, nonce]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cacheId, nonce]);
 
   return { form, loading, fromCache, reload };
 }
@@ -265,18 +379,30 @@ export function blankValue(field: FormField): any {
   switch (field.type) {
     case "counter":
     case "number":
+    case "decimal":
     case "timer":
+    case "slider":
+    case "match":
+    case "station":
+      return field.min ?? 0;
     case "rating":
-      return field.type === "rating" ? Math.ceil((field.max ?? 5) / 2) : 0;
+      return Math.ceil((field.max ?? 5) / 2);
     case "toggle":
       return false;
     case "multiselect":
     case "tags":
     case "heatmap":
+    case "ranking":
+    case "actions":
       return [];
     case "team":
       return 0;
     case "select":
+    case "dropdown":
+    case "alliance":
+    case "phase":
+    case "piece":
+    case "location":
       return field.options?.[0]?.value ?? "";
     default:
       return "";
@@ -286,7 +412,7 @@ export function blankValue(field: FormField): any {
 export function blankAnswers(definition: FormDefinition): Record<string, any> {
   const out: Record<string, any> = {};
   for (const field of allFields(definition)) {
-    if (field.type === "note") continue;
+    if (field.type === "note" || field.type === "divider") continue;
     out[field.key] = blankValue(field);
   }
   return out;

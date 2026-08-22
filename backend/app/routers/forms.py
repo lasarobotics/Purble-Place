@@ -31,6 +31,7 @@ def _form_dict(form) -> dict:
     return {
         "form_id": form.form_id,
         "kind": form.kind,
+        "season_id": form.season_id,
         "name": form.name,
         "description": form.description,
         "published_version": form.published_version,
@@ -70,9 +71,58 @@ def builder_meta(_: Scouter = Depends(current_scouter)) -> dict:
 @router.get("")
 def list_forms(
     include_archived: bool = False,
+    season: Optional[str] = None,
     _: Scouter = Depends(current_scouter),
 ) -> list[dict]:
-    return [_form_dict(f) for f in repo.forms(include_archived=include_archived)]
+    """Forms, scoped to a season by default.
+
+    Pass ``season=all`` to see every season's, which is what the builder's
+    season switcher uses.
+    """
+    from .. import seasons as seasons_mod
+
+    season_id = "" if season == "all" else seasons_mod.resolve(season)
+    return [
+        _form_dict(f)
+        for f in repo.forms(include_archived=include_archived, season_id=season_id)
+    ]
+
+
+@router.get("/active/{kind}")
+def active_form(
+    kind: str,
+    season: Optional[str] = None,
+    _: Scouter = Depends(current_scouter),
+) -> dict:
+    """The published form of a kind for a season.
+
+    Scouting pages ask for "the pit form for my season" rather than a form ID,
+    because IDs are season scoped: a 2027 install has ``2027_pit``, and
+    hardcoding a name in the frontend would put the platform right back where
+    it started. Also returns the season's game, since a form that asks which
+    game piece needs the season to say which pieces exist.
+    """
+    from .. import seasons as seasons_mod
+
+    season_id = seasons_mod.resolve(season)
+    candidates = [f for f in repo.forms(season_id=season_id) if f.kind == kind]
+    if not candidates:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Season {season_id or '(none)'} has no {kind} form yet. "
+                "An admin creates it in Form Builder."
+            ),
+        )
+    form = candidates[0]
+    row = repo.season(season_id)
+    return {
+        **_form_dict(form),
+        "definition": form_store.published_definition(form.form_id),
+        "season_id": season_id,
+        "game_version": row.game_version if row else 0,
+        "game": seasons_mod.definition(season_id).to_dict(),
+    }
 
 
 @router.get("/{form_id}")
@@ -160,6 +210,7 @@ class CreateFormIn(BaseModel):
     kind: str = "custom"
     definition: dict[str, Any] = Field(default_factory=dict)
     message: str = "Create form"
+    season_id: str = ""
 
 
 class PublishIn(BaseModel):
@@ -191,7 +242,8 @@ def validate(
 def create(body: CreateFormIn, scouter: Scouter = Depends(require_admin)) -> dict:
     try:
         row = form_store.create_form(
-            body.form_id, body.kind, body.definition, scouter, body.message
+            body.form_id, body.kind, body.definition, scouter, body.message,
+            season_id=body.season_id,
         )
     except FormInvalid as exc:
         raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc

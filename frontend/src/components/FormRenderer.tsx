@@ -10,7 +10,9 @@
 // while designing is the same component the scout uses, not an approximation
 // of it.
 import { useRef, useState } from "react";
-import type { FormDefinition, FormField, FormSection } from "@/lib/formdef";
+import type {
+  ActionRecord, FormDefinition, FormField, FormSection, GameDefinition,
+} from "@/lib/formdef";
 import { isVisible } from "@/lib/formdef";
 import { Rating, Segmented, Stepper, TeamIdentity } from "@/components/ui";
 import { FieldInput } from "@/components/Field";
@@ -21,6 +23,9 @@ export interface RendererProps {
   definition: FormDefinition;
   answers: Record<string, any>;
   onChange: (key: string, value: any) => void;
+  /** The season's game. Phase, piece and location fields read their
+   *  choices from it, which is what keeps the form itself game agnostic. */
+  game?: GameDefinition | null;
   /** Preview mode: the controls render but do not accept input. */
   disabled?: boolean;
   /** Fields the caller draws itself (the scouting page owns match and slot). */
@@ -31,6 +36,7 @@ export function FormRenderer({
   definition,
   answers,
   onChange,
+  game,
   disabled,
   skipKeys = [],
 }: RendererProps) {
@@ -44,6 +50,7 @@ export function FormRenderer({
           section={section}
           answers={answers}
           onChange={onChange}
+          game={game}
           disabled={disabled}
           skip={skip}
         />
@@ -57,6 +64,7 @@ function FormSectionCard({
   section,
   answers,
   onChange,
+  game,
   disabled,
   skip,
 }: {
@@ -64,6 +72,7 @@ function FormSectionCard({
   section: FormSection;
   answers: Record<string, any>;
   onChange: (key: string, value: any) => void;
+  game?: GameDefinition | null;
   disabled?: boolean;
   skip: Set<string>;
 }) {
@@ -90,6 +99,7 @@ function FormSectionCard({
             field={field}
             value={answers[field.key]}
             onChange={(v) => onChange(field.key, v)}
+            game={game}
             disabled={disabled}
           />
         ))}
@@ -102,16 +112,127 @@ export function FieldControl({
   field,
   value,
   onChange,
+  game,
   disabled,
 }: {
   field: FormField;
   value: any;
   onChange: (v: any) => void;
+  game?: GameDefinition | null;
   disabled?: boolean;
 }) {
   const set = disabled ? () => {} : onChange;
 
+  // Three field types take their choices from the season's game rather than
+  // from options typed into the builder. That is the seam that lets one form
+  // engine serve any game: the form says "ask which game piece", and the
+  // season says which pieces there are.
+  const fromGame = gameChoices(field, game);
+  if (fromGame) {
+    return (
+      <div className="field" style={{ margin: 0 }}>
+        <span>{field.label}</span>
+        {fromGame.length ? (
+          <Segmented options={fromGame} value={String(value ?? "")} onChange={set} />
+        ) : (
+          <p className="step-hint">Nothing configured for this in the season yet.</p>
+        )}
+        {field.hint && <p className="step-hint">{field.hint}</p>}
+      </div>
+    );
+  }
+
   switch (field.type) {
+    case "divider":
+      return <hr className="form-divider" />;
+
+    case "actions":
+      return (
+        <ActionGroup
+          field={field}
+          value={Array.isArray(value) ? value : []}
+          onChange={set}
+          game={game}
+          disabled={disabled}
+        />
+      );
+
+    case "slider":
+      return (
+        <div className="rate-row">
+          <span>{field.label}</span>
+          <div className="slider-field">
+            <input
+              type="range"
+              min={field.min ?? 0}
+              max={field.max ?? 10}
+              step={field.step ?? 1}
+              value={Number(value) || 0}
+              disabled={disabled}
+              onChange={(e) => set(Number(e.target.value))}
+            />
+            <b className="mono">{Number(value) || 0}</b>
+          </div>
+        </div>
+      );
+
+    case "datetime":
+      return (
+        <label className="field" style={{ margin: 0 }}>
+          <span>{field.label}</span>
+          <input
+            type="datetime-local"
+            value={String(value ?? "")}
+            disabled={disabled}
+            onChange={(e) => set(e.target.value)}
+          />
+        </label>
+      );
+
+    case "alliance":
+      return (
+        <div className="field" style={{ margin: 0 }}>
+          <span>{field.label}</span>
+          <Segmented
+            options={[{ value: "red", label: "Red" }, { value: "blue", label: "Blue" }]}
+            value={String(value ?? "red")}
+            onChange={set}
+            color={(v) => v as any}
+          />
+        </div>
+      );
+
+    case "station":
+      return (
+        <div className="field" style={{ margin: 0 }}>
+          <span>{field.label}</span>
+          <Segmented
+            options={[1, 2, 3].map((n) => ({ value: String(n), label: String(n) }))}
+            value={String(value ?? 1)}
+            onChange={(v) => set(Number(v))}
+          />
+        </div>
+      );
+
+    case "dropdown":
+      return (
+        <label className="field" style={{ margin: 0 }}>
+          <span>{field.label}</span>
+          <select value={String(value ?? "")} disabled={disabled}
+                  onChange={(e) => set(e.target.value)}>
+            {(field.options || []).map((o) => (
+              <option key={o.value} value={o.value}>{o.label || o.value}</option>
+            ))}
+          </select>
+        </label>
+      );
+
+    case "ranking":
+      return (
+        <RankingField field={field} value={Array.isArray(value) ? value : []}
+                      onChange={set} disabled={disabled} />
+      );
+
     case "note":
       return (
         <p className="form-note">
@@ -230,17 +351,20 @@ export function FieldControl({
       );
 
     case "number":
+    case "decimal":
     case "team":
+    case "match":
       return (
         <label className="field" style={{ margin: 0 }}>
           <span>{field.label}</span>
           <input
             type="number"
             inputMode="numeric"
-            value={value === 0 && field.type === "team" ? "" : String(value ?? "")}
+            value={value === 0 && (field.type === "team" || field.type === "match") ? "" : String(value ?? "")}
             disabled={disabled}
             min={field.min}
             max={field.max}
+            step={field.type === "decimal" ? (field.step ?? 0.1) : field.step}
             placeholder={field.hint}
             onChange={(e) => set(e.target.value === "" ? 0 : Number(e.target.value))}
           />
@@ -414,4 +538,217 @@ function PhotoField({
 /** Read-only rendering of a team answer, used by previews. */
 export function TeamAnswer({ team }: { team: number }) {
   return <TeamIdentity team={{ team_number: team, nickname: "" }} />;
+}
+
+// --------------------------------------------------------------------------
+// Choices that come from the season's game
+// --------------------------------------------------------------------------
+
+/**
+ * Options for a field whose choices belong to the game, not to the form.
+ *
+ * Returns null for every other field type, so the caller can tell "this is
+ * not a game-sourced field" apart from "it is, and the season has none".
+ */
+function gameChoices(
+  field: FormField,
+  game?: GameDefinition | null
+): { value: string; label: string }[] | null {
+  const source =
+    field.type === "phase" ? game?.phases
+    : field.type === "piece" ? game?.pieces
+    : field.type === "location" ? game?.locations
+    : null;
+  if (source === null) return null;
+  return (source || []).map((o: any) => ({ value: o.key, label: o.label || o.key }));
+}
+
+// --------------------------------------------------------------------------
+// Repeatable actions
+// --------------------------------------------------------------------------
+
+/**
+ * The generic answer to "this game involves doing a thing over and over".
+ *
+ * Every FRC game has some repeated act at its centre: a shot, a placement, a
+ * stack, a delivery. Building one component per game would mean a new
+ * component every January, so this is one component whose columns come from
+ * the season: the phases it offers, the pieces, the locations and the results
+ * are all the game's own.
+ *
+ * Recording is two taps for the common case. The picker at the top holds the
+ * current phase, piece and location, and each result button adds a row with
+ * those values, because a scout in the stands cannot fill in four dropdowns
+ * per cycle.
+ */
+function ActionGroup({
+  field,
+  value,
+  onChange,
+  game,
+  disabled,
+}: {
+  field: FormField;
+  value: ActionRecord[];
+  onChange: (v: ActionRecord[]) => void;
+  game?: GameDefinition | null;
+  disabled?: boolean;
+}) {
+  const label = (list: any[] | undefined, key: string) =>
+    (list || []).find((x: any) => x.key === key)?.label || key;
+
+  const phases = (field.phases || []).map((k) => ({ value: k, label: label(game?.phases, k) }));
+  const pieces = (field.objects || []).map((k) => ({ value: k, label: label(game?.pieces, k) }));
+  const places = (field.locations || []).map((k) => ({ value: k, label: label(game?.locations, k) }));
+  const results = field.results || ["made", "missed"];
+
+  const [phase, setPhase] = useState(phases[0]?.value || "");
+  const [piece, setPiece] = useState(pieces[0]?.value || "");
+  const [place, setPlace] = useState(places[0]?.value || "");
+
+  function add(result: string) {
+    if (disabled) return;
+    onChange([
+      ...value,
+      {
+        action: field.action || "action",
+        ...(phase ? { phase } : {}),
+        ...(piece ? { object: piece } : {}),
+        ...(place ? { location: place } : {}),
+        result,
+        t: Date.now(),
+      },
+    ]);
+  }
+
+  function undo() {
+    if (disabled) return;
+    onChange(value.slice(0, -1));
+  }
+
+  const tally = results.map((r) => ({
+    result: r,
+    count: value.filter((v) => v.result === r).length,
+  }));
+
+  return (
+    <div className="action-group">
+      <div className="action-group-head">
+        <span>{field.label}</span>
+        <span className="action-tally">
+          {tally.map((t) => (
+            <span key={t.result}>
+              <b className="mono">{t.count}</b> {t.result}
+            </span>
+          ))}
+        </span>
+      </div>
+      {field.hint && <p className="step-hint">{field.hint}</p>}
+
+      {phases.length > 1 && (
+        <div className="action-picker">
+          <span>Phase</span>
+          <Segmented options={phases} value={phase} onChange={setPhase} />
+        </div>
+      )}
+      {pieces.length > 1 && (
+        <div className="action-picker">
+          <span>Piece</span>
+          <Segmented options={pieces} value={piece} onChange={setPiece} />
+        </div>
+      )}
+      {places.length > 1 && (
+        <div className="action-picker">
+          <span>Where</span>
+          <Segmented options={places} value={place} onChange={setPlace} />
+        </div>
+      )}
+
+      <div className="action-buttons">
+        {results.map((r) => (
+          <button
+            key={r}
+            type="button"
+            className={"btn" + (r === "made" ? " primary" : "")}
+            disabled={disabled}
+            onClick={() => add(r)}
+          >
+            + {r}
+          </button>
+        ))}
+        <button type="button" className="btn ghost" disabled={disabled || !value.length}
+                onClick={undo}>
+          Undo
+        </button>
+      </div>
+
+      {value.length > 0 && (
+        <ol className="action-log">
+          {value.slice(-6).reverse().map((rec, i) => (
+            <li key={value.length - i}>
+              <span className="mono">{value.length - i}</span>
+              <span>
+                {[rec.phase && label(game?.phases, rec.phase),
+                  rec.object && label(game?.pieces, rec.object),
+                  rec.location && label(game?.locations, rec.location)]
+                  .filter(Boolean).join(" / ")}
+              </span>
+              <span className={"badge " + (rec.result === "made" ? "green" : "muted")}>
+                {rec.result}
+              </span>
+            </li>
+          ))}
+          {value.length > 6 && (
+            <li className="faint">and {value.length - 6} earlier</li>
+          )}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+/** Put options in order. Tap to add to the ranking, tap again to remove. */
+function RankingField({
+  field,
+  value,
+  onChange,
+  disabled,
+}: {
+  field: FormField;
+  value: string[];
+  onChange: (v: string[]) => void;
+  disabled?: boolean;
+}) {
+  const options = field.options || [];
+  const remaining = options.filter((o) => !value.includes(o.value));
+  const labelOf = (v: string) => options.find((o) => o.value === v)?.label || v;
+
+  return (
+    <div className="field" style={{ margin: 0 }}>
+      <span>{field.label}</span>
+      <ol className="ranking-list">
+        {value.map((v, i) => (
+          <li key={v}>
+            <span className="rank-chip sm">{i + 1}</span>
+            <span className="grow">{labelOf(v)}</span>
+            <button type="button" className="btn sm ghost" disabled={disabled}
+                    onClick={() => onChange(value.filter((x) => x !== v))}>
+              Remove
+            </button>
+          </li>
+        ))}
+        {!value.length && <li className="faint">Nothing ranked yet.</li>}
+      </ol>
+      {remaining.length > 0 && (
+        <div className="tag-list" style={{ marginTop: 6 }}>
+          {remaining.map((o) => (
+            <button key={o.value} type="button" className="chip" disabled={disabled}
+                    onClick={() => onChange([...value, o.value])}>
+              {o.label || o.value}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
