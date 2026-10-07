@@ -1,10 +1,16 @@
 """
 HazeHub configuration.
 
-Detects whether we are running locally or on Azure and configures the
-database / realtime layer accordingly.  Everything has a sane local default
-so the app "just works" with zero setup, but switches to the production
-services automatically when the relevant Azure environment variables appear.
+Everything has a sane local default so the app "just works" with no setup,
+and switches to the Firebase services automatically once the relevant
+environment variables appear.
+
+Datastore selection (see ``cache.Store.start``):
+
+* ``FIRESTORE_EMULATOR_HOST`` set  -> the local Firestore emulator.
+* ``FIREBASE_PROJECT_ID`` set (or running on Cloud Run, where the project is
+  discovered automatically) -> Cloud Firestore.
+* neither -> a JSON file under ``backend/data/`` so a fresh clone runs offline.
 """
 from __future__ import annotations
 
@@ -12,14 +18,15 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
+
 # Repo paths -----------------------------------------------------------------
 APP_DIR = Path(__file__).resolve().parent
 BACKEND_DIR = APP_DIR.parent
 
-# Vercel's filesystem is read-only except /tmp; keep the SQLite fallback there
-# (per-instance scratch only — production must set DATABASE_URL to Postgres).
-IS_VERCEL = os.environ.get("VERCEL") == "1"
-DATA_DIR = Path("/tmp/data") if IS_VERCEL else BACKEND_DIR / "data"
+# Cloud Run's filesystem is read-only except /tmp. Nothing durable is written
+# there: Firestore holds the data: but the dev fallback store needs a home.
+IS_CLOUD_RUN = bool(os.environ.get("K_SERVICE"))
+DATA_DIR = Path("/tmp/data") if IS_CLOUD_RUN else BACKEND_DIR / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -41,35 +48,67 @@ def _load_dotenv() -> None:
 _load_dotenv()
 
 
-def _on_azure() -> bool:
-    """True when running inside an Azure-managed runtime."""
-    return any(
-        os.getenv(k)
-        for k in (
-            "WEBSITE_SITE_NAME",        # App Service
-            "CONTAINER_APP_NAME",       # Container Apps
-            "AZURE_FUNCTIONS_ENVIRONMENT",
-            "HAZEHUB_FORCE_AZURE",      # manual override for testing
-        )
-    )
+def _firebase_project() -> str:
+    for key in (
+        "FIREBASE_PROJECT_ID",
+        "GOOGLE_CLOUD_PROJECT",
+        "GCLOUD_PROJECT",
+        "GCP_PROJECT",
+    ):
+        value = os.getenv(key, "").strip()
+        if value:
+            return value
+    return ""
 
 
-def _database_url() -> str:
-    """Pick a database URL.
+def _ids(env_var: str, default: str) -> list[str]:
+    """Parse a comma-separated list of scouter IDs, lowercased for matching."""
+    raw = os.getenv(env_var, "").strip() or default
+    return [part.strip().lower() for part in raw.split(",") if part.strip()]
 
-    Priority:
-      1. Explicit DATABASE_URL (Azure Database for PostgreSQL, etc.)
-      2. Local SQLite file (no setup required)
+
+#: The complete roster. HazeHub is a closed system: these are the only IDs
+#: that can sign in, and typing anything else is an error rather than a new
+#: account. Sign-up used to be implicit -- whoever typed an ID got one -- which
+#: meant a typo silently created a parallel account whose scouting nobody ever
+#: looked at again.
+#:
+#: The mapping is ``canonical ID -> role``. Matching is case-insensitive and
+#: the canonical spelling here is what gets written to Firestore.
+DEFAULT_ACCOUNTS = "Admin:admin,Strategy:strategy,PicklistMeeting:picklist,1,2,3,Demo"
+
+#: IDs from earlier builds that should land on one of the accounts above
+#: rather than being rejected, so an existing device does not get locked out.
+LEGACY_ACCOUNT_ALIASES = {"picklist": "PicklistMeeting", "picklistmeeting": "PicklistMeeting"}
+
+
+def _accounts(env_var: str, default: str) -> dict[str, str]:
+    """Parse ``Id:role,Id:role`` into an ordered ``{canonical_id: role}`` map.
+
+    A bare entry (no colon) is a scouter, which keeps the numbered scouting
+    accounts short to write.
     """
-    url = os.getenv("DATABASE_URL", "").strip()
-    if url:
-        # SQLAlchemy expects postgresql+psycopg, normalise common variants.
-        if url.startswith("postgres://"):
-            url = url.replace("postgres://", "postgresql+psycopg://", 1)
-        elif url.startswith("postgresql://") and "+psycopg" not in url:
-            url = url.replace("postgresql://", "postgresql+psycopg://", 1)
-        return url
-    return f"sqlite:///{(DATA_DIR / 'hazehub.db').as_posix()}"
+    raw = os.getenv(env_var, "").strip() or default
+    out: dict[str, str] = {}
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        scout_id, _, role = part.partition(":")
+        scout_id = scout_id.strip()
+        if scout_id:
+            out[scout_id] = (role.strip().lower() or "scouter")
+    return out
+
+
+def _environment() -> str:
+    if os.getenv("FIRESTORE_EMULATOR_HOST", "").strip():
+        return "emulator"
+    if IS_CLOUD_RUN:
+        return "cloud-run"
+    if _firebase_project():
+        return "firebase"
+    return "local"
 
 
 class Settings:
@@ -78,6 +117,8 @@ class Settings:
     # Identity / branding
     APP_NAME: str = "HazeHub"
     BRAND_COLOR: str = "#663399"  # Purple Haze
+    # A fallback only. The real season lives in the datastore (app/seasons.py);
+    # this is what a brand new install bootstraps with before one exists.
     SEASON: int = int(os.getenv("HAZEHUB_SEASON", "2026"))
 
     # Home teams: FRC 418 Purple Haze / FRC 436 Purple Rain
@@ -91,6 +132,18 @@ class Settings:
     SECRET_KEY: str = os.getenv("HAZEHUB_SECRET", "purple-haze-dev-secret-change-me")
     TOKEN_TTL_HOURS: int = 24 * 14
 
+    # Which scouter IDs get which role the first time they sign in. After
+    # that, an admin can change anyone's role from the Admin dashboard, and
+    # that choice wins. Everyone not listed here is a plain scouter.
+    ADMIN_IDS: list[str] = _ids("HAZEHUB_ADMIN_IDS", os.getenv("HAZEHUB_ADMIN_ID", "admin"))
+    STRATEGY_IDS: list[str] = _ids("HAZEHUB_STRATEGY_IDS", "strategy")
+    PICKLIST_IDS: list[str] = _ids("HAZEHUB_PICKLIST_IDS", "picklist")
+
+    # The closed account roster. Set HAZEHUB_ACCOUNTS to change it, e.g.
+    # "Admin:admin,Strategy:strategy,PicklistMeeting:picklist,1,2,3,Demo".
+    ACCOUNTS: dict[str, str] = _accounts("HAZEHUB_ACCOUNTS", DEFAULT_ACCOUNTS)
+    ACCOUNT_ALIASES: dict[str, str] = LEGACY_ACCOUNT_ALIASES
+
     # Economy
     STARTING_BUCKS: int = 100
 
@@ -103,15 +156,19 @@ class Settings:
     STATBOTICS_BASE: str = "https://api.statbotics.io/v3"
     EXTERNAL_TTL_SECONDS: int = int(os.getenv("HAZEHUB_CACHE_TTL", "900"))
 
-    # Environment
-    IS_AZURE: bool = _on_azure()
-    IS_VERCEL: bool = IS_VERCEL
-    DATABASE_URL: str = _database_url()
+    # Environment / datastore
+    DATA_DIR: Path = DATA_DIR
+    IS_CLOUD_RUN: bool = IS_CLOUD_RUN
+    FIREBASE_PROJECT_ID: str = _firebase_project()
+    ENVIRONMENT: str = _environment()
 
-    # Direct-to-cloud design: this API *is* the shared source of truth.
-    # Devices keep their own IndexedDB queues and sync straight here over
-    # HTTPS with UUID + payload-hash idempotency. There is no MegaScout middle
-    # tier, no outbox, and no sync worker.
+    # Firebase Hosting site (used to build the default CORS allowlist).
+    FIREBASE_SITE: str = os.getenv("FIREBASE_SITE", "").strip() or _firebase_project()
+
+    # This API is the shared source of truth. Devices keep their own IndexedDB
+    # queues and sync straight here over HTTPS with UUID + payload-hash
+    # idempotency; the submission UUID is the Firestore document ID, so a
+    # replayed queue can never duplicate a record.
 
     # Optional UniFi/gateway stats endpoint for the admin network panel. When
     # unset, the panel reports network fields as "unavailable" rather than
@@ -120,10 +177,14 @@ class Settings:
 
     @property
     def DATABASE_CONFIGURED(self) -> bool:
-        """True when a real (non-SQLite-fallback) database URL is set."""
-        return not self.DATABASE_URL.startswith("sqlite")
+        """True when a real Firestore database (not the dev file) is in use."""
+        return self.ENVIRONMENT in ("firebase", "cloud-run", "emulator")
 
-    # CORS — local dev front-ends + anything you configure for cloud hosts
+    # CORS: local dev front-ends plus the project's Firebase Hosting domains.
+    #
+    # In the normal deployment this is unused: the same process serves the web
+    # app and the API, so every request is same-origin. It matters for
+    # `next dev` against a separately-run backend, and for a split deployment.
     @property
     def cors_origins(self) -> list[str]:
         extra = os.getenv("HAZEHUB_CORS", "")
@@ -131,14 +192,36 @@ class Settings:
             "http://localhost:3000",
             "http://127.0.0.1:3000",
             "http://localhost:3001",
+            "http://localhost:5000",   # firebase emulators:start --only hosting
+            "http://localhost:8000",
         ]
+        if self.FIREBASE_SITE:
+            origins += [
+                f"https://{self.FIREBASE_SITE}.web.app",
+                f"https://{self.FIREBASE_SITE}.firebaseapp.com",
+            ]
         if extra:
             origins.extend(o.strip() for o in extra.split(",") if o.strip())
-        # Same-origin on Vercel services needs no CORS; the wildcard keeps any
-        # split deployment working when nothing custom is configured.
-        if (self.IS_AZURE or self.IS_VERCEL) and not extra:
-            origins.append("*")
         return origins
+
+    @property
+    def cors_origin_regex(self) -> str:
+        """Allow any device on a private LAN.
+
+        At an event the tablets reach the host laptop by its LAN address,
+        which nobody knows in advance. This matches only RFC1918 / link-local
+        addresses and .local names, so it cannot open the API to the internet.
+        """
+        return (
+            r"^https?://("
+            r"localhost|127\.0\.0\.1|\[::1\]|"
+            r"10\.\d{1,3}\.\d{1,3}\.\d{1,3}|"
+            r"192\.168\.\d{1,3}\.\d{1,3}|"
+            r"172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|"
+            r"169\.254\.\d{1,3}\.\d{1,3}|"
+            r"[A-Za-z0-9-]+\.local"
+            r")(:\d+)?$"
+        )
 
 
 @lru_cache

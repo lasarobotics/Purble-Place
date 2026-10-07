@@ -1,19 +1,26 @@
 // Central API client. Resolves the backend base URL with a sensible local
 // default and auto-detects a same-origin deployment.
 
+//: Ports the Next.js dev server runs on. Only on these is the API somewhere
+//: other than the page's own origin.
+const DEV_SERVER_PORTS = ["3000", "3001"];
+
 export function apiBase(): string {
   const env = process.env.NEXT_PUBLIC_API_URL;
   if (env && env.trim()) return env.trim().replace(/\/$/, "");
   if (typeof window !== "undefined") {
-    const h = window.location.hostname;
-    // Deployed somewhere that proxies /api to the backend on the same origin
-    // (MegaScout behind Nginx, Azure, etc.).
-    if (h !== "localhost" && h !== "127.0.0.1") return "";
+    // In every deployment the API serves this page: one process on the
+    // scouting laptop, or the container on Render. Same origin is therefore
+    // the right default whatever the hostname is, including localhost on a
+    // non-default port. Keying off the hostname instead used to send
+    // `run-server.ps1 -Port 8080` to localhost:8000 and fail every request.
+    if (!DEV_SERVER_PORTS.includes(window.location.port)) return "";
+    return `${window.location.protocol}//${window.location.hostname}:8000`;
   }
   return "http://localhost:8000";
 }
 
-// WebSocket URL for the MegaScout realtime hub (/ws). Derives ws/wss from the
+// WebSocket URL for the realtime hub (/ws). Derives ws/wss from the
 // API base, or from the current origin for same-origin (Nginx) deployments.
 export function wsUrl(): string {
   const base = apiBase();

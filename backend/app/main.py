@@ -1,39 +1,89 @@
-"""HazeHub FastAPI application."""
+"""HazeHub FastAPI application.
+
+This process is the whole server: the JSON API, the WebSocket hub, and: when a built frontend is present: the web app itself. Serving both from one
+origin is what lets HazeHub run on a laptop on the event LAN with no reverse
+proxy, no CORS configuration, and no Cloud Run (so the Firebase project can
+stay on the free Spark plan).
+"""
 from __future__ import annotations
 
+import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from . import repo
+from .cache import StoreUnavailable
 from .config import settings
-from .database import init_db
+from .database import close_db, init_db
+from .firestore_db import guard
+from .firestore_db import status as firestore_status
 from .realtime import hub
-from .routers import admin, auth, betting, events, matches, picklists, scouting, sync, system, teams
+from .routers import (
+    admin, auth, betting, events, forms, matches, picklists, scouting, seasons,
+    sync, system, teams,
+)
+from .form_store import seed_builtin_forms
+from .seasons import seed_first_season
 from .seed import seed
 
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("hazehub")
+
 STATIC_FIELD = Path(__file__).resolve().parent / "static_field"
+
+#: The Next.js static export, if it has been built. Override with
+#: HAZEHUB_WEB_DIR when the frontend lives somewhere else.
+WEB_DIR = Path(
+    os.getenv(
+        "HAZEHUB_WEB_DIR",
+        str(Path(__file__).resolve().parents[2] / "frontend" / "out"),
+    )
+)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Best effort: a cold start with the database briefly unreachable should
+    # Best effort: a cold start with Firestore briefly unreachable should
     # still boot and serve /api/health with a clear diagnostic.
+    #
+    # init_db() loads the whole working set into memory. That is the single
+    # burst of Firestore reads in a normal day: a few thousand documents,
+    # once: and every request afterwards is served from RAM.
     try:
         init_db()
         seed()
-    except Exception:
-        pass
+        # A season owns the game, the forms and everything scouted under
+        # them, so it has to exist before any of those are looked up.
+        seed_first_season()
+        # The scouting and pit pages render from these, so a fresh install
+        # needs them before anyone signs in.
+        seed_builtin_forms()
+        # The event pointer decides what every screen shows. If it has gone
+        # stale the app looks empty while the data sits in the datastore under
+        # another key, so it is checked here rather than discovered at an event.
+        repo.reconcile_current_event()
+    except Exception as exc:  # noqa: BLE001
+        log.exception("startup failed: %s", exc)
     yield
+    try:
+        close_db()
+    except Exception:  # noqa: BLE001
+        pass
 
 
-app = FastAPI(title="HazeHub API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="HazeHub API", version="2.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
+    # Tablets reach the host laptop by whatever LAN address it has that day.
+    allow_origin_regex=settings.cors_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -41,12 +91,15 @@ app.add_middleware(
 
 for r in (
     auth.router,
+    auth.game_router,
     teams.router,
     matches.router,
     scouting.router,
     scouting.pit_router,
     betting.router,
     picklists.router,
+    forms.router,
+    seasons.router,
     admin.router,
     sync.router,
     system.router,
@@ -55,37 +108,58 @@ for r in (
     app.include_router(r)
 
 
+@app.exception_handler(StoreUnavailable)
+def _datastore_unavailable(request: Request, exc: StoreUnavailable) -> JSONResponse:
+    """Answer 503, not 500, when the datastore is unreachable.
+
+    This matters for scouting: a tablet treats 5xx as "retry later" and keeps
+    the submission queued, but 503 plus a real explanation is the difference
+    between someone diagnosing a bad credential in a minute and staring at an
+    opaque "Internal Server Error" for an hour.
+    """
+    log.error("datastore unavailable on %s: %s", request.url.path, exc)
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": (
+                "The database is unreachable, so this could not be saved. "
+                "Your device has kept it queued and will retry. "
+                f"Cause: {exc}"
+            ),
+            "retry": True,
+        },
+    )
+
+
 @app.get("/api/health")
 def health() -> dict:
-    db_ok = True
-    try:
-        from sqlalchemy import text
-
-        from .database import engine
-
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-    except Exception:
-        db_ok = False
-    environment = "vercel" if settings.IS_VERCEL else ("azure" if settings.IS_AZURE else "local")
+    db = firestore_status()
+    cache = repo.cache_stats()
+    quota = guard.snapshot()
     out = {
-        "ok": db_ok,
+        "ok": bool(cache.get("ready")),
         "app": settings.APP_NAME,
         "season": settings.SEASON,
-        "environment": environment,
-        "database": {
-            "engine": "postgres" if "postgres" in settings.DATABASE_URL else "sqlite",
-            "configured": settings.DATABASE_CONFIGURED,
-            "reachable": db_ok,
+        "environment": settings.ENVIRONMENT,
+        "database": db,
+        "cache": {
+            "backend": cache.get("backend"),
+            "documents": cache.get("cached_total"),
+            "event": cache.get("event_key"),
+        },
+        "quota": {
+            kind: f"{v['used']}/{v['budget']}" for kind, v in quota["operations"].items()
         },
         "realtime": "websocket (/ws) with polling fallback (/api/events)",
     }
-    if settings.IS_VERCEL and not settings.DATABASE_CONFIGURED:
+    if cache.get("error"):
+        out["error"] = cache["error"]
+    if cache.get("backend") == "local-file":
         out["warning"] = (
-            "DATABASE_URL is not set — data will NOT persist. Add a cloud "
-            "PostgreSQL connection string (e.g. Neon or Azure Database for "
-            "PostgreSQL) in Vercel → Project → Settings → Environment "
-            "Variables, then redeploy."
+            "Running on the local development store: data is NOT in Firestore. "
+            "Set FIREBASE_PROJECT_ID (and FIREBASE_SERVICE_ACCOUNT outside Google "
+            "Cloud), or FIRESTORE_EMULATOR_HOST for local emulator use. "
+            "See instructions.txt."
         )
     return out
 
@@ -99,9 +173,85 @@ async def websocket_endpoint(ws: WebSocket):
             await ws.receive_text()
     except WebSocketDisconnect:
         await hub.disconnect(ws)
-    except Exception:
+    except Exception:  # noqa: BLE001
         await hub.disconnect(ws)
 
 
 if STATIC_FIELD.exists():
     app.mount("/field", StaticFiles(directory=str(STATIC_FIELD)), name="field")
+
+
+# --------------------------------------------------------------------------- #
+# The web app                                                                  #
+# --------------------------------------------------------------------------- #
+if WEB_DIR.is_dir() and (WEB_DIR / "index.html").exists():
+    # Next.js hashes its assets, so /_next/static can be cached forever.
+    app.mount(
+        "/_next", StaticFiles(directory=str(WEB_DIR / "_next")), name="next-assets"
+    )
+
+    def _resolve(rel: str) -> Path | None:
+        """Map a URL path onto a file in the static export.
+
+        `next build` with `output: "export"` emits `about.html` for /about and
+        `about/index.html` when trailingSlash is on, so try both before
+        falling back to the SPA shell.
+        """
+        rel = rel.strip("/")
+        candidates = (
+            [WEB_DIR / "index.html"]
+            if not rel
+            else [WEB_DIR / rel, WEB_DIR / f"{rel}.html", WEB_DIR / rel / "index.html"]
+        )
+        for candidate in candidates:
+            try:
+                resolved = candidate.resolve()
+                # Never serve anything outside the export directory.
+                resolved.relative_to(WEB_DIR.resolve())
+            except (OSError, ValueError):
+                continue
+            if resolved.is_file():
+                return resolved
+        return None
+
+    #: Extensions that must never fall through to the app shell. A missing
+    #: chunk answered with 200 + HTML looks like a working deploy while the
+    #: page silently fails; a real 404 says what actually happened.
+    _ASSET_SUFFIXES = {
+        ".js", ".css", ".map", ".json", ".txt", ".woff", ".woff2", ".ttf",
+        ".otf", ".eot", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp",
+        ".ico", ".mp4", ".webm", ".xml", ".wasm",
+    }
+
+    # HEAD as well as GET: uptime checkers and platform probes send HEAD to /,
+    # and FastAPI does not derive it from a GET route. Answering 405 makes a
+    # healthy service look unhealthy to whatever is watching it.
+    @app.api_route("/{full_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
+    def serve_web(full_path: str):
+        """Serve the built web app for any non-API path.
+
+        Registered last so every real route wins; unknown *page* paths fall
+        through to the app shell and the client router handles them.
+        """
+        target = _resolve(full_path)
+        if target is None:
+            suffix = Path(full_path).suffix.lower()
+            if suffix and suffix in _ASSET_SUFFIXES:
+                raise HTTPException(status_code=404, detail="Not found")
+            target = WEB_DIR / "404.html"
+            if not target.is_file():
+                target = WEB_DIR / "index.html"
+        no_cache = target.suffix == ".html"
+        return FileResponse(
+            target,
+            headers={"Cache-Control": "no-cache"} if no_cache else None,
+        )
+
+    log.info("serving the web app from %s", WEB_DIR)
+else:
+    log.info(
+        "no built frontend at %s: API only. Build it with "
+        "`cd frontend && npm run build` (HAZEHUB_STATIC_EXPORT=1) to serve "
+        "everything from this one process.",
+        WEB_DIR,
+    )

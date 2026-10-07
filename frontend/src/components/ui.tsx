@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import { api } from "@/lib/api";
 import type { Team } from "@/lib/types";
 
-// FRC 418 Purple Haze · FRC 436 Purple Rain — highlighted across the app.
+// FRC 418 Purple Haze · FRC 436 Purple Rain, highlighted across the app.
 export const HOME_TEAMS = [418, 436];
 
 type AvatarTeam = Pick<Team, "team_number"> & Partial<Omit<Team, "team_number">>;
@@ -12,7 +12,7 @@ type TeamLike = AvatarTeam | ({ team: number } & Partial<Team>);
 const teamProfileCache = new Map<number, AvatarTeam>();
 const pendingProfiles = new Map<number, Promise<AvatarTeam | null>>();
 
-export function Loading({ label = "Loading…" }: { label?: string }) {
+export function Loading({ label = "Loading..." }: { label?: string }) {
   return (
     <div className="loading-wrap">
       <div style={{ textAlign: "center" }}>
@@ -157,6 +157,49 @@ export function Modal({ children, onClose }: { children: React.ReactNode; onClos
       </div>
     </div>,
     document.body,
+  );
+}
+
+/**
+ * Yes/no dialog for a change that quietly ruins data if it was a mis-tap.
+ *
+ * Used by the alliance and station switches on the scouting page: those two
+ * controls decide which robot every following submission is about, and a
+ * thumb brushing them mid-match sends the rest of the day's scouting to the
+ * wrong team without anything looking wrong on screen.
+ */
+export function Confirm({
+  title,
+  body,
+  confirmLabel = "Yes, change it",
+  cancelLabel = "Cancel",
+  onConfirm,
+  onCancel,
+}: {
+  title: string;
+  body?: React.ReactNode;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onCancel(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+
+  return (
+    <Modal onClose={onCancel}>
+      <div className="confirm">
+        <h3>{title}</h3>
+        {body && <div className="confirm-body">{body}</div>}
+        <div className="confirm-actions">
+          <button type="button" className="btn ghost" onClick={onCancel}>{cancelLabel}</button>
+          <button type="button" className="btn primary" onClick={onConfirm} autoFocus>{confirmLabel}</button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

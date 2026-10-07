@@ -2,15 +2,25 @@
 backend/.venv/
 __pycache__/
 *.pyc
-# backend/.env
-backend/data/*.db
-backend/data/*.db-journal
+backend/.env
+backend/data/
 
 # Node / Next
 frontend/node_modules/
 frontend/.next/
 frontend/out/
 frontend/.env.local
+
+# Firebase
+# .firebaserc IS committed — it only names the project (hazehub-8a941), which
+# is not a secret, and committing it means the CLI works straight after clone.
+.firebase/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+# NEVER commit a service-account key.
+*service-account*.json
+*serviceAccountKey*.json
 
 # Misc
 .DS_Store

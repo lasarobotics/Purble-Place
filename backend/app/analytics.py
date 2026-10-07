@@ -1,28 +1,36 @@
 """Team analytics: summaries, rankings, strength-of-schedule, compare.
 
 These power the admin Team Search / Team Rank / Data Picklist / Compare tabs.
+
+Every aggregation here is memoised against the revision counters of the
+collections it reads (see ``repo.memoized``). That matters at an event: with
+60 people refreshing dashboards, ``rank_teams`` was recomputing a full
+per-team pass over every submission on every request. Now it is computed once
+per new submission and served from memory until the next one lands: the CPU
+equivalent of the read-cache, and the reason the single Cloud Run instance
+keeps up.
 """
 from __future__ import annotations
 
 import statistics
 from typing import Any, Optional
 
-from sqlmodel import Session, select
-
-from .models import MatchRecord, ScoutEntry, TeamCache
+from . import repo, schema
+from . import seasons
+from .models import ScoutEntry
 from .scoring import phase_counts
+
+#: Revision keys for the memoiser: any change to scouting or team data
+#: invalidates every derived aggregate below.
+_DEPS = (schema.MATCH_SCOUTING, schema.TEAM_CACHE, schema.MATCHES)
 
 
 # --------------------------------------------------------------------------- #
 # Per-team aggregation                                                         #
 # --------------------------------------------------------------------------- #
-def team_entries(session: Session, event_key: str, team: int) -> list[ScoutEntry]:
-    stmt = (
-        select(ScoutEntry)
-        .where(ScoutEntry.event_key == event_key, ScoutEntry.team_number == team)
-        .order_by(ScoutEntry.match_number)
-    )
-    return list(session.exec(stmt).all())
+def team_entries(event_key: str, team: int) -> list[ScoutEntry]:
+    """This team's submissions at this event, ordered by match."""
+    return repo.scouting_for_team(event_key, team)
 
 
 def _coeff_var(values: list[float]) -> float:
@@ -35,8 +43,8 @@ def _coeff_var(values: list[float]) -> float:
     return statistics.pstdev(values) / mean
 
 
-def team_summary(session: Session, event_key: str, team: int) -> dict[str, Any]:
-    all_entries = team_entries(session, event_key, team)
+def _build_team_summary(event_key: str, team: int) -> dict[str, Any]:
+    all_entries = team_entries(event_key, team)
     # No-shows are a reliability signal, not a performance sample.
     entries = [e for e in all_entries if not e.no_show]
     no_shows = len(all_entries) - len(entries)
@@ -67,7 +75,7 @@ def team_summary(session: Session, event_key: str, team: int) -> dict[str, Any]:
             tag_counts[t] = tag_counts.get(t, 0) + 1
     top_tags = sorted(tag_counts.items(), key=lambda kv: -kv[1])
 
-    tc = session.get(TeamCache, team)
+    tc = repo.team(team)
     return {
         "team": team,
         "nickname": tc.nickname if tc else "",
@@ -93,12 +101,29 @@ def team_summary(session: Session, event_key: str, team: int) -> dict[str, Any]:
     }
 
 
-def event_teams(session: Session, event_key: str) -> list[int]:
+def team_summary(event_key: str, team: int) -> dict[str, Any]:
+    return repo.memoized(
+        f"summary:{event_key}:{team}", _DEPS, lambda: _build_team_summary(event_key, team)
+    )
+
+
+def all_summaries(event_key: str) -> dict[int, dict[str, Any]]:
+    """Every scouted team's summary, computed in one memoised pass.
+
+    ``rank_teams``, ``data_picklist`` and ``scout_disagreements`` all need the
+    full set; sharing one memo entry means they cost a single pass between
+    submissions instead of three.
+    """
+
+    def build() -> dict[int, dict[str, Any]]:
+        return {t: team_summary(event_key, t) for t in event_teams(event_key)}
+
+    return repo.memoized(f"summaries:{event_key}", _DEPS, build)
+
+
+def event_teams(event_key: str) -> list[int]:
     """All team numbers seen in scouting for this event."""
-    rows = session.exec(
-        select(ScoutEntry.team_number).where(ScoutEntry.event_key == event_key)
-    ).all()
-    return sorted({int(t) for t in rows})
+    return repo.event_teams(event_key)
 
 
 # --------------------------------------------------------------------------- #
@@ -117,59 +142,77 @@ RANK_METRICS = {
 }
 
 
-def rank_teams(session: Session, event_key: str, metric: str = "avg_points") -> list[dict[str, Any]]:
+def rank_teams(event_key: str, metric: str = "avg_points") -> list[dict[str, Any]]:
     metric = metric if metric in RANK_METRICS else "avg_points"
-    rows = [team_summary(session, event_key, t) for t in event_teams(session, event_key)]
-    rows = [r for r in rows if r["matches"] > 0 or metric == "epa"]
-    rows.sort(key=lambda r: (r.get(metric) or 0), reverse=True)
-    for i, r in enumerate(rows, 1):
-        r["rank"] = i
-    return rows
+
+    def build() -> list[dict[str, Any]]:
+        rows = [dict(s) for s in all_summaries(event_key).values()]
+        rows = [r for r in rows if r["matches"] > 0 or metric == "epa"]
+        rows.sort(key=lambda r: (r.get(metric) or 0), reverse=True)
+        for i, r in enumerate(rows, 1):
+            r["rank"] = i
+        return rows
+
+    return repo.memoized(f"rank:{event_key}:{metric}", _DEPS, build)
 
 
 # --------------------------------------------------------------------------- #
 # Heatmap aggregation                                                          #
 # --------------------------------------------------------------------------- #
 def team_heatmap(
-    session: Session, event_key: str, team: int, phase: Optional[str] = None
+    event_key: str, team: int, phase: Optional[str] = None
 ) -> dict[str, Any]:
-    points: list[dict[str, Any]] = []
-    for e in team_entries(session, event_key, team):
-        for a in e.heatmap or []:
-            if phase and a.get("phase") != phase:
-                continue
-            points.append(
+    def build() -> dict[str, Any]:
+        points: list[dict[str, Any]] = []
+        by_station: dict[str, dict[str, int]] = {}
+        for e in team_entries(event_key, team):
+            slot = f"{e.alliance}{e.station}"
+            for a in e.heatmap or []:
+                if phase and a.get("phase") != phase:
+                    continue
+                points.append(
+                    {
+                        "x": a.get("x"),
+                        "y": a.get("y"),
+                        "phase": a.get("phase"),
+                        "result": a.get("result"),
+                        "match": e.match_number,
+                        # Carried through so the map can be split by driver
+                        # station: where a robot starts changes which side of
+                        # the field it can reach.
+                        "alliance": e.alliance,
+                        "station": e.station,
+                    }
+                )
+                bucket = by_station.setdefault(slot, {"total": 0, "made": 0})
+                bucket["total"] += 1
+                if a.get("result") == "made":
+                    bucket["made"] += 1
+        made = sum(1 for p in points if p["result"] == "made")
+        return {
+            "team": team,
+            "points": points,
+            "total": len(points),
+            "made": made,
+            "accuracy": round(made / len(points), 3) if points else 0.0,
+            "by_station": [
                 {
-                    "x": a.get("x"),
-                    "y": a.get("y"),
-                    "phase": a.get("phase"),
-                    "result": a.get("result"),
-                    "match": e.match_number,
+                    "station": slot,
+                    "total": v["total"],
+                    "made": v["made"],
+                    "accuracy": round(v["made"] / v["total"], 3) if v["total"] else 0.0,
                 }
-            )
-    made = sum(1 for p in points if p["result"] == "made")
-    return {
-        "team": team,
-        "points": points,
-        "total": len(points),
-        "made": made,
-        "accuracy": round(made / len(points), 3) if points else 0.0,
-    }
+                for slot, v in sorted(by_station.items())
+            ],
+        }
+
+    return repo.memoized(f"heatmap:{event_key}:{team}:{phase or 'all'}", _DEPS, build)
 
 
 # --------------------------------------------------------------------------- #
 # Strength-of-schedule "Data Picklist"                                         #
 # --------------------------------------------------------------------------- #
-def _event_epa_map(session: Session, event_key: str) -> dict[int, float]:
-    out: dict[int, float] = {}
-    for t in event_teams(session, event_key):
-        tc = session.get(TeamCache, t)
-        if tc and tc.epa is not None:
-            out[t] = float(tc.epa)
-    return out
-
-
-def data_picklist(session: Session, event_key: str) -> dict[str, Any]:
+def data_picklist(event_key: str) -> dict[str, Any]:
     """Auto-rank robots by *true* strength.
 
     A team can look good simply because it keeps drawing weak opponents and
@@ -185,208 +228,217 @@ def data_picklist(session: Session, event_key: str) -> dict[str, Any]:
     where sos_z is the schedule term normalised across the event so the
     adjustment is comparable to point swings.
     """
-    teams = event_teams(session, event_key)
-    epa_map = _event_epa_map(session, event_key)
-    matches = list(
-        session.exec(select(MatchRecord).where(MatchRecord.event_key == event_key)).all()
-    )
-    event_avg_epa = (sum(epa_map.values()) / len(epa_map)) if epa_map else 0.0
 
-    # Gather opponents/partners faced per team from the schedule.
-    opp: dict[int, list[float]] = {t: [] for t in teams}
-    partner: dict[int, list[float]] = {t: [] for t in teams}
-    for m in matches:
-        for alliance, foes in (("red", m.blue), ("blue", m.red)):
-            mates = m.red if alliance == "red" else m.blue
-            for t in mates:
-                if t not in opp:
-                    continue
-                for f in foes:
-                    opp[t].append(epa_map.get(f, event_avg_epa))
-                for p in mates:
-                    if p != t:
-                        partner[t].append(epa_map.get(p, event_avg_epa))
+    def build() -> dict[str, Any]:
+        teams = event_teams(event_key)
+        epa_map = repo.epa_map(event_key)
+        matches = repo.matches_for_event(event_key)
+        event_avg_epa = (sum(epa_map.values()) / len(epa_map)) if epa_map else 0.0
 
-    rows: list[dict[str, Any]] = []
-    for t in teams:
-        s = team_summary(session, event_key, t)
-        if s["matches"] == 0:
-            continue
-        opp_strength = (sum(opp[t]) / len(opp[t])) if opp[t] else event_avg_epa
-        partner_help = (sum(partner[t]) / len(partner[t])) if partner[t] else event_avg_epa
-        sos = opp_strength - partner_help
-        rows.append(
-            {
-                **s,
-                "opp_strength": round(opp_strength, 1),
-                "partner_help": round(partner_help, 1),
-                "sos": round(sos, 1),
-                "base": s["avg_points"],
-                "reliability": s["consistency"],
-            }
-        )
+        # Gather opponents/partners faced per team from the schedule.
+        opp: dict[int, list[float]] = {t: [] for t in teams}
+        partner: dict[int, list[float]] = {t: [] for t in teams}
+        for m in matches:
+            for alliance, foes in (("red", m.blue), ("blue", m.red)):
+                mates = m.red if alliance == "red" else m.blue
+                for t in mates:
+                    if t not in opp:
+                        continue
+                    for f in foes:
+                        opp[t].append(epa_map.get(f, event_avg_epa))
+                    for p in mates:
+                        if p != t:
+                            partner[t].append(epa_map.get(p, event_avg_epa))
 
-    # Normalise SOS into a points-scale adjustment.
-    sos_vals = [r["sos"] for r in rows]
-    sos_sd = statistics.pstdev(sos_vals) if len(sos_vals) >= 2 else 0.0
-    base_sd = statistics.pstdev([r["base"] for r in rows]) if len(rows) >= 2 else 1.0
-    SOS_WEIGHT = (base_sd or 1.0) * 0.5  # schedule worth up to ~half a "spread"
+        summaries = all_summaries(event_key)
+        rows: list[dict[str, Any]] = []
+        for t in teams:
+            s = summaries[t]
+            if s["matches"] == 0:
+                continue
+            opp_strength = (sum(opp[t]) / len(opp[t])) if opp[t] else event_avg_epa
+            partner_help = (sum(partner[t]) / len(partner[t])) if partner[t] else event_avg_epa
+            sos = opp_strength - partner_help
+            rows.append(
+                {
+                    **s,
+                    "opp_strength": round(opp_strength, 1),
+                    "partner_help": round(partner_help, 1),
+                    "sos": round(sos, 1),
+                    "base": s["avg_points"],
+                    "reliability": s["consistency"],
+                }
+            )
 
-    for r in rows:
-        sos_z = (r["sos"] / sos_sd) if sos_sd else 0.0
-        adj = SOS_WEIGHT * sos_z
-        r["sos_adjust"] = round(adj, 2)
-        r["true_score"] = round(
-            r["base"] * (0.65 + 0.35 * r["reliability"]) + adj, 2
-        )
+        # Normalise SOS into a points-scale adjustment.
+        sos_vals = [r["sos"] for r in rows]
+        sos_sd = statistics.pstdev(sos_vals) if len(sos_vals) >= 2 else 0.0
+        base_sd = statistics.pstdev([r["base"] for r in rows]) if len(rows) >= 2 else 1.0
+        SOS_WEIGHT = (base_sd or 1.0) * 0.5  # schedule worth up to ~half a "spread"
 
-    rows.sort(key=lambda r: r["true_score"], reverse=True)
-    for i, r in enumerate(rows, 1):
-        r["rank"] = i
-    return {
-        "event": event_key,
-        "event_avg_epa": round(event_avg_epa, 1),
-        "explanation": (
-            "true_score = base × (0.65 + 0.35×reliability) + schedule adjust. "
-            "Schedule adjust rewards teams that faced tougher opponents with "
-            "weaker partners, and penalises teams carried by strong partners "
-            "against weak opponents."
-        ),
-        "teams": rows,
-    }
+        for r in rows:
+            sos_z = (r["sos"] / sos_sd) if sos_sd else 0.0
+            adj = SOS_WEIGHT * sos_z
+            r["sos_adjust"] = round(adj, 2)
+            r["true_score"] = round(
+                r["base"] * (0.65 + 0.35 * r["reliability"]) + adj, 2
+            )
+
+        rows.sort(key=lambda r: r["true_score"], reverse=True)
+        for i, r in enumerate(rows, 1):
+            r["rank"] = i
+        return {
+            "event": event_key,
+            "event_avg_epa": round(event_avg_epa, 1),
+            "explanation": (
+                "true_score = base × (0.65 + 0.35×reliability) + schedule adjust. "
+                "Schedule adjust rewards teams that faced tougher opponents with "
+                "weaker partners, and penalises teams carried by strong partners "
+                "against weak opponents."
+            ),
+            "teams": rows,
+        }
+
+    return repo.memoized(f"data_picklist:{event_key}", _DEPS, build)
 
 
 # --------------------------------------------------------------------------- #
 # Scout disagreement detection ("Consensus Radar")                             #
 # --------------------------------------------------------------------------- #
-NEGATIVE_TAGS = {
-    "Died on field", "Dropped pieces", "Slow cycles", "Tippy / unstable",
-    "Penalty prone", "Struggled vs defense", "Comms issues",
-}
-POSITIVE_TAGS = {
-    "Fast cycles", "Strong auto", "Clutch climb", "Great defense",
-    "Smart driver", "Consistent", "Good under pressure", "Great partner",
-}
+# Which tags read as praise and which as criticism comes from the season's game
+# definition, so a new game's tags are picked up without a second list to keep
+# in step. Resolved per call rather than at import: the definition lives in the
+# datastore, which is not up yet when this module is first imported.
+def negative_tags() -> set[str]:
+    return set(seasons.definition().negative_tags)
 
 
-def scout_disagreements(session: Session, event_key: str) -> dict[str, Any]:
+def positive_tags() -> set[str]:
+    return set(seasons.definition().positive_tags)
+
+
+def scout_disagreements(event_key: str) -> dict[str, Any]:
     """Flag teams where the scouting record doesn't agree with itself.
 
     Two signals, per the TideScout-style "separate individual judgment from
     consensus" idea:
 
-      1. **Numeric spread** — the same team+match scouted by 2+ scouts with a
+      1. **Numeric spread**: the same team+match scouted by 2+ scouts with a
          big point gap means someone missed cycles (or padded them).
-      2. **Quant vs qual gap** — a team whose scored output ranks high while
+      2. **Quant vs qual gap**: a team whose scored output ranks high while
          its qualitative signals (driver/speed ratings, negative tags,
-         failures) rank low — or vice versa. Those are exactly the teams to
+         failures) rank low: or vice versa. Those are exactly the teams to
          re-watch on film before locking a picklist.
     """
-    teams = event_teams(session, event_key)
-    summaries = {t: team_summary(session, event_key, t) for t in teams}
-    summaries = {t: s for t, s in summaries.items() if s["matches"] > 0}
-    if not summaries:
-        return {"event": event_key, "teams": []}
 
-    # Percentile helpers across the event.
-    def _pct(values: dict[int, float], team: int) -> float:
-        vals = sorted(values.values())
-        if len(vals) < 2:
-            return 0.5
-        below = sum(1 for v in vals if v < values[team])
-        return below / (len(vals) - 1)
+    def build() -> dict[str, Any]:
+        summaries = {
+            t: s for t, s in all_summaries(event_key).items() if s["matches"] > 0
+        }
+        if not summaries:
+            return {"event": event_key, "teams": []}
 
-    quant = {t: s["avg_points"] for t, s in summaries.items()}
-    qual: dict[int, float] = {}
-    for t, s in summaries.items():
-        tag_bal = 0.0
-        total_reports = max(1, s["matches"])
-        for row in s["tags"]:
-            if row["tag"] in POSITIVE_TAGS:
-                tag_bal += row["count"] / total_reports
-            elif row["tag"] in NEGATIVE_TAGS:
-                tag_bal -= row["count"] / total_reports
-        # Blend ratings (1-5 → 0-1), failure rate and tag balance.
-        ratings = ((s["avg_driver"] + s["avg_speed"]) / 2 - 1) / 4
-        qual[t] = ratings - 0.35 * s["failure_rate"] + 0.15 * tag_bal
+        # Percentile helpers across the event.
+        def _pct(values: dict[int, float], team: int) -> float:
+            vals = sorted(values.values())
+            if len(vals) < 2:
+                return 0.5
+            below = sum(1 for v in vals if v < values[team])
+            return below / (len(vals) - 1)
 
-    rows: list[dict[str, Any]] = []
-    for t, s in summaries.items():
-        entries = team_entries(session, event_key, t)
+        quant = {t: s["avg_points"] for t, s in summaries.items()}
+        qual: dict[int, float] = {}
+        for t, s in summaries.items():
+            tag_bal = 0.0
+            total_reports = max(1, s["matches"])
+            for row in s["tags"]:
+                if row["tag"] in positive_tags():
+                    tag_bal += row["count"] / total_reports
+                elif row["tag"] in negative_tags():
+                    tag_bal -= row["count"] / total_reports
+            # Blend ratings (1-5 → 0-1), failure rate and tag balance.
+            ratings = ((s["avg_driver"] + s["avg_speed"]) / 2 - 1) / 4
+            qual[t] = ratings - 0.35 * s["failure_rate"] + 0.15 * tag_bal
 
-        # Signal 1: same match, multiple scouts.
-        by_match: dict[int, list[Any]] = {}
-        for e in entries:
-            by_match.setdefault(e.match_number, []).append(e)
-        conflicts = []
-        for mn, group in sorted(by_match.items()):
-            if len(group) < 2:
-                continue
-            pts = [e.points for e in group]
-            spread = max(pts) - min(pts)
-            conflicts.append(
+        rows: list[dict[str, Any]] = []
+        for t, s in summaries.items():
+            entries = team_entries(event_key, t)
+
+            # Signal 1: same match, multiple scouts.
+            by_match: dict[int, list[Any]] = {}
+            for e in entries:
+                by_match.setdefault(e.match_number, []).append(e)
+            conflicts = []
+            for mn, group in sorted(by_match.items()):
+                if len(group) < 2:
+                    continue
+                pts = [e.points for e in group]
+                spread = max(pts) - min(pts)
+                conflicts.append(
+                    {
+                        "match": mn,
+                        "spread": round(spread, 1),
+                        "reports": [
+                            {"scout_id": e.scout_id, "points": e.points} for e in group
+                        ],
+                    }
+                )
+            conflicts.sort(key=lambda c: -c["spread"])
+            max_spread = conflicts[0]["spread"] if conflicts else 0.0
+            avg_pts = s["avg_points"] or 1.0
+            spread_score = min(1.0, max_spread / max(6.0, avg_pts))
+
+            # Signal 2: quantitative rank vs qualitative rank.
+            qp, ql = _pct(quant, t), _pct(qual, t)
+            gap = qp - ql
+            gap_score = abs(gap)
+
+            score = round(0.55 * spread_score + 0.45 * gap_score, 3)
+            flags = []
+            if max_spread > 0 and spread_score >= 0.3:
+                flags.append("scouts_disagree")
+            if gap >= 0.35:
+                flags.append("numbers_look_better_than_eyes")
+            elif gap <= -0.35:
+                flags.append("eyes_look_better_than_numbers")
+
+            rows.append(
                 {
-                    "match": mn,
-                    "spread": round(spread, 1),
-                    "reports": [
-                        {"scout_id": e.scout_id, "points": e.points} for e in group
-                    ],
+                    "team": t,
+                    "nickname": s["nickname"],
+                    "avatar": s["avatar"],
+                    "matches": s["matches"],
+                    "avg_points": s["avg_points"],
+                    "quant_pct": round(qp, 2),
+                    "qual_pct": round(ql, 2),
+                    "gap": round(gap, 2),
+                    "max_spread": max_spread,
+                    "conflicts": conflicts[:4],
+                    "score": score,
+                    "flags": flags,
                 }
             )
-        conflicts.sort(key=lambda c: -c["spread"])
-        max_spread = conflicts[0]["spread"] if conflicts else 0.0
-        avg_pts = s["avg_points"] or 1.0
-        spread_score = min(1.0, max_spread / max(6.0, avg_pts))
 
-        # Signal 2: quantitative rank vs qualitative rank.
-        qp, ql = _pct(quant, t), _pct(qual, t)
-        gap = qp - ql
-        gap_score = abs(gap)
+        rows.sort(key=lambda r: -r["score"])
+        return {
+            "event": event_key,
+            "explanation": (
+                "Score blends (1) how far apart scouts landed when covering the "
+                "same team in the same match, and (2) how far the team's scored "
+                "output percentile sits from its qualitative percentile (ratings, "
+                "tags, failures). High scores = watch film before picking."
+            ),
+            "teams": rows,
+        }
 
-        score = round(0.55 * spread_score + 0.45 * gap_score, 3)
-        flags = []
-        if max_spread > 0 and spread_score >= 0.3:
-            flags.append("scouts_disagree")
-        if gap >= 0.35:
-            flags.append("numbers_look_better_than_eyes")
-        elif gap <= -0.35:
-            flags.append("eyes_look_better_than_numbers")
-
-        rows.append(
-            {
-                "team": t,
-                "nickname": s["nickname"],
-                "avatar": s["avatar"],
-                "matches": s["matches"],
-                "avg_points": s["avg_points"],
-                "quant_pct": round(qp, 2),
-                "qual_pct": round(ql, 2),
-                "gap": round(gap, 2),
-                "max_spread": max_spread,
-                "conflicts": conflicts[:4],
-                "score": score,
-                "flags": flags,
-            }
-        )
-
-    rows.sort(key=lambda r: -r["score"])
-    return {
-        "event": event_key,
-        "explanation": (
-            "Score blends (1) how far apart scouts landed when covering the "
-            "same team in the same match, and (2) how far the team's scored "
-            "output percentile sits from its qualitative percentile (ratings, "
-            "tags, failures). High scores = watch film before picking."
-        ),
-        "teams": rows,
-    }
+    return repo.memoized(f"disagreements:{event_key}", _DEPS, build)
 
 
 # --------------------------------------------------------------------------- #
 # Compare                                                                      #
 # --------------------------------------------------------------------------- #
-def compare_teams(session: Session, event_key: str, teams: list[int]) -> dict[str, Any]:
-    summaries = [team_summary(session, event_key, t) for t in teams]
+def compare_teams(event_key: str, teams: list[int]) -> dict[str, Any]:
+    summaries = [team_summary(event_key, t) for t in teams]
     metrics = [
         ("avg_points", "Avg points", "high"),
         ("max_points", "Peak points", "high"),

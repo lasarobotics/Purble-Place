@@ -1,10 +1,10 @@
-// Synchronization engine — drives queued IndexedDB submissions to the cloud.
+// Synchronization engine, drives queued IndexedDB submissions to the cloud.
 //
 // State machine per record (see db.ts SyncStatus):
 //   queued → sending → acknowledged            (200/201, or already_exists)
-//                    → retry_wait              (timeout / 429 / 5xx — backoff+jitter)
-//                    → invalid                 (400/422 — needs correction)
-//                    → conflict                (409 — UUID reused, different payload)
+//                    → retry_wait              (timeout / 429 / 5xx, backoff+jitter)
+//                    → invalid                 (400/422, needs correction)
+//                    → conflict                (409. UUID reused, different payload)
 //                    → auth_required           (401/403)
 // Nothing is ever deleted because a sync failed.
 import { api, ApiError } from "./api";
@@ -44,7 +44,7 @@ export async function payloadHash(entry: Record<string, any>): Promise<string> {
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
   } catch {
-    return ""; // no SubtleCrypto (http on LAN) — server computes the hash
+    return ""; // no SubtleCrypto (http on LAN), server computes the hash
   }
 }
 

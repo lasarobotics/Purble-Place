@@ -2,23 +2,12 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { num } from "@/lib/format";
-import type { Team } from "@/lib/types";
+import type { PitEntry, Team } from "@/lib/types";
 import { TeamAvatar } from "./ui";
-
-interface Pit {
-  team_number: number;
-  drivetrain: string;
-  weight_lbs?: number | null;
-  can_climb: string;
-  auto_routine: string;
-  capabilities: string[];
-  robot_photo: string;
-  notes: string;
-}
 
 export function TeamDetail({ team }: { team: Team }) {
   const [full, setFull] = useState<Team>(team);
-  const [pit, setPit] = useState<Pit | null>(null);
+  const [pit, setPit] = useState<PitEntry | null>(null);
 
   useEffect(() => {
     setFull(team);
@@ -26,7 +15,7 @@ export function TeamDetail({ team }: { team: Team }) {
     if (!team.photos || team.photos.length === 0 || team.epa == null) {
       api<Team>(`/api/teams/${team.team_number}`).then(setFull).catch(() => {});
     }
-    api<Pit | null>(`/api/pit/${team.team_number}`).then(setPit).catch(() => {});
+    api<PitEntry | null>(`/api/pit/${team.team_number}`).then(setPit).catch(() => {});
   }, [team.team_number]);
 
   const photos = [
@@ -40,7 +29,7 @@ export function TeamDetail({ team }: { team: Team }) {
         <TeamAvatar team={full} size="lg" />
         <div style={{ minWidth: 0 }}>
           <h2 style={{ margin: 0 }}>{full.team_number}</h2>
-          <div className="muted">{full.nickname || "—"}</div>
+          <div className="muted">{full.nickname || "-"}</div>
           <div className="faint" style={{ fontSize: "0.8rem" }}>
             {[full.city, full.state, full.country].filter(Boolean).join(", ")}
           </div>
@@ -64,15 +53,16 @@ export function TeamDetail({ team }: { team: Team }) {
         <p className="muted">No photos</p>
       )}
 
-      {pit && (pit.drivetrain || pit.capabilities?.length || pit.notes) && (
+      {pit && (pit.drivetrain || pit.archetype || pit.capabilities?.length || pit.notes) && (
         <div className="card tight">
           <div className="card-h"><h3 style={{ fontSize: "0.95rem" }}>Pit Notes</h3></div>
+          {pit.archetype && <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">Archetype</span><b>{pit.archetype}</b></div>}
           {pit.drivetrain && <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">Drivetrain</span><b>{pit.drivetrain}</b></div>}
           {pit.weight_lbs ? <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">Weight</span><b>{pit.weight_lbs} lb</b></div> : null}
           {pit.can_climb && pit.can_climb !== "none" && <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">Climb</span><b>{pit.can_climb.toUpperCase()}</b></div>}
-          {pit.capabilities?.length > 0 && (
+          {(pit.capabilities?.length ?? 0) > 0 && (
             <div className="tag-list" style={{ marginTop: 8 }}>
-              {pit.capabilities.map((c) => <span key={c} className="chip">{c}</span>)}
+              {pit.capabilities!.map((c) => <span key={c} className="chip">{c}</span>)}
             </div>
           )}
           {pit.notes && <p style={{ marginTop: 8 }}>{pit.notes}</p>}

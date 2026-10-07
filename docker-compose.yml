@@ -1,48 +1,58 @@
-# HazeHub full stack: MongoDB + FastAPI + Next.js.
+# HazeHub full stack for local testing: Firestore emulator + FastAPI + Next.js.
 #
 #   docker compose up --build
 #   web  -> http://localhost:3000
 #   api  -> http://localhost:8000  (docs at /docs)
+#   db   -> http://localhost:4000  (Firestore Emulator UI)
+#
+# This mirrors the production topology (Hosting -> Cloud Run -> Firestore)
+# closely enough to test against, but it is NOT how HazeHub is deployed —
+# see instructions.txt and deploy/firebase.ps1 for that.
+#
+# To point this stack at a REAL Firestore instead of the emulator, drop the
+# `firestore` service, remove FIRESTORE_EMULATOR_HOST from `api`, and set
+# FIREBASE_PROJECT_ID plus FIREBASE_SERVICE_ACCOUNT.
 
 services:
-  mongodb:
-    image: mongo:8.0
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: hazehub
-      MONGO_INITDB_ROOT_PASSWORD: hazehub_dev_password
+  firestore:
+    image: node:20-slim
+    working_dir: /work
+    ports:
+      - "8080:8080"
+      - "4000:4000"
     volumes:
-      - hazehub_mongodb:/data/db
+      - hazehub_firestore:/work/data
+    command: >
+      bash -lc "
+        apt-get update -qq && apt-get install -y -qq openjdk-21-jre-headless curl >/dev/null &&
+        npm install -g firebase-tools >/dev/null &&
+        firebase emulators:start
+          --only firestore
+          --project hazehub-local
+          --host 0.0.0.0
+          --import ./data --export-on-exit ./data
+      "
     healthcheck:
-      test:
-        - CMD
-        - mongosh
-        - --quiet
-        - --username
-        - hazehub
-        - --password
-        - hazehub_dev_password
-        - --authenticationDatabase
-        - admin
-        - --eval
-        - db.adminCommand('ping').ok
-      interval: 5s
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/ >/dev/null || exit 1"]
+      interval: 10s
       timeout: 5s
-      retries: 20
+      retries: 60
 
   api:
     build: ./backend
     environment:
-      MONGODB_URI: mongodb://hazehub:hazehub_dev_password@mongodb:27017/?authSource=admin
-      MONGODB_DATABASE: hazehub
+      FIREBASE_PROJECT_ID: hazehub-local
+      FIRESTORE_EMULATOR_HOST: firestore:8080
       HAZEHUB_TEAM_PASSWORD: HazeRain!
       HAZEHUB_SECRET: change-me-in-production
       HAZEHUB_SEASON: "2026"
       HAZEHUB_HOME_TEAMS: "418,436"
-      # HAZEHUB_CORS: https://your-web-host
+      # The in-memory cache assumes a single writer — do not scale this up.
+      HAZEHUB_FIRESTORE_LISTEN: "0"
     ports:
       - "8000:8000"
     depends_on:
-      mongodb:
+      firestore:
         condition: service_healthy
 
   web:
@@ -50,6 +60,7 @@ services:
       context: ./frontend
       args:
         # Inlined at build time — the browser calls this URL directly.
+        # In production this is empty and Firebase Hosting rewrites /api/**.
         NEXT_PUBLIC_API_URL: http://localhost:8000
     ports:
       - "3000:3000"
@@ -57,4 +68,4 @@ services:
       - api
 
 volumes:
-  hazehub_mongodb:
+  hazehub_firestore:

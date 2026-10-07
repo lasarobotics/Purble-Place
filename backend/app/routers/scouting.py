@@ -5,6 +5,11 @@ Submissions follow the direct-to-cloud contract: the device assigns a UUID and
 a SHA-256 payload hash; the server commits exactly once, returns the original
 acknowledgement for identical retries, and 409s a UUID reused with a different
 payload (corrections must be new records that supersede the original).
+
+On Firestore that contract is enforced by the storage layer rather than by
+application logic: the submission UUID **is** the document ID, and the write
+uses ``create()``, which fails if the document already exists. A device that
+replays its whole offline queue cannot produce a duplicate.
 """
 from __future__ import annotations
 
@@ -14,15 +19,14 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlmodel import Session, select
 
+from .. import repo, schema
 from ..auth import current_scouter
-from ..database import get_session
+from ..cache import WriteTooLarge
 from ..external import sync_team
-from ..models import MatchRecord, PitEntry, Scouter, ScoutEntry, TeamCache
+from ..models import PitEntry, Scouter, ScoutEntry
 from ..realtime import emit
 from ..scoring import compute_points
-from ..store import get_setting
 
 router = APIRouter(prefix="/api/scout", tags=["scouting"])
 
@@ -50,6 +54,10 @@ def validate_submission(data: dict[str, Any]) -> str | None:
     Returns an error string (or None). Kept out of the Pydantic model on
     purpose: one invalid record in a batch must fail individually, not 422 the
     whole request.
+
+    The size bounds are Firestore's, pulled forward: a document is capped at
+    1 MiB and at 40,000 index entries, so an absurd heatmap is rejected here
+    with a clear message instead of failing mid-commit.
     """
     try:
         if int(data.get("match_number") or 0) < 1:
@@ -64,8 +72,12 @@ def validate_submission(data: dict[str, Any]) -> str | None:
         return "alliance must be red or blue"
     if data.get("comp_level") not in ("qm", "qf", "sf", "f"):
         return "comp_level must be qm/qf/sf/f"
-    if len(str(data.get("notes") or "")) > 5000:
-        return "notes over maximum length (5000)"
+    if len(str(data.get("notes") or "")) > schema.MAX_NOTES_CHARS:
+        return f"notes over maximum length ({schema.MAX_NOTES_CHARS})"
+    if len(data.get("heatmap") or []) > schema.MAX_HEATMAP_ATTEMPTS:
+        return f"heatmap over maximum length ({schema.MAX_HEATMAP_ATTEMPTS} attempts)"
+    if len(data.get("tags") or []) > schema.MAX_TAGS:
+        return f"too many tags (max {schema.MAX_TAGS})"
     return None
 
 
@@ -113,7 +125,7 @@ class ScoutIn(BaseModel):
 def _entry_dict(e: ScoutEntry) -> dict:
     return {
         "id": e.id,
-        "client_uuid": e.client_uuid,
+        "client_uuid": e.client_uuid or e.submission_id,
         "event_key": e.event_key,
         "match_number": e.match_number,
         "comp_level": e.comp_level,
@@ -141,7 +153,7 @@ def _entry_dict(e: ScoutEntry) -> dict:
         "points": e.points,
         "created_at": e.created_at.isoformat(),
         # Direct-to-cloud submission envelope. A record in this API *is* in
-        # the cloud, so its status is always "synced" from the server's view;
+        # Firestore, so its status is always "synced" from the server's view;
         # the device's own queue tracks anything not yet committed here.
         "submission_id": e.submission_id,
         "client_ts": e.client_ts.isoformat() if e.client_ts else None,
@@ -149,17 +161,32 @@ def _entry_dict(e: ScoutEntry) -> dict:
         "payload_hash": e.payload_hash,
         "schema_version": e.schema_version,
         "supersedes_submission_id": e.supersedes_submission_id,
-        "cloud_status": "synced",
+        "cloud_status": e.cloud_status,
     }
+
+
+def lock_betting_for_match(event_key: str, comp_level: str, match_number: int) -> bool:
+    """First scouting report on a match closes its betting window.
+
+    Returns whether a match record was found. ``repo.save_match`` skips the
+    Firestore write when the flag was already set, so the second through
+    twelfth reports on the same match cost nothing.
+    """
+    match = repo.match_by_number(event_key, comp_level, match_number)
+    if match is None:
+        return False
+    if not match.betting_locked:
+        match.betting_locked = True
+        repo.save_match(match)
+    return True
 
 
 @router.post("")
 async def submit_scout(
     body: ScoutIn,
-    session: Session = Depends(get_session),
     scouter: Scouter = Depends(current_scouter),
 ) -> dict:
-    event_key = (body.event_key or get_setting(session, "current_event")).strip()
+    event_key = repo.resolve_event(body.event_key)
 
     error = validate_submission(body.model_dump())
     if error:
@@ -170,11 +197,7 @@ async def submit_scout(
     #   same UUID + different payload hash → 409, never overwrite
     key = body.submission_id or body.client_uuid
     if key:
-        existing = session.exec(
-            select(ScoutEntry).where(
-                (ScoutEntry.submission_id == key) | (ScoutEntry.client_uuid == key)
-            )
-        ).first()
+        existing = repo.scouting_by_submission(key)
         if existing:
             if (
                 body.payload_hash
@@ -183,7 +206,7 @@ async def submit_scout(
             ):
                 raise HTTPException(
                     status_code=409,
-                    detail="Submission UUID exists with a different payload — "
+                    detail="Submission UUID exists with a different payload: "
                     "submit a correction instead of overwriting",
                 )
             return {"ok": True, "duplicate": True, "entry": _entry_dict(existing)}
@@ -200,69 +223,58 @@ async def submit_scout(
 
     entry = ScoutEntry.from_submission(data)
 
+    try:
+        created = repo.create_scouting(entry)
+    except WriteTooLarge as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    if not created:
+        # Lost a race with a concurrent retry of the same UUID.
+        stored = repo.scouting_by_submission(entry.submission_id)
+        if stored:
+            return {"ok": True, "duplicate": True, "entry": _entry_dict(stored)}
+
+    # Counter bumps are coalesced: a scout submitting six reports in a minute
+    # costs one scouters write, not six.
     scouter.matches_scouted += 1
-    session.add(scouter)
+    repo.save_scouter(scouter, coalesce=True)
 
-    match = session.exec(
-        select(MatchRecord).where(
-            MatchRecord.event_key == event_key,
-            MatchRecord.comp_level == body.comp_level,
-            MatchRecord.match_number == body.match_number,
-        )
-    ).first()
-    if match and not match.betting_locked:
-        match.betting_locked = True
-        session.add(match)
-
-    session.add(entry)
-    session.commit()
-    session.refresh(entry)
+    matched = lock_betting_for_match(event_key, body.comp_level, body.match_number)
 
     # Warm the team cache the first time we see a team (best effort).
-    if session.get(TeamCache, body.team_number) is None:
+    if repo.team(body.team_number) is None:
         try:
-            await sync_team(session, body.team_number)
-        except Exception:
+            await sync_team(body.team_number)
+        except Exception:  # noqa: BLE001
             pass
 
-    # Acknowledgement: the record is committed to the shared database — the
-    # device can mark it "acknowledged"; every dashboard refetches.
+    # Acknowledgement: the record is committed to Firestore: the device can
+    # mark it "acknowledged"; every dashboard refetches.
     emit("submission_ack", {
         "submission_id": entry.submission_id,
         "id": entry.id,
         "azure_received_at": entry.azure_received_at.isoformat(),
     })
-    emit("scout_submitted", {"team": entry.team_number, "match": entry.match_number, "bets_locked": bool(match)})
+    emit("scout_submitted", {
+        "team": entry.team_number,
+        "match": entry.match_number,
+        "bets_locked": matched,
+    })
     return {"ok": True, "duplicate": False, "entry": _entry_dict(entry)}
 
 
 @router.get("/mine")
-def my_entries(
-    session: Session = Depends(get_session),
-    scouter: Scouter = Depends(current_scouter),
-) -> list[dict]:
-    rows = session.exec(
-        select(ScoutEntry)
-        .where(ScoutEntry.scout_id == scouter.scout_id)
-        .order_by(ScoutEntry.id.desc())
-    ).all()
-    return [_entry_dict(e) for e in rows]
+def my_entries(scouter: Scouter = Depends(current_scouter)) -> list[dict]:
+    return [_entry_dict(e) for e in repo.scouting_for_scout(scouter.scout_id)]
 
 
 @router.get("/last-assignment")
-def last_assignment(
-    session: Session = Depends(get_session),
-    scouter: Scouter = Depends(current_scouter),
-) -> dict:
+def last_assignment(scouter: Scouter = Depends(current_scouter)) -> dict:
     """Remember the scouter's last alliance + station so the next match
     auto-fills the same slot (they can still change it)."""
-    last = session.exec(
-        select(ScoutEntry)
-        .where(ScoutEntry.scout_id == scouter.scout_id)
-        .order_by(ScoutEntry.id.desc())
-    ).first()
-    if not last:
+    rows = repo.scouting_for_scout(scouter.scout_id)
+    if not rows:
         return {"alliance": "red", "station": 1}
+    last = rows[0]
     return {"alliance": last.alliance, "station": last.station}
 
 
@@ -270,16 +282,29 @@ def last_assignment(
 def entries_for_match(
     match_number: int,
     event: str | None = None,
-    session: Session = Depends(get_session),
-    scouter: Scouter = Depends(current_scouter),
+    _: Scouter = Depends(current_scouter),
 ) -> list[dict]:
-    event_key = (event or get_setting(session, "current_event")).strip()
-    rows = session.exec(
-        select(ScoutEntry).where(
-            ScoutEntry.event_key == event_key,
-            ScoutEntry.match_number == match_number,
-        )
-    ).all()
+    event_key = repo.resolve_event(event)
+    return [_entry_dict(e) for e in repo.scouting_for_match(event_key, match_number)]
+
+
+@router.get("/team/{team_number}")
+def entries_for_team(
+    team_number: int,
+    event: str | None = None,
+    _: Scouter = Depends(current_scouter),
+) -> list[dict]:
+    """Every report on one robot this event, in match order.
+
+    Backs the ``@all:field`` reference in a picklist justification, which
+    pulls one measurement across the whole event rather than one match. Same
+    shape as ``/match/{n}`` so the reader renders both the same way.
+    """
+    event_key = repo.resolve_event(event)
+    rows = sorted(
+        repo.scouting_for_team(event_key, team_number),
+        key=lambda e: (e.match_number, e.id or 0),
+    )
     return [_entry_dict(e) for e in rows]
 
 
@@ -287,9 +312,19 @@ def entries_for_match(
 # Pit scouting                                                                 #
 # --------------------------------------------------------------------------- #
 class PitIn(BaseModel):
+    """A pit report.
+
+    Two ways in. The named fields are the ones the analytics and the team
+    detail popup read. ``answers`` is what the pit form actually collected,
+    keyed by field key: anything whose key matches a named field is folded
+    into it, and everything else is kept in ``responses`` so a form built for
+    a new game does not need a schema change to store its questions.
+    """
+
     event_key: Optional[str] = None
     team_number: int
     drivetrain: str = ""
+    archetype: str = ""
     weight_lbs: Optional[float] = None
     width_in: Optional[float] = None
     length_in: Optional[float] = None
@@ -298,6 +333,15 @@ class PitIn(BaseModel):
     capabilities: list[str] = Field(default_factory=list)
     robot_photo: str = ""
     notes: str = ""
+    answers: dict[str, Any] = Field(default_factory=dict)
+    form_version: int = 0
+
+
+#: PitEntry columns that a form field may fill in by using the same key.
+PIT_COLUMNS = {
+    "drivetrain", "archetype", "weight_lbs", "width_in", "length_in",
+    "can_climb", "auto_routine", "capabilities", "robot_photo", "notes",
+}
 
 
 pit_router = APIRouter(prefix="/api/pit", tags=["pit"])
@@ -306,50 +350,47 @@ pit_router = APIRouter(prefix="/api/pit", tags=["pit"])
 @pit_router.post("")
 def submit_pit(
     body: PitIn,
-    session: Session = Depends(get_session),
     scouter: Scouter = Depends(current_scouter),
 ) -> dict:
-    event_key = (body.event_key or get_setting(session, "current_event")).strip()
-    existing = session.exec(
-        select(PitEntry).where(
-            PitEntry.event_key == event_key,
-            PitEntry.team_number == body.team_number,
-        )
-    ).first()
+    event_key = repo.resolve_event(body.event_key)
+    row = repo.pit(event_key, body.team_number) or PitEntry(
+        event_key=event_key, team_number=body.team_number
+    )
     data = body.model_dump()
-    data["event_key"] = event_key
-    if existing:
-        for k, v in data.items():
-            setattr(existing, k, v)
-        existing.scout_id = scouter.scout_id
-        row = existing
-    else:
-        row = PitEntry(**data, scout_id=scouter.scout_id)
-    session.add(row)
-    session.commit()
+    data.pop("event_key", None)
+    answers = data.pop("answers", None) or {}
+    form_version = data.pop("form_version", 0)
+
+    for k, v in data.items():
+        setattr(row, k, v)
+
+    # Split what the form collected: known keys fill their column so the
+    # existing screens keep working, the rest is kept verbatim.
+    extra = {}
+    for key, value in answers.items():
+        if key in PIT_COLUMNS:
+            setattr(row, key, value)
+        elif key != "team_number":
+            extra[key] = value
+    if answers:
+        row.responses = extra
+        row.form_version = int(form_version or 0)
+
+    row.event_key = event_key
+    row.scout_id = scouter.scout_id
+    try:
+        repo.save_pit(row)
+    except WriteTooLarge as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     emit("pit_submitted", {"team": body.team_number})
     return {"ok": True}
 
 
-@pit_router.get("/{team_number}")
-def get_pit(
-    team_number: int,
-    event: str | None = None,
-    session: Session = Depends(get_session),
-    _: Scouter = Depends(current_scouter),
-) -> dict | None:
-    event_key = (event or get_setting(session, "current_event")).strip()
-    row = session.exec(
-        select(PitEntry).where(
-            PitEntry.event_key == event_key,
-            PitEntry.team_number == team_number,
-        )
-    ).first()
-    if not row:
-        return None
+def _pit_dict(row) -> dict:
     return {
         "team_number": row.team_number,
         "drivetrain": row.drivetrain,
+        "archetype": row.archetype,
         "weight_lbs": row.weight_lbs,
         "width_in": row.width_in,
         "length_in": row.length_in,
@@ -358,4 +399,45 @@ def get_pit(
         "capabilities": row.capabilities,
         "robot_photo": row.robot_photo,
         "notes": row.notes,
+        "responses": row.responses,
+        "form_version": row.form_version,
+        "scout_id": row.scout_id,
+        "updated_at": row.updated_at.isoformat(),
     }
+
+
+@pit_router.get("")
+def list_pit(
+    event: str | None = None,
+    photos: bool = False,
+    _: Scouter = Depends(current_scouter),
+) -> list[dict]:
+    """Every pit report at this event.
+
+    Photos are base64 blobs measured in hundreds of KiB, so the list omits
+    them unless asked; the page that shows one fetches that team on its own.
+    """
+    event_key = repo.resolve_event(event)
+    out = []
+    for row in repo.pits_for_event(event_key):
+        data = _pit_dict(row)
+        if not photos:
+            data["robot_photo"] = ""
+            data["has_photo"] = bool(row.robot_photo)
+        else:
+            data["has_photo"] = bool(row.robot_photo)
+        out.append(data)
+    return out
+
+
+@pit_router.get("/{team_number}")
+def get_pit(
+    team_number: int,
+    event: str | None = None,
+    _: Scouter = Depends(current_scouter),
+) -> dict | None:
+    event_key = repo.resolve_event(event)
+    row = repo.pit(event_key, team_number)
+    if not row:
+        return None
+    return _pit_dict(row)

@@ -35,6 +35,13 @@ const ICONS: Record<string, React.ReactNode> = {
     P("M9 6h12M9 12h12M9 18h12", 0),
     P("M4 6h.01M4 12h.01M4 18h.01", 1),
   ],
+  // Grid of squares: "show me everything", for the mobile all-tabs sheet.
+  menu: [
+    <rect key="a" x="3" y="3" width="7" height="7" rx="1.6" />,
+    <rect key="b" x="14" y="3" width="7" height="7" rx="1.6" />,
+    <rect key="c" x="3" y="14" width="7" height="7" rx="1.6" />,
+    <rect key="d" x="14" y="14" width="7" height="7" rx="1.6" />,
+  ],
   user: [
     <circle key="c" cx="12" cy="7.5" r="3.5" />,
     P("M5 21v-1.5A5.5 5.5 0 0 1 10.5 14h3A5.5 5.5 0 0 1 19 19.5V21", 0),
@@ -105,6 +112,13 @@ const ICONS: Record<string, React.ReactNode> = {
     P("m15 16 4-4-4-4M19 12H9", 1),
   ],
   circle: [<circle key="c" cx="12" cy="12" r="9" />],
+  battery: [
+    <rect key="r" x="2" y="7" width="17" height="10" rx="2.5" />,
+    P("M21.5 10.5v3", 0),
+  ],
+  wrench: [
+    P("M15.5 3.5a5 5 0 0 0-6 6.4L3 16.4V21h4.6l6.5-6.5a5 5 0 0 0 6.4-6.1l-3 3-2.9-2.9 3-3Z", 0),
+  ],
   sparkles: [
     P("M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3Z", 0),
     P("M19 15.5l.9 2.6 2.6.9-2.6.9-.9 2.6-.9-2.6-2.6-.9 2.6-.9.9-2.6Z", 1),
@@ -117,7 +131,7 @@ const ICONS: Record<string, React.ReactNode> = {
   ],
 };
 
-// Legacy call sites pass emoji or loose names — map them onto real icons.
+// Legacy call sites pass emoji or loose names, map them onto real icons.
 const ALIASES: Record<string, string> = {
   "🏠": "home", "📋": "clipboard", "🤖": "bot", "🎥": "film", "🎬": "film",
   "🎲": "dice", "📝": "list", "👤": "user", "⚙️": "sliders", "🔎": "search",

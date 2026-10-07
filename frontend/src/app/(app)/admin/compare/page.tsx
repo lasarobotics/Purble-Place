@@ -17,7 +17,7 @@ const SLOTS = 6;
 export default function ComparePage() {
   const [available, setAvailable] = useState<number[]>([]);
   const [teamProfiles, setTeamProfiles] = useState<Record<number, Team>>({});
-  // Fixed dropdown slots, like the Google Sheet — no free typing.
+  // Fixed dropdown slots, like the Google Sheet, no free typing.
   const [slots, setSlots] = useState<(number | null)[]>(Array(SLOTS).fill(null));
   const [data, setData] = useState<CompareData | null>(null);
   const [heats, setHeats] = useState<Record<number, any>>({});
@@ -54,11 +54,12 @@ export default function ComparePage() {
   }, [selected.join(",")]);
 
   const fmt = (key: string, v: number) => key.includes("rate") || key === "consistency" ? `${(v * 100).toFixed(0)}%` : num(v, key === "epa" || key.includes("foul") ? 0 : 1);
-  const label = (t: number) => `${t}${teamProfiles[t]?.nickname ? ` — ${teamProfiles[t].nickname}` : ""}`;
+  const label = (t: number) => `${t}${teamProfiles[t]?.nickname ? `. ${teamProfiles[t].nickname}` : ""}`;
 
   return (
     <div>
       <div className="page-title"><h1>Compare Robots</h1></div>
+      <p className="page-sub">Pick 2-6 robots from the event, best value in each row is highlighted.</p>
 
       <div className="card" style={{ marginBottom: 16 }}>
         {available.length === 0 ? (
@@ -69,7 +70,7 @@ export default function ComparePage() {
               <label key={i} className="field compare-slot">
                 <span>Robot {i + 1}{i < 2 ? "" : " (optional)"}</span>
                 <select value={val ?? ""} onChange={(e) => setSlot(i, e.target.value)}>
-                  <option value="">— pick a team —</option>
+                  <option value="">. pick a team. </option>
                   {available
                     .filter((t) => t === val || !selected.includes(t))
                     .map((t) => (
@@ -83,7 +84,7 @@ export default function ComparePage() {
       </div>
 
       {selected.length < 2 ? (
-        <Empty icon="scale" title="Pick at least 2 robots" />
+        <Empty icon="scale" title="Pick at least 2 robots" sub="Use the dropdowns above, the list comes straight from the event." />
       ) : loading || !data ? <Loading /> : (
         <>
           <div className="card team-name-white" style={{ marginBottom: 16 }}>
@@ -102,7 +103,7 @@ export default function ComparePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr><td className="muted">Nickname</td>{data.teams.map((t) => <td key={t.team} className="num faint">{t.nickname || "—"}</td>)}</tr>
+                  <tr><td className="muted">Nickname</td>{data.teams.map((t) => <td key={t.team} className="num faint">{t.nickname || "-"}</td>)}</tr>
                   <tr><td className="muted">Matches</td>{data.teams.map((t) => <td key={t.team} className="num mono">{t.matches}</td>)}</tr>
                   {data.metrics.map((row) => (
                     <tr key={row.key}>
