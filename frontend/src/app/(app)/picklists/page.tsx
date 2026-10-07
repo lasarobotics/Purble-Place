@@ -116,7 +116,6 @@ export default function PicklistsPage() {
   return (
     <div>
       <div className="page-title"><h1>Picklists</h1></div>
-      <p className="page-sub">Create a strategy list, fill the four default team slots, add more teams if needed, then send it to admin.</p>
 
       <div className="row" style={{ gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
         {mine.map((p) => (
@@ -128,7 +127,7 @@ export default function PicklistsPage() {
       {active ? (
         <Editor key={active.id} list={active} canEdit={active.owner_id === session?.scout_id || !!session?.is_admin} onSend={send} onDelete={!active.is_master ? remove : undefined} />
       ) : (
-        <Empty icon="clipboard" title="No picklists yet" sub="Create one to start ranking teams." />
+        <Empty icon="clipboard" title="No picklists yet" />
       )}
     </div>
   );
@@ -187,7 +186,6 @@ function Editor({ list, canEdit, onSend, onDelete }: { list: Picklist; canEdit: 
         })}
       </div>
       {canEdit && <button className="btn" style={{ marginTop: 12 }} onClick={() => upd([...slots, ""])}>+ Add Team</button>}
-      <p className="faint" style={{ fontSize: "0.75rem" }}>{sentItems.length} teams will be sent. You can send this picklist again after edits.</p>
     </div>
   );
 }

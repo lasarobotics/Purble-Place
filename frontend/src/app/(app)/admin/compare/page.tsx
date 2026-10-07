@@ -59,11 +59,10 @@ export default function ComparePage() {
   return (
     <div>
       <div className="page-title"><h1>Compare Robots</h1></div>
-      <p className="page-sub">Pick 2–6 robots from the event — best value in each row is highlighted.</p>
 
       <div className="card" style={{ marginBottom: 16 }}>
         {available.length === 0 ? (
-          <Empty icon="scale" title="No teams at this event yet" sub="Set an event in the Dashboard to load the team list." />
+          <Empty icon="scale" title="No teams at this event yet" />
         ) : (
           <div className="compare-slots">
             {slots.map((val, i) => (
@@ -84,7 +83,7 @@ export default function ComparePage() {
       </div>
 
       {selected.length < 2 ? (
-        <Empty icon="scale" title="Pick at least 2 robots" sub="Use the dropdowns above — the list comes straight from the event." />
+        <Empty icon="scale" title="Pick at least 2 robots" />
       ) : loading || !data ? <Loading /> : (
         <>
           <div className="card team-name-white" style={{ marginBottom: 16 }}>

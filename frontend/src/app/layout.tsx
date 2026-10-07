@@ -1,15 +1,12 @@
 import "./globals.css";
 import type { Metadata, Viewport } from "next";
-import { Inter } from "next/font/google";
+import localFont from "next/font/local";
 import { Providers } from "./providers";
 
-// One quiet family, weight contrast does the work. Numerals stay on the
-// system mono stack (globals.css) for tabular data.
-const inter = Inter({
-  subsets: ["latin"],
-  variable: "--font-inter",
-  display: "swap",
-});
+// Condensed display type with neutral body text and tabular UI numerals.
+const inter = localFont({ src: "./fonts/inter-variable.woff2", variable: "--font-inter", display: "swap", weight: "100 900" });
+
+const barlow = localFont({ src: [{ path: "./fonts/barlow-regular.woff2", weight: "400" }, { path: "./fonts/barlow-medium.woff2", weight: "500" }], variable: "--font-barlow", display: "swap" });
 
 export const metadata: Metadata = {
   title: "HazeHub — FRC Scouting",
@@ -17,7 +14,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#0e0d12",
+  themeColor: "#0c0c1a",
   width: "device-width",
   initialScale: 1,
   maximumScale: 5,
@@ -25,7 +22,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={inter.variable}>
+    <html lang="en" className={`${inter.variable} ${barlow.variable}`}>
       <body>
         <Providers>{children}</Providers>
       </body>

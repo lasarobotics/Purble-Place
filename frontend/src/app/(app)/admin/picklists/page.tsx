@@ -132,13 +132,11 @@ export default function AllPicklistsPage() {
         <h1>All Pick Lists</h1>
         <span className="badge muted">{visible.length} lists</span>
       </div>
-      <p className="page-sub">Review submitted lists, choose a final list for 418 or 436, or build a new final list from scratch.</p>
 
       <div className="card tight" style={{ marginBottom: 14 }}>
         <div className="card-h">
           <div>
             <h3 style={{ margin: 0 }}>Master Finals</h3>
-            <div className="faint" style={{ fontSize: "0.78rem" }}>Final lists are saved as master picklists for the selected group.</div>
           </div>
           <div className="btn-row">
             {FINAL_DIVISIONS.map((division) => (
@@ -250,7 +248,6 @@ function MasterEditor({ list, onSave }: { list: Picklist; onSave: (p: Picklist) 
         })}
       </div>
       <button className="btn" style={{ marginTop: 12 }} onClick={() => upd([...slots, ""])}>+ Add Team</button>
-      <p className="faint" style={{ fontSize: "0.75rem" }}>{sentItems.length} teams will be saved in this master list.</p>
     </div>
   );
 }

@@ -36,7 +36,6 @@ export default function TeamRankPage() {
   return (
     <div>
       <div className="page-title"><h1>Team Rank</h1></div>
-      <p className="page-sub">Rank every scouted team by the metric that matters for your pick.</p>
 
       <div className="card" style={{ marginBottom: 16 }}>
         <label className="field" style={{ margin: 0, maxWidth: 320 }}>
@@ -47,7 +46,7 @@ export default function TeamRankPage() {
         </label>
       </div>
 
-      {loading ? <Loading /> : rows.length === 0 ? <Empty icon="chart" title="No data yet" sub="Scout some matches first." /> : (
+      {loading ? <Loading /> : rows.length === 0 ? <Empty icon="chart" title="No data yet" /> : (
         <div className="card">
           <div className="table-wrap">
             <table className="data">

@@ -39,22 +39,22 @@ export function FieldInput({
   };
 
   return (
-    <div>
+    <div className="field-input">
       <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
         <div className="seg">
-          <button type="button" className={phase === "auto" ? "on" : ""} onClick={() => setPhase("auto")}>
+          <button type="button" className={phase === "auto" ? "on" : ""} aria-pressed={phase === "auto"} onClick={() => setPhase("auto")}>
             Auto
           </button>
-          <button type="button" className={phase === "teleop" ? "on" : ""} onClick={() => setPhase("teleop")}>
+          <button type="button" className={phase === "teleop" ? "on" : ""} aria-pressed={phase === "teleop"} onClick={() => setPhase("teleop")}>
             Teleop
           </button>
         </div>
         <div className="seg">
-          <button type="button" className={result === "made" ? "on" : ""} onClick={() => setResult("made")}>
-            ✓ Made
+          <button type="button" className={result === "made" ? "on" : ""} aria-pressed={result === "made"} onClick={() => setResult("made")}>
+            Made
           </button>
-          <button type="button" className={result === "missed" ? "on" : ""} onClick={() => setResult("missed")}>
-            ✗ Missed
+          <button type="button" className={result === "missed" ? "on" : ""} aria-pressed={result === "missed"} onClick={() => setResult("missed")}>
+            Missed
           </button>
         </div>
       </div>

@@ -8,13 +8,11 @@ import { matchLabel, num, pct } from "@/lib/format";
 import type { LeaderRow, MatchRec, Team, Bet } from "@/lib/types";
 import { Loading, TeamAvatar, Modal } from "@/components/ui";
 import { TeamDetail } from "@/components/TeamDetail";
-import { Icon } from "@/components/icons";
 
 const ACTIONS = [
-  { href: "/prematch", icon: "bot", title: "Pre-Match", sub: "Robots in the next match" },
-  { href: "/film", icon: "film", title: "Film", sub: "Video + scouting, side by side" },
-  { href: "/betting", icon: "coins", title: "Betting", sub: "Wager your Purple Bucks" },
-  { href: "/picklists", icon: "list", title: "Picklists", sub: "Build & share pick lists" },
+  { href: "/prematch", icon: "bot", title: "Pre-Match" },
+  { href: "/betting", icon: "coins", title: "Betting" },
+  { href: "/picklists", icon: "list", title: "Picklists" },
 ];
 
 export default function HomePage() {
@@ -51,7 +49,6 @@ export default function HomePage() {
   const openBets = bets.filter((b) => b.status === "open");
   const me = board.find((r) => r.scout_id === session?.scout_id);
   const nextMatch = cur?.current || cur?.on_deck?.[0] || null;
-  const firstName = (session?.display_name || "scout").split(" ")[0];
 
   return (
     <div className="landing">
@@ -60,19 +57,9 @@ export default function HomePage() {
         <p className="hero-kicker">
           {cur?.event ? <>Live at <b>{cur.event}</b></> : "No event set yet"}
         </p>
-        <h1 className="hero-title">
-          Hey {firstName} —{" "}
-          {nextMatch
-            ? <>let&apos;s scout <span className="haze-text">{matchLabel(nextMatch.comp_level, nextMatch.match_number)}</span></>
-            : <>ready when <span className="haze-text">the schedule is</span></>}
-        </h1>
-        <p className="hero-sub">
-          {nextMatch
-            ? "One page, top to bottom. Your alliance and station are already remembered."
-            : "An admin sets the event in the Dashboard, then everything lights up."}
-        </p>
+        <h1 className="hero-title">HazeHub</h1>
         <div className="hero-cta">
-          <Link href="/scout" className="btn primary lg">Scout the next match →</Link>
+          <Link href="/scout" className="btn primary lg">Scout</Link>
           {me && (
             <span className="hero-stat">
               <b className="mono">{session?.bucks ?? 0} PB</b>
@@ -86,9 +73,7 @@ export default function HomePage() {
       <section className="action-tiles">
         {ACTIONS.map((a) => (
           <Link key={a.href} href={a.href} className="action-tile">
-            <span className="action-ico"><Icon name={a.icon} size={22} /></span>
             <b>{a.title}</b>
-            <span className="action-sub">{a.sub}</span>
           </Link>
         ))}
       </section>
@@ -101,7 +86,7 @@ export default function HomePage() {
             <Link href="/prematch" className="btn sm ghost">Pre-Match →</Link>
           </div>
           {!cur?.event ? (
-            <p className="muted" style={{ margin: 0 }}>No event selected yet.</p>
+            <p className="muted" style={{ margin: 0 }}>No event</p>
           ) : nextMatch ? (
             <>
               <div className="muted" style={{ fontSize: "0.78rem", marginBottom: 8 }}>
@@ -110,7 +95,7 @@ export default function HomePage() {
               <MatchPreview m={nextMatch} onExpand={setExpand} />
             </>
           ) : (
-            <p className="muted" style={{ margin: 0 }}>Schedule not published yet — check back soon.</p>
+            <p className="muted" style={{ margin: 0 }}>No schedule</p>
           )}
         </div>
 

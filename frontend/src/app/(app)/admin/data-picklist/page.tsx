@@ -17,12 +17,11 @@ export default function DataPicklistPage() {
   useLiveRefetch(load);
 
   if (loading) return <Loading />;
-  if (!data || data.teams.length === 0) return (<div><h1>Data Picklist</h1><Empty icon="trend" title="Not enough data yet" sub="Scout matches and set an event so EPA + schedule are available." /></div>);
+  if (!data || data.teams.length === 0) return (<div><h1>Data Picklist</h1><Empty icon="trend" title="Not enough data yet" /></div>);
 
   return (
     <div>
       <div className="page-title"><h1>Data Picklist</h1></div>
-      <p className="page-sub">Ranked by true strength — consistency and schedule adjusted.</p>
 
       <div className="card">
         <div className="table-wrap">
@@ -56,9 +55,6 @@ export default function DataPicklistPage() {
             </tbody>
           </table>
         </div>
-        <p className="faint" style={{ fontSize: "0.75rem", marginTop: 12 }}>
-          Green adjust = earned it against a hard schedule · red = inflated by easy match-ups. Event avg EPA {data.event_avg_epa}.
-        </p>
       </div>
     </div>
   );

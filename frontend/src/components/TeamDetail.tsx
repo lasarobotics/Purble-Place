@@ -61,7 +61,7 @@ export function TeamDetail({ team }: { team: Team }) {
           ))}
         </div>
       ) : (
-        <p className="muted">No robot photos found yet (pit scouting or TBA media will populate this).</p>
+        <p className="muted">No photos</p>
       )}
 
       {pit && (pit.drivetrain || pit.capabilities?.length || pit.notes) && (

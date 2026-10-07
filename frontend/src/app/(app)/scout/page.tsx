@@ -11,26 +11,6 @@ import { matchLabel } from "@/lib/format";
 
 const STATION_KEY = "hazehub.station";
 
-// Structured qualitative tags — one tap each, aggregated per team so picklist
-// meetings see *what kind* of robot this is (TideScout-style qual insights).
-const QUICK_TAGS: { tag: string; tone: "good" | "bad" }[] = [
-  { tag: "Fast cycles", tone: "good" },
-  { tag: "Strong auto", tone: "good" },
-  { tag: "Clutch climb", tone: "good" },
-  { tag: "Great defense", tone: "good" },
-  { tag: "Smart driver", tone: "good" },
-  { tag: "Consistent", tone: "good" },
-  { tag: "Good under pressure", tone: "good" },
-  { tag: "Great partner", tone: "good" },
-  { tag: "Died on field", tone: "bad" },
-  { tag: "Dropped pieces", tone: "bad" },
-  { tag: "Slow cycles", tone: "bad" },
-  { tag: "Tippy / unstable", tone: "bad" },
-  { tag: "Penalty prone", tone: "bad" },
-  { tag: "Struggled vs defense", tone: "bad" },
-  { tag: "Comms issues", tone: "bad" },
-];
-
 const blank = (): ScoutEntry => ({
   match_number: 1,
   comp_level: "qm",
@@ -55,14 +35,13 @@ const blank = (): ScoutEntry => ({
   notes: "",
 });
 
-function Step({ n, title, hint, children }: { n: number; title: string; hint?: string; children: React.ReactNode }) {
+function Step({ n, title, children }: { n: number; title: string; children: React.ReactNode }) {
   return (
     <section className="card step-card">
       <header className="step-head">
-        <span className="step-num">{n}</span>
+        <span className="step-num">{String(n).padStart(2, "0")}</span>
         <div>
           <h3>{title}</h3>
-          {hint && <p className="step-hint">{hint}</p>}
         </div>
       </header>
       {children}
@@ -163,11 +142,10 @@ export default function ScoutPage() {
 
   return (
     <div className="scout-flow">
-      <div className="page-title"><h1>Scout a Match</h1></div>
-      <p className="page-sub">Top to bottom, done in a minute.</p>
+      <div className="page-title"><h1>Scout</h1></div>
 
       {/* 1 — who are you watching */}
-      <Step n={1} title="Your robot" hint="The team number fills in from the schedule.">
+      <Step n={1} title="Match">
         <div className="slot-grid">
           <label className="field" style={{ margin: 0 }}>
             <span>Match #</span>
@@ -200,12 +178,11 @@ export default function ScoutPage() {
         <div className="watching">
           {scheduledTeamProfile && f.team_number === scheduledTeam ? (
             <div className="watching-team">
-              <span className="step-hint" style={{ margin: "0 0 6px" }}>You're watching</span>
               <TeamIdentity team={scheduledTeamProfile} size="lg" />
             </div>
           ) : (
             <label className="field" style={{ margin: 0, flex: 1 }}>
-              <span>Team #{scheduledTeam ? ` (schedule says ${scheduledTeam})` : " (no schedule loaded)"}</span>
+              <span>Team #</span>
               <input
                 type="number"
                 inputMode="numeric"
@@ -218,32 +195,27 @@ export default function ScoutPage() {
           <div className="watching-actions">
             {scheduledTeamProfile && f.team_number === scheduledTeam && (
               <button className="btn sm ghost" type="button" onClick={() => set("team_number", 0)}>
-                Wrong team?
+                Change team
               </button>
             )}
             <label className={"pill-check no-show" + (f.no_show ? " on" : "")}>
               <input type="checkbox" checked={f.no_show} onChange={(e) => set("no_show", e.target.checked)} />
-              Robot never showed up
+              No show
             </label>
           </div>
         </div>
       </Step>
 
       {f.no_show ? (
-        <div className="card step-card noshow-note">
-          <p style={{ margin: 0 }}>
-            That's all we need — hit <b>Submit</b> below. The no-show is tracked as a
-            reliability flag and won't drag down the team's scoring averages.
-          </p>
-        </div>
+        <div className="noshow-note" role="status">No show</div>
       ) : (
         <>
           {/* 2 — score the match */}
-          <Step n={2} title="Score the match" hint="Tap the field where each attempt happened. Switch Auto/Teleop and Made/Missed as you go.">
+          <Step n={2} title="Scoring">
             <FieldInput points={f.heatmap} onChange={(pts: HeatPoint[]) => set("heatmap", pts)} />
             <div className="row" style={{ gap: 10, marginTop: 14 }}>
               <label className={"pill-check" + (f.auto_leave ? " on" : "")}>
-                <input type="checkbox" checked={f.auto_leave} onChange={(e) => set("auto_leave", e.target.checked)} /> Left start zone in Auto
+                <input type="checkbox" checked={f.auto_leave} onChange={(e) => set("auto_leave", e.target.checked)} /> Auto leave
               </label>
               <label className={"pill-check" + (f.auto_climb ? " on" : "")}>
                 <input type="checkbox" checked={f.auto_climb} onChange={(e) => set("auto_climb", e.target.checked)} /> Auto climb
@@ -252,10 +224,10 @@ export default function ScoutPage() {
           </Step>
 
           {/* 3 — endgame */}
-          <Step n={3} title="Endgame climb">
+          <Step n={3} title="Endgame">
             <Segmented
               options={[
-                { value: "none", label: "No climb" },
+                { value: "none", label: "None" },
                 { value: "l1", label: "L1" },
                 { value: "l2", label: "L2" },
                 { value: "l3", label: "L3" },
@@ -266,74 +238,61 @@ export default function ScoutPage() {
           </Step>
 
           {/* 4 — how did they look */}
-          <Step n={4} title="How did they look?" hint="Gut ratings — 3 is average.">
+          <Step n={4} title="Ratings">
+            <div className="ratings-grid">
             <div className="rate-row">
-              <span>Driver skill</span>
+              <span>Driver</span>
               <Rating value={f.driver_skill} onChange={(v) => set("driver_skill", v)} />
             </div>
             <div className="rate-row">
-              <span>Speed / cycling</span>
+              <span>Speed</span>
               <Rating value={f.speed_rating} onChange={(v) => set("speed_rating", v)} />
             </div>
             <label className={"pill-check" + (f.played_defense ? " on" : "")} style={{ marginTop: 4 }}>
-              <input type="checkbox" checked={f.played_defense} onChange={(e) => set("played_defense", e.target.checked)} /> Played defense
+              <input type="checkbox" checked={f.played_defense} onChange={(e) => set("played_defense", e.target.checked)} /> Defense
             </label>
             {f.played_defense && (
               <div className="defense-extra">
                 <div className="rate-row">
-                  <span>Defense quality</span>
+                  <span>Defense rating</span>
                   <Rating value={f.defense_rating} onChange={(v) => set("defense_rating", v)} />
                 </div>
                 <div className="rate-row">
-                  <span>Successful stops</span>
+                  <span>Stops</span>
                   <Stepper value={f.successful_stops} onChange={(v) => set("successful_stops", v)} />
                 </div>
                 <label className="field" style={{ margin: 0 }}>
-                  <span>Who did they defend?</span>
+                  <span>Defended teams</span>
                   <input value={f.defense_on} onChange={(e) => set("defense_on", e.target.value)} placeholder="e.g. 254, 1678" />
                 </label>
               </div>
             )}
-          </Step>
-
-          {/* 5 — quick tags */}
-          <Step n={5} title="Quick tags" hint="Tap anything you saw — these build the team's profile.">
-            <div className="tag-list">
-              {QUICK_TAGS.map(({ tag, tone }) => {
-                const on = f.tags.includes(tag);
-                return (
-                  <button
-                    key={tag}
-                    type="button"
-                    className={"chip " + tone + (on ? " on" : "")}
-                    onClick={() => set("tags", on ? f.tags.filter((t) => t !== tag) : [...f.tags, tag])}
-                  >
-                    {tag}
-                  </button>
-                );
-              })}
             </div>
           </Step>
 
-          {/* 6 — problems + notes */}
-          <Step n={6} title="Problems &amp; notes" hint="Only if something happened — otherwise skip straight to Submit.">
+          {/* 5 — problems + notes */}
+          <Step n={5} title="Notes">
+            <div className="notes-grid">
+              <div>
             <div className="rate-row">
               <span>Fouls</span>
               <Stepper value={f.fouls} onChange={(v) => set("fouls", v)} />
             </div>
             <label className={"pill-check" + (f.failure ? " on" : "")} style={{ margin: "4px 0 10px" }}>
-              <input type="checkbox" checked={f.failure} onChange={(e) => set("failure", e.target.checked)} /> Robot broke / died
+              <input type="checkbox" checked={f.failure} onChange={(e) => set("failure", e.target.checked)} /> Failure
             </label>
             {f.failure && (
               <label className="field">
-                <span>What failed?</span>
-                <input value={f.failure_details} onChange={(e) => set("failure_details", e.target.value)} placeholder="e.g. lost comms, drivetrain" />
+                <span>Failure details</span>
+                <input value={f.failure_details} onChange={(e) => set("failure_details", e.target.value)} placeholder="" />
               </label>
             )}
+              </div>
             <label className="field" style={{ margin: 0 }}>
-              <span>Anything the numbers miss?</span>
-              <textarea value={f.notes} onChange={(e) => set("notes", e.target.value)} placeholder="Strategy, partner compatibility, driver decisions…" />
+              <span>Notes</span>
+              <textarea value={f.notes} onChange={(e) => set("notes", e.target.value)} placeholder="" />
             </label>
+            </div>
           </Step>
         </>
       )}
@@ -348,7 +307,7 @@ export default function ScoutPage() {
           Clear
         </button>
         <button className="btn primary submit-cta" type="button" onClick={submit} disabled={busy}>
-          {busy ? "Saving…" : "Submit →"}
+          {busy ? "Saving…" : "Submit"}
         </button>
       </div>
     </div>

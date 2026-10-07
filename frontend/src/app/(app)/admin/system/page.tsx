@@ -76,15 +76,10 @@ export default function SystemHealthPage() {
   return (
     <div>
       <div className="page-title"><h1>System Health</h1></div>
-      <p className="page-sub">
-        Cloud database, reconciliation against the match schedule, and scout
-        check-ins. Devices that go quiet may still hold unsynced records —
-        chase them before shutting anything down.
-      </p>
 
       {h.database.warning && (
         <div className="card" style={{ borderColor: "var(--amber)", marginBottom: 16 }}>
-          <h3>Configuration Warning</h3>
+          <h3>Database warning</h3>
           <p style={{ margin: 0 }}>{h.database.warning}</p>
         </div>
       )}
@@ -104,7 +99,7 @@ export default function SystemHealthPage() {
             <b>{dbOk ? "Connected" : "Unreachable"}</b> · {h.database.engine} · {h.environment}
           </p>
           {!h.database.configured && (
-            <p className="faint" style={{ marginTop: 6 }}>Running on the local SQLite fallback.</p>
+            <p className="faint" style={{ marginTop: 6 }}>Local SQLite</p>
           )}
           {h.database.error && <p className="faint" style={{ marginTop: 6 }}>{h.database.error}</p>}
         </div>
@@ -113,8 +108,7 @@ export default function SystemHealthPage() {
           <h3>Reconciliation</h3>
           {rec.checked_matches === 0 ? (
             <p className="faint" style={{ margin: 0 }}>
-              Set the event and advance the current match to start comparing the
-              schedule against received submissions.
+              No played matches
             </p>
           ) : (
             <>
@@ -175,9 +169,7 @@ export default function SystemHealthPage() {
             </div>
           ) : (
             <p className="faint" style={{ margin: 0 }}>
-              <Light ok={false} warn /> Gateway stats unavailable — {h.network.reason}. Set
-              {" "}<code>HAZEHUB_GATEWAY_STATS_URL</code> to the UniFi/gateway stats API to
-              show carrier, signal quality and packet loss here.
+              <Light ok={false} warn /> Gateway unavailable · {h.network.reason}
             </p>
           )}
         </div>

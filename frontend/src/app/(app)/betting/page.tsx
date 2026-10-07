@@ -91,7 +91,6 @@ export default function BettingPage() {
       <div className="page-title"><h1>Purple Bucks Betting</h1>
         <span className="badge haze">{session?.bucks} PB</span>
       </div>
-      <p className="page-sub">Odds come from Statbotics win predictions. Favourites pay little; underdogs pay big. Locks when the match starts.</p>
 
       {!enabled && <div className="card" style={{ marginBottom: 16, borderColor: "rgba(245,158,11,0.5)" }}>Betting is currently turned off by an admin.</div>}
 
@@ -104,7 +103,7 @@ export default function BettingPage() {
           </div>
 
           {!sel || !odds ? (
-            <Empty icon="calendar" title="No open match" sub="Pick a match to see odds." />
+            <Empty icon="calendar" title="No open match" />
           ) : (
             <>
               <div className="grid cols-2" style={{ marginBottom: 14 }}>

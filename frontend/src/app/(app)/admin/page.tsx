@@ -92,10 +92,9 @@ export default function AdminDashboard() {
 
   return (
     <div>
-      <div className="page-title"><h1>Admin Dashboard</h1>
+      <div className="page-title"><h1>Dashboard</h1>
         <span className={`badge ${s.is_azure ? "blue" : "muted"}`}>{s.is_azure ? "Azure" : "Local"} · {s.season}</span>
       </div>
-      <p className="page-sub">Control the event, match flow, betting and scouts.</p>
 
       <div className="grid cols-4" style={{ marginBottom: 18 }}>
         <Stat label="Event" value={s.current_event || "—"} />
@@ -110,13 +109,11 @@ export default function AdminDashboard() {
           <label className="field"><span>TBA Event Key</span>
             <input value={event} onChange={(e) => setEvent(e.target.value)} placeholder="e.g. 2026txende" />
           </label>
-          <button className="btn primary" onClick={saveEvent} disabled={busy === "event"}>{busy === "event" ? "Loading schedule…" : "Set event & sync schedule"}</button>
-          <p className="faint" style={{ fontSize: "0.75rem", marginTop: 8 }}>Pulls the match schedule + teams from The Blue Alliance.</p>
+          <button className="btn primary" onClick={saveEvent} disabled={busy === "event"}>{busy === "event" ? "Loading schedule…" : "Set event"}</button>
         </div>
 
         <div className="card">
-          <h3>Betting Recovery</h3>
-          <p className="muted">Bets lock when scouting starts. Winners settle from TBA results; payouts use Statbotics odds captured when the bet was placed.</p>
+          <h3>Betting</h3>
           <div className="seg" style={{ marginBottom: 12 }}>
             <button
               className={s.betting_enabled ? "on" : ""}
@@ -133,19 +130,17 @@ export default function AdminDashboard() {
               Turn Off
             </button>
           </div>
-          <button className="btn danger block" onClick={resetBetting}>Reset everyone to 100 Purple Bucks</button>
-          <p className="faint" style={{ fontSize: "0.75rem", marginTop: 8 }}>Use reset only for event setup/testing mistakes. Individual bad bets can be deleted below.</p>
+          <button className="btn danger block" onClick={resetBetting}>Reset all to 100 PB</button>
         </div>
       </div>
 
       <div className="card" style={{ marginTop: 16 }}>
         <div className="card-h"><h3>Match Flow</h3>
           <div className="row" style={{ gap: 10 }}>
-            <span className="muted">Current match on field</span>
+            <span className="muted">Current match</span>
             <Stepper value={curMatch} onChange={saveCurrent} />
           </div>
         </div>
-        <p className="faint" style={{ fontSize: "0.78rem", marginTop: 0 }}>Advancing the field pointer syncs TBA results and settles finished matches. It does not manually lock bets or set winners.</p>
         <div className="table-wrap" style={{ maxHeight: 360, overflowY: "auto" }}>
           <table className="data">
             <thead><tr><th>Match</th><th>Red</th><th>Blue</th><th>Result</th><th>Bet Status</th></tr></thead>

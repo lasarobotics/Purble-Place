@@ -11,33 +11,26 @@ import { Loading } from "./ui";
 import { Icon } from "./icons";
 
 const MAIN_NAV = [
-  { href: "/home", label: "Home", icon: "home" },
-  { href: "/scout", label: "Scout", icon: "clipboard" },
-  { href: "/prematch", label: "Pre-Match", icon: "bot" },
-  { href: "/film", label: "Film", icon: "film" },
-  { href: "/betting", label: "Betting", icon: "coins" },
-  { href: "/picklists", label: "Picklists", icon: "list" },
-  { href: "/status", label: "Device Status", icon: "refresh" },
-  { href: "/account", label: "Account", icon: "user" },
+  { href: "/home", label: "Home" },
+  { href: "/scout", label: "Scout" },
+  { href: "/prematch", label: "Pre-Match" },
+  { href: "/betting", label: "Betting" },
+  { href: "/picklists", label: "Picklists" },
+];
+
+const UTILITY_NAV = [
+  { href: "/status", label: "Status" },
+  { href: "/account", label: "Account" },
 ];
 
 const ADMIN_NAV = [
-  { href: "/admin", label: "Dashboard", icon: "sliders" },
-  { href: "/admin/team-search", label: "Team Search", icon: "search" },
-  { href: "/admin/team-rank", label: "Team Rank", icon: "chart" },
-  { href: "/admin/data-picklist", label: "Data Picklist", icon: "trend" },
-  { href: "/admin/compare", label: "Compare Robots", icon: "scale" },
-  { href: "/admin/consensus", label: "Consensus Radar", icon: "radar" },
-  { href: "/admin/picklists", label: "All Pick Lists", icon: "folder" },
-  { href: "/admin/system", label: "System Health", icon: "refresh" },
-];
-
-const MOBILE_NAV = [
-  { href: "/home", label: "Home", icon: "home" },
-  { href: "/scout", label: "Scout", icon: "clipboard" },
-  { href: "/prematch", label: "Match", icon: "bot" },
-  { href: "/film", label: "Film", icon: "film" },
-  { href: "/betting", label: "Bets", icon: "coins" },
+  { href: "/admin", label: "Dashboard" },
+  { href: "/admin/team-search", label: "Team Search" },
+  { href: "/admin/team-rank", label: "Team Rank" },
+  { href: "/admin/data-picklist", label: "Data Picklist" },
+  { href: "/admin/compare", label: "Compare" },
+  { href: "/admin/picklists", label: "All Picklists" },
+  { href: "/admin/system", label: "System Health" },
 ];
 
 export function Shell({ children }: { children: React.ReactNode }) {
@@ -90,61 +83,48 @@ export function Shell({ children }: { children: React.ReactNode }) {
     };
   }, [online]);
 
-  if (loading) return <Loading label="Connecting to HazeHub…" />;
+  if (loading) return <Loading label="Loading…" />;
   if (!session) return <Loading label="Redirecting…" />;
 
   const isActive = (href: string) =>
     href === "/admin" ? pathname === "/admin" : pathname.startsWith(href);
-  const mobileNav = session.is_admin
-    ? [...MOBILE_NAV.slice(0, 4), { href: "/admin", label: "Admin", icon: "sliders" }]
-    : MOBILE_NAV;
+  const navLink = (n: typeof MAIN_NAV[number]) => (
+    <Link key={n.href} href={n.href} aria-current={isActive(n.href) ? "page" : undefined}
+      className={"nav-link" + (isActive(n.href) ? " active" : "")}>
+      {n.label}
+    </Link>
+  );
 
   return (
     <div className="shell">
       <aside className="sidebar">
         <Link href="/home" className="brand">
-          <span className="logo" />
           <span className="name">Haze<b>Hub</b></span>
         </Link>
-        <div className="nav-section">Scouting</div>
-        {MAIN_NAV.map((n) => (
-          <Link key={n.href} href={n.href} className={"nav-link" + (isActive(n.href) ? " active" : "")}>
-            <span className="ico"><Icon name={n.icon} /></span> {n.label}
-          </Link>
-        ))}
-        {session.is_admin && (
-          <>
-            <div className="nav-section">Admin · Strategy</div>
-            {ADMIN_NAV.map((n) => (
-              <Link key={n.href} href={n.href} className={"nav-link" + (isActive(n.href) ? " active" : "")}>
-                <span className="ico"><Icon name={n.icon} /></span> {n.label}
-              </Link>
-            ))}
-          </>
-        )}
+        <nav aria-label="Primary">{MAIN_NAV.map(navLink)}</nav>
+        {session.is_admin && <nav className="strategy-nav" aria-label="Strategy">{ADMIN_NAV.map(navLink)}</nav>}
         <div className="sidebar-foot">
-          <div className="divider" />
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <div>
-              <div style={{ fontWeight: 700 }}>{session.display_name}</div>
-              <div className="faint" style={{ fontSize: "0.75rem" }}>
-                {session.is_admin ? "Administrator" : "Scout"}
-              </div>
-            </div>
-            <button className="btn sm ghost" onClick={logout}>Sign out</button>
-          </div>
-          <div className="faint" style={{ fontSize: "0.68rem", marginTop: 10, letterSpacing: "0.04em" }}>
-            FRC 418 PURPLE HAZE · FRC 436 PURPLE RAIN
-          </div>
+          <nav aria-label="Account">{UTILITY_NAV.map(navLink)}</nav>
+          <button className="nav-link signout" onClick={logout}>Sign out</button>
         </div>
       </aside>
 
       <div className="main">
         <header className="topbar">
           <div className="brand topbar-brand" style={{ fontSize: "1rem" }}>
-            <span className="logo" style={{ width: 26, height: 26 }} />
             <span className="name" style={{ fontSize: "1rem" }}>Haze<b>Hub</b></span>
           </div>
+          <details className="mobile-menu">
+            <summary>Menu</summary>
+            <nav aria-label="Mobile" onClick={(e) => {
+              if ((e.target as HTMLElement).closest("a")) e.currentTarget.closest("details")?.removeAttribute("open");
+            }}>
+              {MAIN_NAV.map(navLink)}
+              {session.is_admin && <div className="strategy-nav">{ADMIN_NAV.map(navLink)}</div>}
+              <div className="strategy-nav">{UTILITY_NAV.map(navLink)}</div>
+              <button className="nav-link signout" onClick={logout}>Sign out</button>
+            </nav>
+          </details>
           <div className="row" style={{ gap: 10, marginLeft: "auto" }}>
             {pending > 0 && (
               <span className="badge amber" title="Entries waiting to sync">
@@ -157,18 +137,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <span className="badge haze">{session.bucks} PB</span>
           </div>
         </header>
-        {!online && <div className="offline-bar">Offline — your scouting is saved on this device and will sync automatically.</div>}
+        {!online && <div className="offline-bar">Offline · saved on device</div>}
         <main className="content">{children}</main>
       </div>
-
-      <nav className="bottomnav">
-        {mobileNav.map((n) => (
-          <Link key={n.href} href={n.href} className={isActive(n.href) ? "active" : ""}>
-            <span className="ico"><Icon name={n.icon} size={20} /></span>
-            {n.label}
-          </Link>
-        ))}
-      </nav>
     </div>
   );
 }

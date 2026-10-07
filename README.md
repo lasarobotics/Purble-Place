@@ -1,10 +1,14 @@
 # 🟣 HazeHub
 
+UI simplification and repository cleanup notes: [UI audit](UI_AUDIT.md).
+
+The current TypeScript UI is in `frontend/`. The root Vite app is a separate legacy client.
+
 **A centralized FRC scouting, strategy & picklist platform — Purple Haze themed (`#663399`).**
 
 HazeHub replaces a local PurpleScout setup with a single web app that runs anywhere:
-collect match & pit scouting, build collaborative picklists, review film against the
-data, bet Purple Bucks on matches, and let strategy auto-rank robots by *true* strength.
+collect match & pit scouting, build collaborative picklists,
+bet Purple Bucks on matches, and let strategy auto-rank robots by *true* strength.
 It runs locally today on SQLite and **automatically switches to Azure** (PostgreSQL +
 Container Apps) when the Azure environment variables are present.
 
@@ -17,24 +21,17 @@ Container Apps) when the Azure environment variables are present.
   on first sign-in. Demo accounts: **`1`, `2`, `3`** (scouts) and **`admin`**.
 - **Home** — live Top-Bettors leaderboard, the match on the field, and your open bets.
 - **Match Scouting** — tap-the-field heatmap for every scoring attempt (auto/teleop,
-  made/missed), endgame climb, defense, driver/speed ratings, fouls, failures, notes,
-  and **quick tags** — one-tap structured qualitative chips ("Fast cycles",
-  "Died on field", …) that aggregate on the team profile.
-  - **Station memory:** your alliance + station are remembered between matches.
+  made/missed), endgame climb, defense, driver/speed ratings, fouls, failures, and notes.
+  - **Station memory:** alliance and station are remembered between matches.
   - **Pull from schedule:** auto-fills the team you're watching from the TBA schedule.
   - **Offline-first:** if the connection drops, entries are saved in IndexedDB and
     sync automatically (and de-duplicate) when you're back online.
 - **Pre-Match** — while you wait, browse both alliances with team avatars, **expandable
   robot photos**, EPA and pit notes (pulled from The Blue Alliance + Statbotics).
-- **Film Review** — embedded **YouTube** paired with the scouting data for that match.
 - **Purple Bucks Betting** — odds come from Statbotics win predictions. Heavy favourites
   pay little (a 99% favourite → ~5% profit); underdogs pay big. Bets **lock when the
   match starts** and can't be changed. Everyone starts with **100 PB**.
 - **Picklists** — build your own, or collaborate on the shared **master picklist**.
-- **Haze Intel** — every team profile carries an AI-assisted summary (headline,
-  role, picklist verdict, strengths/concerns) where **every claim cites the
-  scouting evidence** behind it. Works offline via a built-in rules engine and
-  upgrades to Claude automatically when `ANTHROPIC_API_KEY` is set.
 
 ### Admin (everything above, plus)
 - **Dashboard** — set the event (syncs the TBA schedule), advance the current match
@@ -49,10 +46,6 @@ Container Apps) when the Azure environment variables are present.
   schedule adjustment so you can see *why* a team ranks where it does.
 - **Compare Robots** — side-by-side comparison of 2–6 robots with the best value in each
   row highlighted, plus each robot's heatmap.
-- **Consensus Radar** — scout disagreement detection. Flags teams where scouts who
-  covered the same match landed far apart, and teams whose scored output percentile
-  diverges from their qualitative percentile (ratings, tags, failures) — the exact
-  teams to re-watch on film before the picklist locks.
 - **All Pick Lists** — every picklist made across the team in one place.
 
 Live updates (new scouting, bets, picklist edits, match changes) push to every connected

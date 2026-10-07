@@ -3,7 +3,6 @@ import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "@/lib/api";
 import type { Team } from "@/lib/types";
-import { Icon } from "./icons";
 
 // FRC 418 Purple Haze · FRC 436 Purple Rain — highlighted across the app.
 export const HOME_TEAMS = [418, 436];
@@ -24,12 +23,10 @@ export function Loading({ label = "Loading…" }: { label?: string }) {
   );
 }
 
-export function Empty({ icon = "inbox", title, sub }: { icon?: string; title: string; sub?: string }) {
+export function Empty({ title }: { icon?: string; title: string; sub?: string }) {
   return (
     <div className="empty">
-      <div className="big"><Icon name={icon} size={34} strokeWidth={1.6} /></div>
       <h3 style={{ margin: "0 0 4px" }}>{title}</h3>
-      {sub && <p style={{ margin: 0 }}>{sub}</p>}
     </div>
   );
 }
@@ -110,7 +107,6 @@ export function TeamAvatar({ team, size = "" }: { team: TeamLike; size?: "sm" | 
     // eslint-disable-next-line @next/next/no-img-element
     return <img className={cls} src={normalized.avatar} alt={`${normalized.team_number}`} />;
   }
-  const hue = (normalized.team_number * 47) % 360;
   return (
     <div
       className={cls}
@@ -119,7 +115,7 @@ export function TeamAvatar({ team, size = "" }: { team: TeamLike; size?: "sm" | 
         placeItems: "center",
         fontWeight: 800,
         fontSize: size === "lg" ? "1rem" : "0.7rem",
-        background: `linear-gradient(135deg, hsl(${hue} 50% 30%), hsl(${(hue + 40) % 360} 55% 22%))`,
+        background: "var(--panel-2)",
       }}
     >
       {normalized.team_number}
@@ -190,6 +186,7 @@ export function Segmented<T extends string>({
         <button
           key={o.value}
           className={value === o.value ? "on " + (color ? color(o.value) : "") : ""}
+          aria-pressed={value === o.value}
           onClick={() => onChange(o.value)}
           type="button"
         >
@@ -214,8 +211,9 @@ export function Stepper({
   const set = (v: number) => onChange(Math.max(min, Math.min(max, v)));
   return (
     <div className="stepper">
-      <button type="button" onClick={() => set(value - 1)}>−</button>
+      <button type="button" aria-label="Decrease" disabled={value <= min} onClick={() => set(value - 1)}>−</button>
       <input
+        aria-label="Count"
         value={value}
         inputMode="numeric"
         onChange={(e) => {
@@ -223,7 +221,7 @@ export function Stepper({
           set(isNaN(n) ? 0 : n);
         }}
       />
-      <button type="button" onClick={() => set(value + 1)}>+</button>
+      <button type="button" aria-label="Increase" disabled={value >= max} onClick={() => set(value + 1)}>+</button>
     </div>
   );
 }
@@ -235,12 +233,14 @@ export function Rating({ value, onChange, max = 5 }: { value: number; onChange: 
         <button
           key={n}
           type="button"
+          aria-label={`Rate ${n} of ${max}`}
+          aria-pressed={n === value}
           onClick={() => onChange(n)}
           className="btn sm"
           style={{
             width: 38,
             padding: "8px 0",
-            background: n <= value ? "var(--haze)" : "var(--panel-2)",
+            background: n === value ? "var(--haze)" : "var(--panel-2)",
             color: n <= value ? "#fff" : undefined,
             borderColor: n <= value ? "var(--haze-deep)" : "var(--border)",
           }}

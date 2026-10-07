@@ -36,27 +36,21 @@ export default function LoginPage() {
       <div className="login-card">
         <div style={{ textAlign: "center", marginBottom: 22 }}>
           <div className="brand" style={{ justifyContent: "center" }}>
-            <span className="logo" style={{ width: 46, height: 46 }} />
             <span className="name" style={{ fontSize: "1.9rem", fontWeight: 800 }}>
               Haze<b>Hub</b>
             </span>
           </div>
-          <p style={{ marginTop: 8, marginBottom: 2 }}>Scouting · Strategy · Picklists</p>
-          <p className="faint" style={{ margin: 0, fontSize: "0.78rem", letterSpacing: "0.05em" }}>
-            FRC 418 PURPLE HAZE &nbsp;·&nbsp; FRC 436 PURPLE RAIN
-          </p>
         </div>
 
         <form className="card" onSubmit={submit}>
           <h2 style={{ marginBottom: 4 }}>Sign in</h2>
-          <p style={{ marginTop: 0, marginBottom: 18 }}>Use your Scouter ID and the team password.</p>
 
           <label className="field">
             <span>Scouter ID</span>
               <input
                 value={scoutId}
                 onChange={(e) => setScoutId(e.target.value)}
-                placeholder="Write ID Here"
+                placeholder=""
                 autoCapitalize="none"
                 autoComplete="username"
               />

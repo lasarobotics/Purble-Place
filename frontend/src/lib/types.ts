@@ -150,46 +150,6 @@ export interface Picklist {
   updated_at: string;
 }
 
-export interface InsightBullet {
-  text: string;
-  evidence: string;
-}
-
-export interface TeamInsight {
-  team: number;
-  event: string;
-  generated_at: string;
-  matches: number;
-  headline: string;
-  role: string;
-  verdict: "first-pick" | "second-pick" | "third-pick" | "avoid" | "unknown";
-  strengths: InsightBullet[];
-  concerns: InsightBullet[];
-  watch: string[];
-  source: "rules" | "claude";
-}
-
-export interface DisagreementConflict {
-  match: number;
-  spread: number;
-  reports: { scout_id: string; points: number }[];
-}
-
-export interface DisagreementRow {
-  team: number;
-  nickname: string;
-  avatar?: string;
-  matches: number;
-  avg_points: number;
-  quant_pct: number;
-  qual_pct: number;
-  gap: number;
-  max_spread: number;
-  conflicts: DisagreementConflict[];
-  score: number;
-  flags: string[];
-}
-
 export interface TeamSummary {
   team: number;
   nickname: string;

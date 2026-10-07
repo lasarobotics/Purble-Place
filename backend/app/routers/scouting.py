@@ -1,3 +1,4 @@
+
 """Match scouting + pit scouting.
 
 Submissions follow the direct-to-cloud contract: the device assigns a UUID and
