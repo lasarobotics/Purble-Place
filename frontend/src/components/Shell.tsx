@@ -34,9 +34,7 @@ const PICKLIST_NAV = [
   { href: "/account", label: "Account", icon: "user" },
 ];
 
-// The admin side has grown to fifteen screens, which as one flat list was
-// impossible to scan. Grouped by what somebody is actually trying to do:
-// run the event, look at data, decide picks, configure the platform.
+// Admin navigation groups event operations, analysis and picklists.
 const ADMIN_GROUPS: { title: string; items: NavItem[] }[] = [
   {
     title: "Event",
@@ -51,8 +49,6 @@ const ADMIN_GROUPS: { title: string; items: NavItem[] }[] = [
       { href: "/admin/team-search", label: "Team Search", icon: "search" },
       { href: "/admin/team-rank", label: "Team Rank", icon: "chart" },
       { href: "/admin/compare", label: "Compare Robots", icon: "scale" },
-      { href: "/admin/consensus", label: "Consensus Radar", icon: "radar" },
-      { href: "/film", label: "Film Review", icon: "film" },
     ],
   },
   {
@@ -63,17 +59,7 @@ const ADMIN_GROUPS: { title: string; items: NavItem[] }[] = [
       { href: "/admin/data-picklist", label: "Data Picklist", icon: "trend" },
     ],
   },
-  {
-    title: "Configure",
-    items: [
-      { href: "/admin/seasons", label: "Seasons & Game", icon: "calendar" },
-      { href: "/admin/forms", label: "Form Builder", icon: "clipboard" },
-    ],
-  },
 ];
-
-//: Flattened, for the active-link check and the mobile sheet.
-const ADMIN_NAV = ADMIN_GROUPS.flatMap((g) => g.items);
 
 const MOBILE_NAV = [
   { href: "/home", label: "Home", icon: "home" },
@@ -220,9 +206,11 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <nav aria-label="Mobile" onClick={(e) => {
               if ((e.target as HTMLElement).closest("a")) e.currentTarget.closest("details")?.removeAttribute("open");
             }}>
-              {MAIN_NAV.map(navLink)}
-              {session.is_admin && <div className="strategy-nav">{ADMIN_NAV.map(navLink)}</div>}
-              <div className="strategy-nav">{UTILITY_NAV.map(navLink)}</div>
+              {sheetGroups.flatMap((group) => group.items).map((n) => (
+                <Link key={n.href} href={n.href} className={"nav-link" + (isActive(n.href) ? " active" : "")}>
+                  {n.label}
+                </Link>
+              ))}
               <button className="nav-link signout" onClick={logout}>Sign out</button>
             </nav>
           </details>

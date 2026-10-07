@@ -6,7 +6,6 @@ import type { Team, TeamSummary, HeatPoint } from "@/lib/types";
 import { Loading, Empty, Stat, TeamIdentity } from "@/components/ui";
 import { FieldHeatmap } from "@/components/Field";
 import { LineChart } from "@/components/Chart";
-import { HazeIntel } from "@/components/Insight";
 
 interface TeamReport {
   id: number;
@@ -112,8 +111,6 @@ export default function TeamSearchPage() {
             <Stat label="Consistency" value={pct(summary.consistency)} />
             <Stat label="EPA" value={summary.epa != null ? num(summary.epa, 0) : "-"} />
           </div>
-
-          <HazeIntel teamNumber={summary.team} />
 
           <div className="grid cols-2">
             <div className="card">

@@ -74,9 +74,7 @@ export default function HomePage() {
             {cur?.event ? <>Live at <b>{cur.event}</b></> : "No event set"}
           </p>
           <h1 className="hero-title">
-            {firstName}, {nextMatch
-              ? <>next up is {matchLabel(nextMatch.comp_level, nextMatch.match_number)}</>
-              : <>the schedule is not published yet</>}
+            {nextMatch ? matchLabel(nextMatch.comp_level, nextMatch.match_number) : "Home"}
           </h1>
         </div>
         <div className="hero-cta">
