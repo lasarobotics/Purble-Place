@@ -129,10 +129,7 @@ export default function PitScoutPage() {
         <span className="badge muted">{done.length} robot{done.length === 1 ? "" : "s"} done</span>
         {fromCache && <span className="badge amber">saved copy</span>}
       </div>
-      <p className="page-sub">
-        {definition.description ||
-          "One report per robot. Typing a number you have already done loads that report."}
-      </p>
+
 
       <div className="pit-cols">
         <form className="pit-form-stack" onSubmit={submit}>

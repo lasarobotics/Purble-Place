@@ -81,8 +81,8 @@ export function FieldInput({
 
       <div className="row" style={{ justifyContent: "space-between", marginTop: 10 }}>
         <div className="row" style={{ gap: 8, fontSize: "0.8rem" }}>
-          <span className="badge" style={{ color: "#22d3ee" }}>Auto {counts.autoMade}/{counts.autoMade + counts.autoMiss}</span>
-          <span className="badge" style={{ color: "#a855f7" }}>Teleop {counts.teleMade}/{counts.teleMade + counts.teleMiss}</span>
+          <span className="badge">Auto {counts.autoMade}/{counts.autoMade + counts.autoMiss}</span>
+          <span className="badge">Teleop {counts.teleMade}/{counts.teleMade + counts.teleMiss}</span>
         </div>
         <div className="btn-row">
           <button type="button" className="btn sm ghost" onClick={() => onChange(points.slice(0, -1))} disabled={!points.length}>
@@ -454,9 +454,7 @@ function ZoomableField({
             {children}
           </div>
         </div>
-        <p className="faint" style={{ margin: "10px 0 0", fontSize: "0.75rem" }}>
-          Scroll or pinch to zoom, drag to pan. Press Escape to close.
-        </p>
+
       </div>
     </div>,
     document.body,

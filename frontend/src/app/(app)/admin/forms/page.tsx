@@ -196,11 +196,7 @@ export default function FormsPage() {
         <h1>Form Builder</h1>
         <span className="badge muted">{forms.filter((f) => !f.archived).length} forms</span>
       </div>
-      <p className="page-sub">
-        The scouting and pit pages render whatever these say, so a new game is a
-        form change and not a code change. Every save is a version with an author
-        and a message, and nothing is ever overwritten.
-      </p>
+
 
       <div className="forms-layout">
         <aside className="forms-list">
@@ -315,10 +311,7 @@ export default function FormsPage() {
           <div className="confirm">
             <h3>Save a new version</h3>
             <div className="confirm-body">
-              <p style={{ marginTop: 0 }}>
-                This becomes version {baseVersion + 1} and goes live for scouts
-                straight away. Version {baseVersion} stays in the history.
-              </p>
+
               <label className="field">
                 <span>What changed?</span>
                 <input
@@ -368,9 +361,7 @@ export default function FormsPage() {
               <>It goes back in the list, at the version it was on.</>
             ) : (
               <>
-                The form is archived, not destroyed: its whole history is kept and
-                you can restore it at any point. The match and pit forms cannot be
-                deleted, because the scouting pages render from them.
+                Archive this form? History is retained.
               </>
             )
           }
@@ -434,14 +425,9 @@ function NewFormDialog({
               placeholder="drive_team_debrief"
               onChange={(e) => setFormId(e.target.value)}
             />
-            <p className="faint field-note">
-              Used in the API and never shown to scouts. It cannot be changed later.
-            </p>
+
           </label>
-          <p className="faint">
-            <Icon name="sparkles" size={11} /> Starts empty. Add sections and fields,
-            then save the first version.
-          </p>
+
         </div>
         <div className="confirm-actions">
           <button className="btn ghost" onClick={onClose}>Cancel</button>

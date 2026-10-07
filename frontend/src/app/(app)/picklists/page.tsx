@@ -96,10 +96,7 @@ export default function PicklistsPage() {
   return (
     <div>
       <div className="page-title"><h1>Picklists</h1></div>
-      <p className="page-sub">
-        Rank the teams you want for each pick and say why. Your lists are visible to
-        strategy and admin during the picklist meeting.
-      </p>
+
 
       <FinalPicklists teams={teams} />
 

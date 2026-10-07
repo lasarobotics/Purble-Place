@@ -141,9 +141,7 @@ export function FormHistory({
           title={`Revert to version ${reverting.version}?`}
           body={
             <>
-              This does not delete anything. It saves a new version that is a copy
-              of <b>v{reverting.version}</b> and makes it live, so the versions in
-              between stay in the history and this revert can itself be undone.
+              Publish <b>v{reverting.version}</b> as a new version?
             </>
           }
           confirmLabel="Revert"

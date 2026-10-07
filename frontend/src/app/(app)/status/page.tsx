@@ -98,11 +98,7 @@ export default function DeviceStatusPage() {
   return (
     <div>
       <div className="page-title"><h1>Device Status</h1></div>
-      <p className="page-sub">
-        This device's local database and sync queue. Every submission is saved
-        here first and stays for the whole event, even after the cloud
-        confirms it, so a failed device can always be recovered.
-      </p>
+
 
       <div className="grid cols-4" style={{ marginBottom: 16 }}>
         <Stat label="Local records" value={stats.total} />
@@ -119,7 +115,7 @@ export default function DeviceStatusPage() {
             <div><div className="faint">Device ID</div><p className="mono" style={{ fontSize: "0.78rem" }}>{deviceId || "..."}</p></div>
             <div>
               <div className="faint">Persistent storage</div>
-              <p>{persisted === null ? "Checking..." : persisted ? "Enabled" : "Not guaranteed, avoid clearing browser data"}</p>
+              <p>{persisted === null ? "Checking..." : persisted ? "Enabled" : "Not protected"}</p>
             </div>
             <div>
               <div className="faint">Cloud API</div>
@@ -131,8 +127,8 @@ export default function DeviceStatusPage() {
                 {!offline.supported
                   ? "Not available in this browser"
                   : offline.ready
-                    ? "Cached, this device can scout with no signal"
-                    : "Caching, keep this page open for a moment"}
+                    ? "Cached"
+                    : "Caching"}
               </p>
             </div>
           </div>
@@ -171,11 +167,7 @@ export default function DeviceStatusPage() {
 
         <div className="card" style={{ gridColumn: "1 / -1" }}>
           <h3>Recovery</h3>
-          <p style={{ marginTop: 0 }}>
-            Export recovery files at checkpoints. If this device dies, a spare
-            imports the file and uploads through the same idempotent sync, the
-            submission UUIDs guarantee nothing double-counts.
-          </p>
+
           <div className="btn-row">
             <button className="btn primary" disabled={!!busy} onClick={doRetry}>
               {busy === "retry" ? "Retrying..." : "Retry queued records"}

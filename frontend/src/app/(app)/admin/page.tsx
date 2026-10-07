@@ -106,7 +106,7 @@ export default function AdminDashboard() {
           {ENV_LABEL[s.environment] || s.environment} · {s.season}
         </span>
       </div>
-      <p className="page-sub">Control the event, the match schedule and the accounts. Betting settings are at the bottom.</p>
+
 
       <div className="grid cols-4" style={{ marginBottom: 18 }}>
         <Stat label="Event" value={s.current_event || "-"} />
@@ -121,7 +121,7 @@ export default function AdminDashboard() {
             <input value={event} onChange={(e) => setEvent(e.target.value)} placeholder="e.g. 2026txende" />
           </label>
           <button className="btn primary" onClick={saveEvent} disabled={busy === "event"}>{busy === "event" ? "Loading schedule..." : "Set event & sync schedule"}</button>
-          <p className="faint" style={{ fontSize: "0.75rem", marginTop: 8 }}>Pulls the match schedule + teams from The Blue Alliance.</p>
+
         </div>
 
       <div className="card" style={{ marginTop: 16 }}>
@@ -136,7 +136,7 @@ export default function AdminDashboard() {
             <thead><tr><th>Match</th><th>Red</th><th>Blue</th><th>Result</th><th>Bet Status</th></tr></thead>
             <tbody>
               {qm.map((m) => (
-                <tr key={m.match_key} style={m.match_number === curMatch ? { background: "rgba(102,51,153,0.22)" } : {}}>
+                <tr key={m.match_key} style={m.match_number === curMatch ? { fontWeight: 700 } : {}}>
                   <td>{m.match_number}{m.match_number === curMatch ? " · live" : ""}</td>
                   <td>
                     <div className="match-team-list">
@@ -196,7 +196,7 @@ export default function AdminDashboard() {
         <h2 className="admin-section-title">Betting</h2>
       <div className="card">
         <h3>Betting Recovery</h3>
-        <p className="muted">Bets lock when scouting starts. Winners settle from TBA results; payouts use Statbotics odds captured when the bet was placed.</p>
+
         <div className="seg" style={{ marginBottom: 12 }}>
           <button
             className={s.betting_enabled ? "on" : ""}
@@ -214,7 +214,7 @@ export default function AdminDashboard() {
           </button>
         </div>
         <button className="btn danger block" onClick={resetBetting}>Reset everyone to 100 Purple Bucks</button>
-        <p className="faint" style={{ fontSize: "0.75rem", marginTop: 8 }}>Use reset only for event setup/testing mistakes. Individual bad bets can be deleted below.</p>
+
       </div>
 
       <div className="card" style={{ marginTop: 16 }}>

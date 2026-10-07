@@ -46,7 +46,6 @@ export function FormRenderer({
       {(definition.sections || []).map((section, i) => (
         <FormSectionCard
           key={`${section.title}-${i}`}
-          index={i + 1}
           section={section}
           answers={answers}
           onChange={onChange}
@@ -60,7 +59,6 @@ export function FormRenderer({
 }
 
 function FormSectionCard({
-  index,
   section,
   answers,
   onChange,
@@ -68,7 +66,6 @@ function FormSectionCard({
   disabled,
   skip,
 }: {
-  index: number;
   section: FormSection;
   answers: Record<string, any>;
   onChange: (key: string, value: any) => void;
@@ -86,10 +83,9 @@ function FormSectionCard({
   return (
     <section className="card step-card">
       <header className="step-head">
-        <span className="step-num">{index}</span>
         <div>
           <h3>{section.title}</h3>
-          {section.hint && <p className="step-hint">{section.hint}</p>}
+
         </div>
       </header>
       <div className="form-fields">
@@ -135,9 +131,9 @@ export function FieldControl({
         {fromGame.length ? (
           <Segmented options={fromGame} value={String(value ?? "")} onChange={set} />
         ) : (
-          <p className="step-hint">Nothing configured for this in the season yet.</p>
+          <></>
         )}
-        {field.hint && <p className="step-hint">{field.hint}</p>}
+
       </div>
     );
   }
@@ -290,7 +286,7 @@ export function FieldControl({
             value={String(value ?? "")}
             onChange={set}
           />
-          {field.hint && <p className="step-hint">{field.hint}</p>}
+
         </div>
       );
 
@@ -643,7 +639,7 @@ function ActionGroup({
           ))}
         </span>
       </div>
-      {field.hint && <p className="step-hint">{field.hint}</p>}
+
 
       {phases.length > 1 && (
         <div className="action-picker">

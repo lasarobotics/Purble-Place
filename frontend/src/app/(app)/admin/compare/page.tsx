@@ -59,7 +59,7 @@ export default function ComparePage() {
   return (
     <div>
       <div className="page-title"><h1>Compare Robots</h1></div>
-      <p className="page-sub">Pick 2-6 robots from the event, best value in each row is highlighted.</p>
+
 
       <div className="card" style={{ marginBottom: 16 }}>
         {available.length === 0 ? (
@@ -109,7 +109,7 @@ export default function ComparePage() {
                     <tr key={row.key}>
                       <td className="muted">{row.label}</td>
                       {row.values.map((v) => (
-                        <td key={v.team} className="num mono" style={v.best ? { color: "var(--haze-glow)", fontWeight: 800, background: "rgba(102,51,153,0.18)" } : {}}>
+                        <td key={v.team} className="num mono" style={v.best ? { fontWeight: 700 } : {}}>
                           {fmt(row.key, v.value)}{v.best ? " ★" : ""}
                         </td>
                       ))}

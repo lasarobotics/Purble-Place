@@ -22,7 +22,7 @@ const MAIN_NAV: NavItem[] = [
   { href: "/scout", label: "Scout", icon: "clipboard" },
   { href: "/pit", label: "Pit Scout", icon: "wrench" },
   { href: "/picklists", label: "Picklists", icon: "list" },
-  { href: "/status", label: "Device Status", icon: "refresh" },
+  { href: "/status", label: "Devices", icon: "refresh" },
   { href: "/account", label: "Account", icon: "user" },
 ];
 
@@ -48,14 +48,14 @@ const ADMIN_GROUPS: { title: string; items: NavItem[] }[] = [
     items: [
       { href: "/admin/team-search", label: "Team Search", icon: "search" },
       { href: "/admin/team-rank", label: "Team Rank", icon: "chart" },
-      { href: "/admin/compare", label: "Compare Robots", icon: "scale" },
+      { href: "/admin/compare", label: "Compare", icon: "scale" },
     ],
   },
   {
     title: "Picklists",
     items: [
       { href: "/meeting", label: "Picklist Meeting", icon: "folder" },
-      { href: "/admin/picklists", label: "All Pick Lists", icon: "folder" },
+      { href: "/admin/picklists", label: "All Picklists", icon: "folder" },
       { href: "/admin/data-picklist", label: "Data Picklist", icon: "trend" },
     ],
   },
@@ -190,9 +190,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
             </div>
             <button className="btn sm ghost" onClick={logout}>Sign out</button>
           </div>
-          <div className="faint" style={{ fontSize: "0.68rem", marginTop: 10, letterSpacing: "0.04em" }}>
-            FRC 418 PURPLE HAZE · FRC 436 PURPLE RAIN
-          </div>
+
         </div>
       </aside>
 
@@ -250,8 +248,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
         </header>
         {!online && (
           <div className="offline-bar">
-            No connection. Your scouting is saved on this device and syncs automatically.
-            {offline.ready ? " The app itself is cached, so reloading is safe." : ""}
+            Offline · Saved on this device
           </div>
         )}
         <main className="content">{children}</main>

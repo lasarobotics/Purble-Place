@@ -22,7 +22,7 @@ export default function DataPicklistPage() {
   return (
     <div>
       <div className="page-title"><h1>Data Picklist</h1></div>
-      <p className="page-sub">Ranked by true strength, consistency and schedule adjusted.</p>
+
 
       <div className="card">
         <div className="table-wrap">
@@ -49,8 +49,8 @@ export default function DataPicklistPage() {
                   <td className="num mono">{pct(r.reliability)}</td>
                   <td className="num mono">{num(r.opp_strength, 0)}</td>
                   <td className="num mono">{num(r.partner_help, 0)}</td>
-                  <td className="num mono" style={{ color: (r.sos || 0) >= 0 ? "#86efac" : "#fca5a5" }}>{(r.sos || 0) >= 0 ? "+" : ""}{num(r.sos, 0)}</td>
-                  <td className="num mono" style={{ color: (r.sos_adjust || 0) >= 0 ? "#86efac" : "#fca5a5" }}>{(r.sos_adjust || 0) >= 0 ? "+" : ""}{num(r.sos_adjust)}</td>
+                  <td className="num mono">{(r.sos || 0) >= 0 ? "+" : ""}{num(r.sos, 0)}</td>
+                  <td className="num mono">{(r.sos_adjust || 0) >= 0 ? "+" : ""}{num(r.sos_adjust)}</td>
                 </tr>
               ))}
             </tbody>

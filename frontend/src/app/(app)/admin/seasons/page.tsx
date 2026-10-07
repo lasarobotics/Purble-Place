@@ -182,11 +182,7 @@ export default function SeasonsPage() {
         <h1>Seasons</h1>
         <span className="badge muted">{seasons.length}</span>
       </div>
-      <p className="page-sub">
-        A season owns its game, its forms and everything scouted under them. A new
-        FRC game is a new season here, not a new version of HazeHub, and creating
-        one never touches the data of the seasons before it.
-      </p>
+
 
       <div className="seasons-layout">
         <aside className="season-list">
@@ -312,11 +308,7 @@ export default function SeasonsPage() {
           <div className="confirm">
             <h3>Save the game</h3>
             <div className="confirm-body">
-              <p style={{ marginTop: 0 }}>
-                This becomes game version {baseVersion + 1}. Reports already
-                collected stay pinned to the version they were scouted under, so
-                their scores do not move.
-              </p>
+
               <label className="field">
                 <span>What changed?</span>
                 <input
@@ -343,9 +335,7 @@ export default function SeasonsPage() {
           title={`Make ${activating.season_id} the live season?`}
           body={
             <>
-              Scouts start using this season&apos;s game and forms straight away, and{" "}
-              <b>{current || "the current season"}</b> is archived. Nothing is deleted:
-              its data, forms and history stay exactly as they are.
+              Activate this season and archive <b>{current || "the current season"}</b>?
             </>
           }
           confirmLabel="Make it live"
@@ -396,10 +386,7 @@ function SetupChecklist({
           Generate starting forms
         </button>
       </div>
-      <p className="faint" style={{ marginTop: 8, fontSize: "0.74rem" }}>
-        Generating forms only creates what is missing, so it is safe to press
-        twice and cannot overwrite a form somebody is editing.
-      </p>
+
     </div>
   );
 }
@@ -476,10 +463,7 @@ function GameEditor({
 
       <div className="game-group">
         <h3>Actions</h3>
-        <p className="faint" style={{ margin: "0 0 8px", fontSize: "0.74rem" }}>
-          What a robot can do. Each one becomes a repeatable group on the scouting
-          form, so a scout records a row per attempt.
-        </p>
+
         <div className="game-rows">
           {game.actions.map((a, i) => (
             <div key={i} className="rule-row">
@@ -515,10 +499,7 @@ function GameEditor({
 
       <div className="game-group">
         <h3>Scoring</h3>
-        <p className="faint" style={{ margin: "0 0 8px", fontSize: "0.74rem" }}>
-          Each rule reads as a sentence. Leave a box on Any to make the rule
-          cover everything, or narrow it to score one node differently.
-        </p>
+
         <div className="game-rows">
           {game.rules.map((r, i) => (
             <RuleRow key={i} rule={r} game={game} meta={meta}
@@ -551,7 +532,7 @@ function KeyedGroup({
   return (
     <div className="game-group">
       <h3>{title}</h3>
-      <p className="faint" style={{ margin: "0 0 8px", fontSize: "0.74rem" }}>{hint}</p>
+
       <div className="game-rows">
         {items.map((item: Keyed, i) => (
           <div key={i} className="game-row">
@@ -715,10 +696,7 @@ function SeasonHistory({
 
   return (
     <div className="history">
-      <p className="faint" style={{ margin: 0, fontSize: "0.78rem" }}>
-        Every saved change to the game is a version. Reports keep the version they
-        were scouted under, so changing a rule here never moves an old score.
-      </p>
+
       <ol className="history-list">
         {history.map((r) => (
           <li key={r.version} className="history-item">
@@ -751,9 +729,7 @@ function SeasonHistory({
           title={`Revert the game to version ${reverting.version}?`}
           body={
             <>
-              This saves a new version copying <b>v{reverting.version}</b>. The
-              versions in between stay in the history, and reports already collected
-              keep the scores they were collected with.
+              Restore <b>v{reverting.version}</b> as a new version?
             </>
           }
           confirmLabel="Revert"
@@ -844,11 +820,7 @@ function NewSeasonDialog({
             </label>
           )}
 
-          <p className="faint" style={{ marginTop: 8, fontSize: "0.76rem" }}>
-            Copying takes the game configuration and, optionally, the forms.
-            It never copies events, scouting, picklists or archives: those belong
-            to the season that produced them, and stay there.
-          </p>
+
         </div>
         <div className="confirm-actions">
           <button className="btn ghost" onClick={onClose}>Cancel</button>

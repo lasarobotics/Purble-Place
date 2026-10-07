@@ -113,13 +113,13 @@ export function BettingPanel({ matchNumber }: { matchNumber?: number }) {
   return (
     <section className="card bet-panel">
       <div className="card-h">
-        <h3 style={{ margin: 0 }}>Purple Bucks Betting</h3>
+        <h3 style={{ margin: 0 }}>Prediction</h3>
         <span className="badge haze">{session?.bucks ?? 0} PB</span>
       </div>
 
       {!enabled && (
         <p className="faint" style={{ margin: "0 0 10px", fontSize: "0.8rem" }}>
-          Betting is currently turned off by an admin.
+          Betting disabled
         </p>
       )}
 
@@ -151,6 +151,7 @@ export function BettingPanel({ matchNumber }: { matchNumber?: number }) {
                   key={side}
                   type="button"
                   className={`bet-side ${side}` + (pick === side ? " on" : "")}
+                  aria-pressed={pick === side}
                   onClick={() => setPick(side)}
                 >
                   <span className="bet-side-head">

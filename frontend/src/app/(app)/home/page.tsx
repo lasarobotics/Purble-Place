@@ -84,7 +84,7 @@ export default function HomePage() {
               <span>rank {me.rank}{openBets.length ? `, ${openBets.length} open bet${openBets.length > 1 ? "s" : ""}` : ""}</span>
             </span>
           )}
-          <Link href="/scout" className="btn primary">Scout the next match</Link>
+          <Link href="/scout" className="btn primary">Scout</Link>
         </div>
       </section>
 
@@ -104,7 +104,7 @@ export default function HomePage() {
           ) : nextMatch ? (
             <MatchPreview m={nextMatch} onExpand={setExpand} />
           ) : (
-            <p className="muted" style={{ margin: 0 }}>Schedule not published yet, check back soon.</p>
+            <p className="muted" style={{ margin: 0 }}>No schedule</p>
           )}
         </div>
 
@@ -112,7 +112,7 @@ export default function HomePage() {
           {/* Leaderboard, cut to the podium plus your own row. The full board
               is not something anyone needs on the way to a match. */}
           <div className="card tight">
-            <div className="card-h"><h3>Top Bettors</h3></div>
+            <div className="card-h"><h3>Leaderboard</h3></div>
             <ol className="mini-board">
               {board.slice(0, 3).map((r) => (
                 <li key={r.scout_id} className={r.scout_id === session?.scout_id ? "me" : ""}>
@@ -138,7 +138,7 @@ export default function HomePage() {
           <div className="card tight">
             <div className="card-h"><h3>Recent Results</h3></div>
             {recent.length === 0 ? (
-              <p className="faint" style={{ margin: 0, fontSize: "0.82rem" }}>No finished matches yet.</p>
+              <p className="faint" style={{ margin: 0, fontSize: "0.82rem" }}>No results</p>
             ) : (
               <ul className="result-list">
                 {recent.map((m) => (
@@ -161,7 +161,7 @@ export default function HomePage() {
       {/* My open bets, only when there are any */}
       {openBets.length > 0 && (
         <div className="card" style={{ marginTop: 16 }}>
-          <div className="card-h"><h3>My Open Bets</h3><Link href="/scout" className="btn sm ghost">Bet on the next match →</Link></div>
+          <div className="card-h"><h3>My Open Bets</h3><Link href="/scout" className="btn sm ghost">Bet</Link></div>
           <div className="grid auto">
             {openBets.map((b) => (
               <div key={b.id} className={`stat ${b.pick === "red" ? "alliance-red" : "alliance-blue"}`}>

@@ -111,9 +111,7 @@ export function FinalPicklists({ teams = {} }: { teams?: Record<number, Team> })
         <h2 style={{ margin: 0, fontSize: "1rem" }}>Final pick order</h2>
         <span className="badge haze">Decided by the team</span>
       </div>
-      <p className="faint" style={{ margin: "0 0 10px", fontSize: "0.78rem" }}>
-        This is what we are actually picking. Your own lists below do not change it.
-      </p>
+
 
       <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 12 }}>
         {finals.map((l) => (
@@ -172,8 +170,7 @@ export function FinalPicklists({ teams = {} }: { teams?: Record<number, Team> })
           body={
             <>
               This empties the <b>{clearing.division} {clearing.pick_round === 1 ? "first" : "second"} pick</b> list
-              for everyone, and it stops showing up on the picklist screens. Nobody
-              else&apos;s list is touched.
+              for everyone.
             </>
           }
           confirmLabel="Yes, delete it"

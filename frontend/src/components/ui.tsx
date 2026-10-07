@@ -279,14 +279,7 @@ export function Rating({ value, onChange, max = 5 }: { value: number; onChange: 
           aria-label={`Rate ${n} of ${max}`}
           aria-pressed={n === value}
           onClick={() => onChange(n)}
-          className="btn sm"
-          style={{
-            width: 38,
-            padding: "8px 0",
-            background: n === value ? "var(--haze)" : "var(--panel-2)",
-            color: n <= value ? "#fff" : undefined,
-            borderColor: n <= value ? "var(--haze-deep)" : "var(--border)",
-          }}
+          className={"btn sm rating-button" + (n === value ? " is-selected" : "")}
         >
           {n}
         </button>

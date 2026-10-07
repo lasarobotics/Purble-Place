@@ -252,10 +252,7 @@ function SingleMatch({ reports, field }: { reports: MatchReport[]; field: string
         </div>
       ))}
       {reports.length > 1 && (
-        <p className="ref-foot">
-          {reports.length} scouts watched this robot in this match. Every report is
-          kept, so you are reading all of them.
-        </p>
+        <></>
       )}
     </>
   );
@@ -285,10 +282,7 @@ function AcrossMatches({ reports, field }: { reports: MatchReport[]; field: stri
           </li>
         ))}
       </ul>
-      <p className="ref-foot">
-        {rows.length} report{rows.length === 1 ? "" : "s"} across {matches} match
-        {matches === 1 ? "" : "es"}.
-      </p>
+
     </>
   );
 }
@@ -432,10 +426,7 @@ export function NoteEditor({
         </div>
       )}
       {!readOnly && !active && (
-        <p className="note-editor-hint">
-          Type <code>@</code> and a qual number for one match, or <code>@all</code> for
-          the whole event.
-        </p>
+        <></>
       )}
     </div>
   );

@@ -103,11 +103,7 @@ export default function SystemHealthPage() {
   return (
     <div>
       <div className="page-title"><h1>System Health</h1></div>
-      <p className="page-sub">
-        Firestore usage against the daily free tier, reconciliation against the
-        match schedule, and scout check-ins. Devices that go quiet may still
-        hold unsynced records, chase them before shutting anything down.
-      </p>
+
 
       {h.database.warning && (
         <div className="card" style={{ borderColor: "var(--amber)", marginBottom: 16 }}>
@@ -138,7 +134,7 @@ export default function SystemHealthPage() {
           </p>
           {!h.database.configured && (
             <p className="faint" style={{ marginTop: 6 }}>
-              Not connected to Firestore, using the local development store. See instructions.txt.
+              Local development store
             </p>
           )}
           {h.database.error && <p className="faint" style={{ marginTop: 6 }}>{h.database.error}</p>}
@@ -150,10 +146,10 @@ export default function SystemHealthPage() {
             <Light ok={quotaPct < 60} warn={quotaPct < 100} />
             <b>
               {quotaPct < 60
-                ? "Comfortably inside the free tier"
+                ? "Within allowance"
                 : quotaPct < 100
-                  ? "Approaching the daily free allowance"
-                  : "Projected to exceed the daily free allowance"}
+                  ? "Near allowance"
+                  : "Over allowance"}
             </b>
           </p>
           <div className="table-wrap">
@@ -221,7 +217,7 @@ export default function SystemHealthPage() {
               {doubled.count > 0 && (
                 <p className="faint" style={{ margin: "8px 0 2px" }}>
                   <b>{doubled.count}</b> robot{doubled.count === 1 ? " was" : "s were"} scouted by
-                  more than one person. Every report is kept and feeds the Consensus Radar:{" "}
+                  multiple scouts:{" "}
                   {doubled.items.map((d) => `Q${d.match} team ${d.team} (${d.count}×)`).join(", ")}
                   {doubled.count > doubled.items.length ? ", and more" : ""}.
                 </p>
@@ -271,9 +267,7 @@ export default function SystemHealthPage() {
             </div>
           ) : (
             <p className="faint" style={{ margin: 0 }}>
-              <Light ok={false} warn /> Gateway stats unavailable. {h.network.reason}. Set
-              {" "}<code>HAZEHUB_GATEWAY_STATS_URL</code> to the UniFi/gateway stats API to
-              show carrier, signal quality and packet loss here.
+              <Light ok={false} warn /> Gateway unavailable. {h.network.reason}
             </p>
           )}
         </div>

@@ -97,11 +97,7 @@ export default function AllPicklistsPage() {
           <button className={round === 2 ? "on" : ""} onClick={() => setRound(2)}>Second pick</button>
         </div>
       </div>
-      <p className="page-sub">
-        Everything the team submitted for this pick. Use Final 418 or Final 436 to
-        copy a list into the alliance's final order. Edit the master list itself in
-        Picklist Meeting.
-      </p>
+
 
       <FinalPicklists teams={teams} />
 
@@ -121,8 +117,7 @@ export default function AllPicklistsPage() {
           body={
             <>
               This empties the <b>{finalDivision(clearing)} {clearing.pick_round === 1 ? "first" : "second"} pick</b>{" "}
-              list for everyone. The list it was copied from is not touched, so you can
-              promote it again.
+              list for everyone.
             </>
           }
           confirmLabel="Yes, delete it"

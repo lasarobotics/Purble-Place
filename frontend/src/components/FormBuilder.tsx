@@ -322,8 +322,7 @@ export function FormBuilder({
             <>
               Answers already collected under{" "}
               <b>{sections[confirmRemove.section].fields[confirmRemove.field!].key}</b>{" "}
-              are kept, they just stop being asked for. You can revert to an
-              earlier version if this turns out to be wrong.
+              are retained.
             </>
           }
           confirmLabel="Remove it"
@@ -432,11 +431,7 @@ function FieldSettings({
             readOnly={readOnly || locked}
             onChange={(e) => onPatch({ key: e.target.value })}
           />
-          <p className="faint field-note">
-            {locked
-              ? "Answers are already stored under this name, so it cannot change. Rename the label instead."
-              : "Lower case, letters numbers and underscores. This is how the answer is stored, forever."}
-          </p>
+
         </label>
       )}
 
@@ -495,7 +490,7 @@ function FieldSettings({
             placeholder="none"
             onChange={(e) => onPatch({ points: e.target.value === "" ? undefined : Number(e.target.value) })}
           />
-          <p className="faint field-note">Negative is allowed, for penalties.</p>
+
         </label>
       )}
 
@@ -511,10 +506,7 @@ function FieldSettings({
             <option key={c.key} value={c.key}>{c.key}: {c.description}</option>
           ))}
         </select>
-        <p className="faint field-note">
-          Core fields feed the rankings, Consensus Radar and insights. Anything
-          else is still collected and still shown, it just is not charted.
-        </p>
+
       </label>
 
       <ConditionEditor field={field} siblings={siblings} readOnly={readOnly} onPatch={onPatch} />
@@ -696,9 +688,7 @@ function ConditionEditor({
         )}
       </div>
       {!candidates.length && (
-        <p className="faint field-note">
-          Add a yes/no or choose-one field first, then this field can depend on it.
-        </p>
+        <></>
       )}
     </div>
   );

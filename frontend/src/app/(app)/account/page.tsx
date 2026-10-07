@@ -39,7 +39,7 @@ export default function AccountPage() {
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="row" style={{ justifyContent: "space-between" }}>
           <div className="row" style={{ gap: 14 }}>
-            <div className="avatar lg" style={{ display: "grid", placeItems: "center", fontWeight: 800, fontSize: "1.3rem", background: "linear-gradient(135deg,var(--haze),var(--haze-deep))" }}>
+            <div className="avatar lg" style={{ display: "grid", placeItems: "center", fontWeight: 800, fontSize: "1.3rem", background: "var(--panel-2)" }}>
               {session?.display_name?.[0]?.toUpperCase()}
             </div>
             <div>
