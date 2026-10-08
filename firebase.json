@@ -1,0 +1,32 @@
+{
+  "$schema": "https://raw.githubusercontent.com/firebase/firebase-tools/master/schema/firebase-config.json",
+
+  "//": [
+    "HazeHub runs on the Firebase SPARK (free) plan.",
+    "",
+    "Only Firestore is deployed to Firebase. The API and the web app are both",
+    "served by the HazeHub server process running on the team's own scouting",
+    "laptop (see run-server.ps1), which is what keeps this off the Blaze plan:",
+    "Cloud Run and Cloud Functions both require Blaze, but reading and writing",
+    "Firestore from your own machine with a service account does not.",
+    "",
+    "Firebase Hosting is intentionally NOT configured. Hosting itself is free,",
+    "but a page served over https from *.web.app cannot call an http API on a",
+    "LAN address (browsers block mixed content), and rewriting /api/** to a",
+    "backend needs Cloud Run, i.e. Blaze. Serving the app from the same",
+    "process as the API avoids both problems and works with no internet at",
+    "all. If you ever upgrade to Blaze, add a hosting block with a",
+    "{ \"source\": \"/api/**\", \"run\": {...} } rewrite."
+  ],
+
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+
+  "emulators": {
+    "firestore": { "port": 8080 },
+    "ui": { "enabled": true, "port": 4000 },
+    "singleProjectMode": true
+  }
+}

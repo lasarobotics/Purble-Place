@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useLiveRefetch } from "@/lib/bus";
 import { api } from "@/lib/api";
 import { matchLabel, num, pct, timeAgo } from "@/lib/format";
@@ -40,17 +40,14 @@ export default function TeamSearchPage() {
   const [summary, setSummary] = useState<TeamSummary | null>(null);
   const [heat, setHeat] = useState<{ points: HeatPoint[]; total: number; made: number; accuracy: number } | null>(null);
   const [reports, setReports] = useState<TeamReport[]>([]);
-  const [phase, setPhase] = useState<"" | "auto" | "teleop">("");
+  // The scoring map filters by phase and driver station itself now.
+  const phase = "" as "" | "auto" | "teleop";
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
 
-  const requestVersion = useRef(0);
-  const loadTeams = useCallback(() => {
-    api<number[]>("/api/admin/event-teams").then(t => {
-      setTeams(t); setTeam(current => current && t.includes(current) ? current : t[0] || null);
-    }).catch(() => {});
+  useEffect(() => {
+    api<number[]>("/api/admin/event-teams").then((t) => { setTeams(t); if (t[0]) selectTeam(t[0]); }).catch(() => {});
   }, []);
-  useLiveRefetch(loadTeams);
 
   useEffect(() => {
     const nums = teams.filter((n) => n && !teamProfiles[n]);
@@ -60,28 +57,30 @@ export default function TeamSearchPage() {
       .catch(() => {});
   }, [teams, teamProfiles]);
 
-  const selectTeam = (n: number) => setTeam(n);
-  const loadTeam = useCallback(() => {
-    if (!team) return;
-    const version = ++requestVersion.current;
-    setLoading(true);
-    const q = phase ? `?phase=${phase}` : "";
-    Promise.all([
-      api<TeamSummary>(`/api/admin/team/${team}/summary`),
-      api<any>(`/api/admin/team/${team}/heatmap${q}`),
-      api<TeamReport[]>(`/api/admin/team/${team}/reports`),
-    ]).then(([s, h, r]) => {
-      if (version !== requestVersion.current) return;
+  const selectTeam = useCallback(async (n: number) => {
+    setTeam(n); setLoading(true);
+    try {
+      const [s, h, r] = await Promise.all([
+        api<TeamSummary>(`/api/admin/team/${n}/summary`),
+        api<any>(`/api/admin/team/${n}/heatmap`),
+        api<TeamReport[]>(`/api/admin/team/${n}/reports`),
+      ]);
       setSummary(s); setHeat(h); setReports(r);
-    }).catch(() => { if (version === requestVersion.current) { setSummary(null); setHeat(null); setReports([]); } })
-      .finally(() => { if (version === requestVersion.current) setLoading(false); });
-  }, [team, phase]);
-  useLiveRefetch(loadTeam);
+    } catch { setReports([]); }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (!team) return;
+    const q = phase ? `?phase=${phase}` : "";
+    api<any>(`/api/admin/team/${team}/heatmap${q}`).then(setHeat).catch(() => {});
+  }, [phase, team]);
+
+  useLiveRefetch(useCallback(() => { if (team) void selectTeam(team); }, [team, selectTeam]));
 
   return (
     <div>
       <div className="page-title"><h1>Team Search</h1></div>
-      <p className="page-sub">Every match for a team, with a field heatmap of all their scoring positions.</p>
 
       <div className="card team-name-white" style={{ marginBottom: 16 }}>
         <div className="row" style={{ gap: 8, marginBottom: 10 }}>
@@ -100,7 +99,7 @@ export default function TeamSearchPage() {
       </div>
 
       {loading ? <Loading /> : !summary ? (
-        <Empty icon="bot" title="Search a team" sub="Pick a team above to see their data." />
+        <Empty icon="bot" title="Search a team" />
       ) : summary.matches === 0 ? (
         <Empty icon="inbox" title={`No scouting data for ${team}`} />
       ) : (
@@ -113,22 +112,17 @@ export default function TeamSearchPage() {
             <Stat label="Matches" value={summary.matches} />
             <Stat label="Avg Points" value={num(summary.avg_points)} accent />
             <Stat label="Consistency" value={pct(summary.consistency)} />
-            <Stat label="EPA" value={summary.epa != null ? num(summary.epa, 0) : "—"} />
+            <Stat label="EPA" value={summary.epa != null ? num(summary.epa, 0) : "-"} />
           </div>
 
           <div className="grid cols-2">
             <div className="card">
-              <div className="card-h"><h3>Scoring Heatmap</h3>
-                <div className="seg">
-                  <button className={phase === "" ? "on" : ""} onClick={() => setPhase("")}>Both</button>
-                  <button className={phase === "auto" ? "on" : ""} onClick={() => setPhase("auto")}>Auto</button>
-                  <button className={phase === "teleop" ? "on" : ""} onClick={() => setPhase("teleop")}>Teleop</button>
-                </div>
-              </div>
+              <div className="card-h"><h3>Scoring Map</h3></div>
+              {/* The map now carries its own phase and driver-station filters,
+                  so the page-level phase toggle above it would just be a
+                  second control for the same thing. */}
               {heat && heat.points.length > 0 ? (
-                <>
-                  <FieldHeatmap points={heat.points} stats={heat} />
-                </>
+                <FieldHeatmap stats={heat} points={heat.points} />
               ) : <Empty icon="map" title="No mapped scoring" />}
             </div>
 

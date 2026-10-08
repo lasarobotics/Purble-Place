@@ -1,19 +1,17 @@
-"""Polled realtime change feed — the WebSocket replacement.
+"""Polled realtime change feed: the fallback for /ws.
 
-Vercel functions cannot hold a WebSocket open, so clients poll this endpoint
-every few seconds with the cursor from the previous response and dispatch the
-returned events onto the same client-side bus the old socket fed.
+Clients that cannot hold a WebSocket open poll this endpoint with the cursor
+from the previous response and dispatch the returned events onto the same
+client-side bus. The feed is an in-process ring buffer (see ``realtime``), so
+60 devices polling every five seconds costs zero Firestore operations.
 """
-
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
-from pymongo.database import Database
 
 from ..auth import current_scouter
-from ..database import database_dependency
+from ..models import Scouter
 from ..realtime import events_since
-from ..views import ScouterView
 
 router = APIRouter(prefix="/api/events", tags=["events"])
 
@@ -21,7 +19,6 @@ router = APIRouter(prefix="/api/events", tags=["events"])
 @router.get("")
 def poll_events(
     since: str | None = None,
-    db: Database = Depends(database_dependency),
-    _: ScouterView = Depends(current_scouter),
+    _: Scouter = Depends(current_scouter),
 ) -> dict:
-    return events_since(db, since)
+    return events_since(since)

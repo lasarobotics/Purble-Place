@@ -1,86 +1,58 @@
-from unittest.mock import MagicMock, patch
-
-from pymongo.errors import BulkWriteError
-
+from unittest.mock import MagicMock
+import pytest
+from app.routers import sync as s
 from app.routers.scouting import ScoutIn
-from app.routers.sync import SyncIn, sync_scout
-from app.views import ScouterView
+from app.models import Scouter
 
+@pytest.fixture
+def env(monkeypatch):
+    stored={}
+    def create(entry):
+        if entry.submission_id in stored: return False
+        stored[entry.submission_id]=entry
+        return True
+    writer=MagicMock(side_effect=create)
+    monkeypatch.setattr(s.repo,"create_scouting",writer)
+    monkeypatch.setattr(s.repo,"scouting_by_submission",stored.get)
+    monkeypatch.setattr(s.repo,"save_scouter",MagicMock())
+    monkeypatch.setattr(s,"lock_betting_for_match",MagicMock())
+    monkeypatch.setattr(s,"emit",MagicMock())
+    return stored,writer,Scouter(scout_id="test")
 
-def scout(uuid="one", event="2026test", team=1):
-    return ScoutIn(client_uuid=uuid, event_key=event, match_number=1, team_number=team)
+def scout(id="one",event="test",team=1,**kwargs):
+    return ScoutIn(client_uuid=id,event_key=event,team_number=team,match_number=1,**kwargs)
 
+def test_replay_has_no_second_write(env):
+    stored,writer,user=env
+    body=s.SyncIn(entries=[scout()])
+    assert s.sync_scout(body,user)["accepted"] == ["one"]
+    assert s.sync_scout(body,user)["duplicates"] == ["one"]
+    assert writer.call_count == 1
 
-def setup():
-    db = MagicMock()
-    db.match_scouting.find.return_value = []
-    db.matches.find.return_value = []
-    return db, ScouterView({"_id": "scout"})
+def test_missing_event_does_not_reassign_offline_report(env):
+    _,writer,user=env
+    result=s.sync_scout(s.SyncIn(entries=[scout(event=None)]),user)
+    assert result["results"][0]["status"] == "invalid"
+    writer.assert_not_called()
 
-
-@patch("app.routers.sync.emit")
-def test_batch_uses_one_insert_and_preserves_event(emit):
-    db, user = setup()
-    result = sync_scout(SyncIn(entries=[scout(), scout("two", team=2)]), db, user)
-    assert result["accepted"] == ["one", "two"]
-    assert db.match_scouting.insert_many.call_count == 1
-    docs = db.match_scouting.insert_many.call_args.args[0]
-    assert {d["event_key"] for d in docs} == {"2026test"}
-    assert db.matches.update_many.call_count == 1
-    assert emit.call_count == 1
-
-
-@patch("app.routers.sync.emit")
-def test_duplicates_are_acknowledged_without_writing(emit):
-    db, user = setup()
-    db.match_scouting.find.return_value = [{"client_submission_id": "one", "scouter_id": "scout"}]
-    result = sync_scout(SyncIn(entries=[scout()]), db, user)
-    assert result["duplicates"] == ["one"]
-    db.match_scouting.insert_many.assert_not_called()
-
-
-@patch("app.routers.sync.emit")
-def test_missing_event_is_retained_for_correction(emit):
-    db, user = setup()
-    result = sync_scout(SyncIn(entries=[scout(event=None)]), db, user)
-    assert "one" in result["rejected"]
+def test_transient_failure_remains_retryable(env):
+    _,writer,user=env
+    writer.side_effect=RuntimeError("offline")
+    result=s.sync_scout(s.SyncIn(entries=[scout()]),user)
+    assert result["results"][0]["status"] == "retry"
     assert result["accepted"] == []
-    db.match_scouting.insert_many.assert_not_called()
 
+def test_batch_isolates_invalid_and_locks_match_once(env):
+    stored,writer,user=env
+    result=s.sync_scout(s.SyncIn(entries=[scout(),scout("two",team=2),scout("bad",team=0)]),user)
+    assert result["accepted"] == ["one","two"]
+    assert result["results"][2]["status"] == "invalid"
+    assert s.lock_betting_for_match.call_count == 1
+    assert s.repo.save_scouter.call_count == 1
+    assert s.emit.call_count == 1
 
-@patch("app.routers.sync.emit")
-def test_partial_batch_conflict_does_not_discard_good_entries(emit):
-    db, user = setup()
-    db.match_scouting.insert_many.side_effect = BulkWriteError({"writeErrors": [{"index": 1, "code": 11000}], "writeConcernErrors": []})
-    result = sync_scout(SyncIn(entries=[scout(), scout("two", team=2)]), db, user)
-    assert result["accepted"] == ["one"]
-    assert "two" in result["rejected"]
-
-
-@patch("app.routers.sync.emit")
-def test_alliance_validation_survives_bulk_optimization(emit):
-    db, user = setup()
-    db.matches.find.return_value = [{"_id": "2026test_qm1", "alliances": {"red": {"teams": [2]}, "blue": {"teams": [1]}}}]
-    result = sync_scout(SyncIn(entries=[scout()]), db, user)
-    assert "one" in result["rejected"]
-    db.match_scouting.insert_many.assert_not_called()
-
-
-@patch("app.routers.sync.emit")
-def test_replay_recovers_match_lock_without_duplicate_write(emit):
-    db, user = setup()
-    db.match_scouting.find.return_value = [{"client_submission_id": "one", "scouter_id": "scout", "match_key": "2026test_qm1", "event_key": "2026test"}]
-    result = sync_scout(SyncIn(entries=[scout()]), db, user)
-    assert result["duplicates"] == ["one"]
-    db.match_scouting.insert_many.assert_not_called()
-    assert db.matches.update_many.call_count == 1
-
-
-@patch("app.routers.sync.emit")
-def test_other_scouts_uuid_is_not_acknowledged(emit):
-    db, user = setup()
-    db.match_scouting.find.return_value = [{"client_submission_id": "one", "scouter_id": "other"}]
-    result = sync_scout(SyncIn(entries=[scout()]), db, user)
-    assert "one" in result["rejected"]
-    assert not result["duplicates"]
-    db.match_scouting.insert_many.assert_not_called()
+def test_same_uuid_different_payload_cannot_overwrite(env):
+    stored,writer,user=env
+    result=s.sync_scout(s.SyncIn(entries=[scout(payload_hash="a"),scout(payload_hash="b")]),user)
+    assert result["results"][1]["status"] == "conflict"
+    assert stored["one"].payload_hash == "a"

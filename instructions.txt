@@ -1,0 +1,716 @@
+===============================================================================
+HAZEHUB ON FIREBASE — SETUP INSTRUCTIONS
+Firebase project: hazehub-8a941   (free Spark plan — no billing account)
+===============================================================================
+
+Read this top to bottom the first time. Steps 1-9 are the one-time setup.
+Step 10 onward is what you do at an event.
+
+Already done for you in this repository:
+  * .firebaserc points at project  hazehub-8a941
+  * firebase.json, firestore.rules and firestore.indexes.json are written
+  * the code is wired for Firestore
+
+You still have to do steps 1, 3, 4, 5, 6, 7 and 8.
+
+
+-------------------------------------------------------------------------------
+WHAT YOU ARE BUILDING
+-------------------------------------------------------------------------------
+
+    60 Chromebooks / phones            ONE scouting laptop           Google
+    -----------------------            -------------------          ------
+    web browser              <-------> HazeHub server        <-----> Cloud
+    IndexedDB offline queue    wifi    (web app + API,                Firestore
+                                        one process, port 8000)
+
+Two pieces:
+
+  * The HazeHub server — one Python process on ONE laptop you bring. It
+    serves the web app AND the API on port 8000. Everyone else just opens
+    http://<that-laptop's-ip>:8000 on the same wifi.
+
+  * Cloud Firestore — the database, in Firebase project hazehub-8a941. The
+    laptop reads and writes it; nothing else does.
+
+WHY THE LAPTOP, AND WHY THAT MEANS SPARK STAYS FREE
+
+  Cloud Run and Cloud Functions — the Google services that would normally run
+  the API — both require the paid Blaze plan. Reading and writing Firestore
+  from your own computer with a service-account key does not. So by running
+  the server yourself, you get a real cloud database on the free plan.
+
+  It is also the better setup for a competition venue: the tablets talk to a
+  laptop across the room, so the app keeps working at full speed even when
+  the venue wifi is saturated or the uplink dies. Firestore syncing is the
+  only part that needs internet, and it catches up on its own.
+
+  What you give up: someone must run the laptop, and people off the venue
+  wifi cannot reach the app.
+
+  WANT A PUBLIC URL TOO? See APPENDIX B — the same app deploys to Render as
+  one container, giving you an https:// address that works from anywhere,
+  while Firebase stays on Spark. Many teams run both: Render for the public
+  link between events, the laptop on competition day when venue wifi is the
+  bottleneck. Read the note in Appendix B about running both at once first.
+
+WHY THERE IS A SERVER AT ALL, RATHER THAN FIRESTORE IN THE BROWSER
+
+  Firestore's free allowance is 50,000 document reads per day. Sixty people
+  using the app for twelve hours, with every device polling for live updates,
+  would burn through that in the first ten minutes if each device talked to
+  Firestore directly — one dashboard refresh reads hundreds of documents, and
+  there are sixty of them doing it all day. On Spark there is no overage: you
+  just stop being able to read until midnight.
+
+  The server loads the event into memory ONCE at startup and answers every
+  request from RAM. Firestore is touched only when data actually changes.
+  That is the difference between millions of reads a day and a few thousand.
+
+
+-------------------------------------------------------------------------------
+STEP 1 — INSTALL THE TOOLS (on the scouting laptop)
+-------------------------------------------------------------------------------
+
+  1. Python 3.11 or newer     https://python.org
+     -> tick "Add Python to PATH" in the installer
+  2. Node.js 20 or newer      https://nodejs.org
+  3. Firebase CLI:
+
+         npm install -g firebase-tools
+         firebase login
+
+You do NOT need the Google Cloud SDK, Docker, or a billing account.
+
+Check:
+    python --version
+    node --version
+    firebase --version
+
+
+-------------------------------------------------------------------------------
+STEP 2 — THE FIREBASE PROJECT  (already done)
+-------------------------------------------------------------------------------
+
+Project ID: hazehub-8a941
+
+.firebaserc in this repository already points at it, so the Firebase CLI
+knows which project to use. Nothing to do.
+
+To confirm:
+    firebase projects:list
+    firebase use
+
+
+-------------------------------------------------------------------------------
+STEP 3 — CREATE THE FIRESTORE DATABASE
+-------------------------------------------------------------------------------
+
+  1. https://console.firebase.google.com/project/hazehub-8a941/firestore
+  2. Click "Create database".
+  3. Mode:  PRODUCTION MODE  (locked down). HazeHub's rules deny all client
+     access on purpose — only your laptop's service account touches the data.
+  4. Location: pick the region closest to where you compete, and remember it.
+     For Texas events, nam5 (multi-region US) or us-central1 (Iowa) are both
+     fine.
+
+     ** The location is PERMANENT. It cannot be changed later without
+        deleting the database and starting over. **
+
+  5. Click Enable.
+
+Stay on Spark. Do NOT upgrade to Blaze — you do not need it.
+
+You do not create any collections by hand; HazeHub creates documents as it
+writes them. For reference, these are the collections it uses (they mirror
+the team's DB schema):
+
+    scouters          one document per person; document ID = scouter_id
+    events            one per event;            document ID = event_key
+    matches           the schedule;             document ID = 2026txman_qm12
+    match_scouting    one per robot/match/scout; document ID = submission_uuid
+    pit_scouting      one per team per event;   document ID = {event}_{team}
+    picklists         personal + master lists
+    bets              Purple Bucks wagers
+    team_cache        TBA/Statbotics team profiles
+    app_settings      current event, current match, betting on/off
+    devices           Chromebook check-ins (battery, VLAN port, queue depth)
+    network_status    periodic venue-uplink snapshots
+    sync_outbox       submissions a device permanently failed to send
+
+  Note on match_scouting: the document ID IS the submission UUID the tablet
+  generates. That is what makes offline sync safe — a tablet replaying its
+  whole queue writes to the same document path, so a duplicate is impossible
+  rather than merely unlikely.
+
+
+-------------------------------------------------------------------------------
+STEP 4 — DEPLOY THE SECURITY RULES AND INDEX POLICY
+-------------------------------------------------------------------------------
+
+From the repository folder:
+
+    ./deploy/firestore.ps1
+
+(or just:  firebase deploy --only firestore )
+
+This is the only thing that ever gets deployed to Firebase. It uploads:
+
+  firestore.rules
+      Denies every client read and write. Your laptop uses the Firebase Admin
+      SDK, which authenticates as a service account and bypasses rules, so
+      this costs nothing and makes the expensive "everyone reads Firestore
+      directly" path impossible by construction.
+
+  firestore.indexes.json
+      Index EXEMPTIONS. Firestore indexes every field by default and charges
+      for index writes. HazeHub's big JSON blobs (the heatmap payload,
+      picklist items, base64 team avatars, robot photos) are only ever read
+      whole, never filtered on, so indexing them is pure cost. Exempting them
+      makes writes cheaper and keeps documents away from Firestore's cap of
+      40,000 index entries per document.
+
+      There are no composite indexes: every query HazeHub makes is a single
+      equality filter on event_key, which Firestore's automatic single-field
+      indexes already cover.
+
+
+-------------------------------------------------------------------------------
+STEP 5 — GET A SERVICE ACCOUNT KEY FOR THE LAPTOP
+-------------------------------------------------------------------------------
+
+This is the credential the laptop uses to reach Firestore.
+
+  1. https://console.firebase.google.com/project/hazehub-8a941/settings/serviceaccounts/adminsdk
+  2. Click "Generate new private key" -> "Generate key".
+  3. A .json file downloads. Move it somewhere OUTSIDE this repository, e.g.
+
+         C:\HazeHub\hazehub-service-account.json
+
+  ** That file is a full admin credential for your database. Never commit it,
+     never put it in Discord, never email it. .gitignore already blocks the
+     obvious filenames, but the safest place is outside the repo entirely. **
+
+  If it ever leaks: same page -> the key's row -> delete it, then generate a
+  new one.
+
+
+-------------------------------------------------------------------------------
+STEP 6 — CONFIGURE THE LAPTOP
+-------------------------------------------------------------------------------
+
+From the repository folder:
+
+    ./setup.ps1
+
+That creates the Python environment, installs everything, and copies
+backend\.env.example to backend\.env.
+
+Now edit  backend\.env  and set:
+
+    FIREBASE_PROJECT_ID=hazehub-8a941
+    FIREBASE_SERVICE_ACCOUNT=C:\HazeHub\hazehub-service-account.json
+
+    HAZEHUB_TEAM_PASSWORD=<the password everyone types to sign in>
+    HAZEHUB_SECRET=<a long random string — signs the login tokens>
+    TBA_AUTH_KEY=<your own key from thebluealliance.com/account>
+
+  Change HAZEHUB_TEAM_PASSWORD and HAZEHUB_SECRET before your first real
+  event. The defaults are published in this repository. Changing
+  HAZEHUB_SECRET signs everyone out, so do it now, not mid-event.
+
+  Also delete passwords.txt from the repository if it is still there.
+
+
+-------------------------------------------------------------------------------
+STEP 7 — START THE SERVER
+-------------------------------------------------------------------------------
+
+    ./run-server.ps1 -OpenFirewall
+
+The first run builds the web app (a minute or two). It then prints something
+like:
+
+    On this laptop:  http://localhost:8000
+    On the tablets:  http://192.168.1.47:8000
+
+-OpenFirewall adds a Windows Firewall rule for port 8000 on Private
+networks. It needs an Administrator PowerShell the first time. Without it,
+Windows will silently block the tablets.
+
+Later runs are just:
+
+    ./run-server.ps1
+
+Verify before you trust it:
+
+    http://localhost:8000/api/health
+
+You want:
+    "ok": true
+    "database": { "engine": "firestore", "project_id": "hazehub-8a941",
+                  "reachable": true }
+
+If it says "Running on the local development store", the .env is not being
+read — check FIREBASE_PROJECT_ID and the path to the key file.
+
+
+-------------------------------------------------------------------------------
+STEP 8 — CHECK IT FROM A TABLET
+-------------------------------------------------------------------------------
+
+  1. Put the tablet on the same wifi as the laptop.
+  2. Open  http://<the-ip-run-server-printed>:8000
+  3. Sign in: Scouter ID "admin", plus your team password.
+
+If it does not load:
+  * Confirm both devices are on the SAME network (guest wifi is often
+    isolated so devices cannot see each other — use your own hotspot or the
+    team's router).
+  * Re-run with -OpenFirewall from an Administrator PowerShell.
+  * From the tablet's browser try  http://<ip>:8000/api/health  directly.
+
+
+-------------------------------------------------------------------------------
+STEP 9 — WRITE THE ADDRESS DOWN
+-------------------------------------------------------------------------------
+
+The laptop's IP can change when it reconnects to a different network. Two
+ways to make this painless:
+
+  A. Reserve a fixed IP for the laptop in your router's DHCP settings, and
+     tape the URL to the laptop lid.
+  B. Or just re-run run-server.ps1 each morning and read the address it
+     prints out to everyone.
+
+Tablets that already have the app open will keep working from their offline
+queue if the address changes; they resync once they can reach the server
+again.
+
+
+-------------------------------------------------------------------------------
+STEP 10 — LOADING AN EVENT (DO THIS THE NIGHT BEFORE, ON GOOD WIFI)
+-------------------------------------------------------------------------------
+
+Two ways:
+
+  A. From the app (normal):
+       Sign in as admin -> Admin -> set the event key (e.g. 2026txman) -> Save.
+       That pulls the schedule from The Blue Alliance.
+
+  B. From the command line, if you also want team photos, EPA and synthetic
+     test data pre-loaded:
+
+       cd backend
+       .venv\Scripts\python -m app.load_event 2026txman
+
+Then during the day the admin advances the current match from the Admin page
+as matches finish. That re-syncs results from TBA and settles Purple Bucks
+bets automatically.
+
+  Cost note: loading an event is the most Firestore-expensive thing HazeHub
+  does — roughly one write per team, per match and per synthetic entry. Do it
+  ONCE, the night before, on good wifi. Re-syncing the schedule afterwards is
+  nearly free because only matches whose data actually changed get written.
+
+
+-------------------------------------------------------------------------------
+STEP 11 — WATCHING YOUR QUOTA
+-------------------------------------------------------------------------------
+
+On Spark there is no overage billing — you simply stop being able to read or
+write for the rest of the day. So check this once mid-morning.
+
+Sign in as admin -> Admin -> System. Or hit the endpoint:
+
+    http://localhost:8000/api/admin/firestore-usage
+
+It reports, for reads / writes / deletes:
+
+    used              document operations so far today
+    budget            HazeHub's internal limit (deliberately below the free tier)
+    free_tier_limit   Google's actual daily allowance
+    projected_12h     what the current rate works out to over a full day
+    shed              optional operations skipped to protect the budget
+
+WHAT A NORMAL COMPETITION DAY LOOKS LIKE
+(60 people, 100 qual matches, ~750 scouting submissions, betting on)
+
+    reads    ~2,000-4,000   of 50,000     mostly the one-time load at startup
+    writes   ~3,000-5,000   of 20,000     one per submission, bet, picklist edit
+    deletes  under 100      of 20,000
+
+Roughly 5-10% of the free allowance, with the rest as headroom for restarts
+and a longer-than-expected day.
+
+WHY IT IS THAT LOW — the specific things doing the work:
+
+  * Reads are served from memory. The event is loaded once at startup; every
+    HTTP GET after that is a dictionary lookup, not a Firestore query. Sixty
+    devices refreshing all day costs zero reads.
+
+  * The live-updates feed is in-process. Devices poll every five seconds.
+    Storing that feed in Firestore would cost ~4,000 writes plus ~4,000
+    deletes a day for data with a two-hour lifespan; it lives in RAM instead,
+    so polling costs nothing.
+
+  * Writes are dirty-checked. Saving a document that has not changed does not
+    touch Firestore. This is why re-syncing a 120-match schedule every time
+    the admin advances a match writes one or two documents instead of 120.
+
+  * Counters are coalesced. A scout's matches_scouted total and everyone's
+    "last seen" timestamp update in memory instantly and reach Firestore at
+    most every few seconds (hourly, for presence). Writing "last seen" on
+    every request would cost ~8,600 writes a day on its own.
+
+  * Bulk work is batched, chunked below Firestore's 500-operations-per-commit
+    limit — settling a match's bets or resetting the economy is a handful of
+    commits, not hundreds of writes.
+
+  * The TBA/Statbotics HTTP cache is in memory, not Firestore. The durable
+    parts of that data already live in the matches and team_cache collections.
+
+IF USAGE LOOKS HIGH
+  1. Check that only ONE laptop is running the server. Two servers means two
+     cold-start loads and two of everything.
+  2. Check you are not re-running app.load_event.
+  3. Firebase console -> Firestore -> Usage shows the authoritative numbers;
+     HazeHub's counter only sees its own process and resets when you restart
+     the server.
+
+The budgets are tunable in backend\.env: HAZEHUB_READ_BUDGET,
+HAZEHUB_WRITE_BUDGET, HAZEHUB_DELETE_BUDGET. When a budget is exhausted
+HazeHub stops doing OPTIONAL work first (presence timestamps, device
+heartbeats, network snapshots) and never blocks a scouting submission —
+losing match data to save a write would be the wrong trade.
+
+IF YOU DO RUN OUT
+  Scouting keeps working. Submissions fail to reach Firestore, but every
+  tablet holds its queue in IndexedDB and retries, and the server keeps
+  serving from memory. Quota resets at midnight US Pacific and the queues
+  drain. Export a JSONL recovery file from the Status page as a belt-and-
+  braces backup.
+
+
+-------------------------------------------------------------------------------
+FIRESTORE LIMITS THIS APP IS BUILT AROUND
+-------------------------------------------------------------------------------
+(https://firebase.google.com/docs/firestore/quotas)
+
+  50,000 reads / 20,000 writes / 20,000 deletes free per day
+      Resets at midnight US Pacific — which is also when HazeHub's usage
+      counter rolls over, so the numbers line up with the Firebase console.
+
+  1 GiB of stored data (Spark)
+      A full season of scouting is a few tens of MB. Team avatars are the
+      bulkiest thing stored, and they are capped.
+
+  1 MiB per document
+      HazeHub refuses any document over 900 KiB with a clear error rather
+      than letting a write fail. Specifically: a pit robot photo over 700 KiB
+      is rejected with HTTP 413; oversized TBA avatars are dropped rather
+      than breaking a team sync.
+
+  40,000 index entries per document
+      Array-of-map fields (the heatmap) generate index entries per element.
+      Those fields are index-exempt, and a submission is additionally capped
+      at 400 heatmap attempts, 40 tags and 5,000 characters of notes.
+
+  500 operations per batched write / transaction
+      All bulk paths chunk at 450 operations and also flush at 8 MiB, under
+      the 10 MiB per-commit limit.
+
+  ~1 sustained write per second per document
+      The documents that could be written often (per-scouter counters,
+      app_settings, device heartbeats) are all coalesced or throttled.
+
+  10 values in a query's `in` clause (30 in newer versions)
+      Not applicable: every multi-key lookup is served from the cache, so
+      HazeHub never issues one.
+
+  1500 bytes per document ID, no "/", not "." or ".."
+      Scouter IDs come from a login box and become document IDs, so they are
+      validated at sign-in and a bad one returns HTTP 400.
+
+
+-------------------------------------------------------------------------------
+APPENDIX A: DEVELOPING ON A DIFFERENT COMPUTER
+-------------------------------------------------------------------------------
+
+Three ways to run HazeHub, in order of setup effort.
+
+1. NO FIREBASE AT ALL (fastest — just to click around)
+
+       ./setup.ps1
+       ./start.ps1
+
+   With no Firebase project configured, HazeHub stores data in a JSON file at
+   backend/data/hazehub-local.json. /api/health warns you it is not Firestore.
+   Development only.
+
+   start.ps1 runs the Next.js dev server on :3000 with hot reload against the
+   API on :8000. run-server.ps1 is the other mode: one process, prebuilt web
+   app, what you use at an event.
+
+2. THE FIRESTORE EMULATOR (recommended for development)
+
+   Real Firestore behaviour, no quota consumed, no credentials. Needs a
+   JDK 21+, then:
+
+       npm install -g firebase-tools
+       ./start.ps1 -Emulator
+
+   Emulator UI at http://localhost:4000 to browse documents.
+
+   No JDK? Use Docker instead:  cd backend && docker compose up -d
+
+3. AGAINST THE REAL hazehub-8a941 DATABASE
+
+   Same as the laptop setup: a service-account key plus FIREBASE_PROJECT_ID
+   and FIREBASE_SERVICE_ACCOUNT in backend\.env. Remember this shares the one
+   daily quota with the event laptop, and there is only one database — you
+   are editing live data. Prefer the emulator.
+
+Seed demo data on any of the three:
+
+       cd backend
+       .venv\Scripts\python -m app.demo_data
+
+   This refuses to run against the live hazehub-8a941 database on purpose —
+   demo data does not belong in the database you compete with. Point at the
+   emulator, or use app.load_event for a real event.
+
+Run the tests:
+
+       cd backend
+       .venv\Scripts\python -m pytest
+
+
+-------------------------------------------------------------------------------
+APPENDIX B: A PUBLIC URL — HOSTING ON RENDER
+-------------------------------------------------------------------------------
+
+The laptop setup above is LAN-only: great at a venue, useless from home. If
+you want a real https:// address that works from anywhere, deploy the same
+app to Render. Firebase stays on Spark — Render talks to Firestore with the
+same service-account key your laptop uses.
+
+The whole app ships as ONE container: the root Dockerfile builds the web app
+and copies it in next to the API, so a single service serves both. There is
+no separate frontend deployment and no CORS to configure.
+
+  ** Why not Vercel: Vercel runs Python as short-lived serverless functions.
+     HazeHub stays inside Firestore's free quota by loading the event into
+     memory once and serving reads from RAM — which needs a long-lived
+     process. On serverless every cold instance re-reads the event, and 60
+     users over a day would blow past 50,000 reads several times over. Use a
+     container host (Render, Fly, Railway, Cloud Run), not a function host. **
+
+SETUP
+
+  1. Push this repository to GitHub if it is not there already, and merge to
+     the branch you want deployed.
+
+     ** render.yaml says `branch: main`. If you deploy from a different
+        branch, change that line first or Render will build the wrong code. **
+
+  2. https://dashboard.render.com  ->  New +  ->  Blueprint
+     Connect the repository and pick it. Render reads render.yaml, sees the
+     Docker service and offers to create it.
+
+  3. Render will prompt for the values marked `sync: false`. Set:
+
+     FIREBASE_SERVICE_ACCOUNT
+         The ENTIRE contents of the service-account JSON from step 5, pasted
+         as one value. Render has no filesystem to put a key file on, so the
+         app accepts the JSON inline as well as a path.
+
+         The downloaded file is pretty-printed across many lines and pastes
+         badly. Flatten it straight to your clipboard:
+
+             ./deploy/render-key.ps1 ~\Downloads\hazehub-8a941-...json
+
+         That prints nothing sensitive, so the key stays out of your shell
+         history and off your screen. Never paste a key into a chat, an
+         issue, or a commit — if you do, delete it in the console
+         (Service accounts -> Manage permissions -> Keys) and make a new one.
+         A leaked key is full read/write on your database.
+
+     HAZEHUB_TEAM_PASSWORD
+         The shared sign-in password.
+
+     TBA_AUTH_KEY
+         Your Blue Alliance key.
+
+     HAZEHUB_SECRET is generated for you.
+     FIREBASE_PROJECT_ID is already set to hazehub-8a941 in render.yaml.
+
+  4. Deploy. The first build takes several minutes (it compiles the web app
+     and installs Python dependencies). When it finishes you get a URL like
+     https://hazehub.onrender.com
+
+  5. Check https://<your-url>/api/health — you want "engine": "firestore",
+     "project_id": "hazehub-8a941", "reachable": true.
+
+THINGS TO KNOW ABOUT THE FREE PLAN
+
+  * Free web services SPIN DOWN after about 15 minutes with no traffic. The
+    next request wakes them, which takes ~30-60 seconds AND re-reads the
+    event from Firestore (a couple of thousand reads). During a competition
+    day there is constant traffic so it stays awake; overnight it will sleep,
+    which is fine. If the wake-up delay bothers you, the paid Starter plan
+    (~$7/month) stays warm.
+  * Free plans include a fixed pool of instance-hours per month — enough for
+    one always-on service, not two. Check Render's current terms.
+  * numInstances MUST stay at 1. Two instances would each keep their own copy
+    of the in-memory cache, drift apart, and double the cold-start reads.
+    Read backend/app/cache.py before changing it.
+
+RUNNING BOTH RENDER AND THE LAPTOP
+
+  You can. They share one Firestore database, so scouting submitted to either
+  ends up in the same place. But they will NOT see each other's changes live
+  — each keeps its own in-memory cache — so a match locked on one appears
+  unlocked on the other until it reloads.
+
+  Pick one as the real server for an event. If you want both to stay in sync,
+  set HAZEHUB_FIRESTORE_LISTEN=1 on both; they then watch Firestore for
+  changes, at a cost of one document read per change.
+
+  A reasonable pattern: Render for the public URL between events, the laptop
+  on competition day when venue wifi is the bottleneck.
+
+TESTING THE CONTAINER LOCALLY (needs Docker)
+
+    docker build -t hazehub .
+    docker run -p 8000:8000 \
+        -e FIREBASE_PROJECT_ID=hazehub-8a941 \
+        -e FIREBASE_SERVICE_ACCOUNT="$(cat /path/to/key.json)" \
+        -e HAZEHUB_TEAM_PASSWORD=YourPassword \
+        hazehub
+
+
+-------------------------------------------------------------------------------
+APPENDIX B2: THE OTHER CLOUD OPTION — FIREBASE HOSTING + CLOUD RUN
+-------------------------------------------------------------------------------
+
+Only worth it if you want everything inside Firebase. It needs the Blaze
+(pay-as-you-go) plan, because Cloud Run does. Firestore usage still fits the
+free allowances; the cost is the always-warm Cloud Run instance, a few
+dollars a month.
+
+  1. Firebase console -> gear -> Usage and billing -> Modify plan -> Blaze.
+     Set a budget alert (Google Cloud console -> Billing -> Budgets & alerts,
+     $5/month with alerts at 50/90/100%) before you do anything else.
+  2. Install the Google Cloud SDK and run  gcloud auth login.
+  3. Add a hosting block with Cloud Run rewrites to firebase.json — the exact
+     snippet is in the header comment of deploy/cloud-run-optional.ps1.
+  4. Run:
+
+         ./deploy/cloud-run-optional.ps1 -ProjectId hazehub-8a941
+
+The flags in that script are not arbitrary: --max-instances=1 is REQUIRED
+because the server keeps the event in an in-memory cache and assumes it is
+the only writer, and --min-instances=1 keeps that cache warm so cold starts
+do not re-read the whole event. Read backend/app/cache.py before changing
+either.
+
+
+-------------------------------------------------------------------------------
+APPENDIX C: BACKUPS
+-------------------------------------------------------------------------------
+
+Your real safety net during a match is the tablets: each one keeps everything
+it submitted in IndexedDB, and the Status page exports a JSONL recovery file
+that can be imported on any other device.
+
+For a database-level copy, the simplest Spark-friendly option is to dump the
+current event from the server laptop:
+
+    cd backend
+    .venv\Scripts\python -c "from app.database import init_db; from app import repo; import json; init_db(); print(json.dumps([e.envelope() for e in repo.scouting_for_event(repo.current_event())], indent=1))" > backup.json
+
+(`gcloud firestore export` is the managed alternative, but it needs the Cloud
+SDK and writes to a Cloud Storage bucket, which is a Blaze feature.)
+
+
+-------------------------------------------------------------------------------
+APPENDIX D: TROUBLESHOOTING
+-------------------------------------------------------------------------------
+
+/api/health says "Running on the local development store"
+    backend\.env is missing FIREBASE_PROJECT_ID, or the file is not where the
+    server expects (it must be backend\.env, next to requirements.txt).
+
+"Your default credentials were not found"
+    FIREBASE_SERVICE_ACCOUNT is unset or points at a file that is not there.
+    Use the full absolute path, with no quotes around it in the .env file.
+
+"PERMISSION_DENIED: Missing or insufficient permissions"
+    The service-account key is for a different project, or the key was
+    deleted in the console. Generate a fresh one (step 5).
+    Note this is NOT about firestore.rules — the Admin SDK bypasses rules.
+
+Tablets cannot reach the laptop
+    Same wifi? Guest networks usually isolate clients from each other.
+    Firewall rule added (-OpenFirewall, as Administrator)?
+    Does http://<ip>:8000/api/health load in the tablet's browser?
+
+The laptop's IP changed and nobody can connect
+    Re-run run-server.ps1; it prints the new address. Nothing is lost — the
+    tablets queue locally and resync when they reach the server again.
+
+Data changed in the Firebase console does not show up in the app
+    Expected: the server caches the event in memory and does not watch for
+    outside changes. Make the change in the app, or POST to
+    /api/admin/cache/reload, or set HAZEHUB_FIRESTORE_LISTEN=1 in .env
+    (costs one read per change).
+
+"Submission UUID exists with a different payload" (HTTP 409)
+    Working as designed. A submission UUID is immutable; a correction has to
+    be a new record that supersedes the original, so an edit can never
+    silently overwrite scouting data that was already acknowledged.
+
+The server was closed by accident mid-event
+    Just start it again. Everything already submitted is in Firestore, and
+    each tablet holds its own queue. Restarting re-reads the event (a few
+    thousand reads, well within budget).
+
+
+-------------------------------------------------------------------------------
+QUICK REFERENCE
+-------------------------------------------------------------------------------
+
+Event-day server            ./run-server.ps1
+  ...with firewall rule     ./run-server.ps1 -OpenFirewall     (as Administrator)
+  ...after a code change    ./run-server.ps1 -Rebuild
+Deploy Firestore rules      ./deploy/firestore.ps1
+Public URL (Render)         push to main; Render auto-deploys (Appendix B)
+Build the container         docker build -t hazehub .
+Health check                http://localhost:8000/api/health
+Quota usage                 Admin -> System   (or /api/admin/firestore-usage)
+Dev mode with hot reload    ./start.ps1
+Dev mode on the emulator    ./start.ps1 -Emulator
+Seed demo data              cd backend && .venv\Scripts\python -m app.demo_data
+Load a real event           cd backend && .venv\Scripts\python -m app.load_event 2026txman
+Run tests                   cd backend && .venv\Scripts\python -m pytest
+
+Firebase project            hazehub-8a941   (Spark / free plan)
+Firebase console            https://console.firebase.google.com/project/hazehub-8a941
+Firestore data browser      https://console.firebase.google.com/project/hazehub-8a941/firestore
+
+ACCOUNTS
+  Sign in with a Scouter ID plus the shared team password. The ID decides the
+  role. These are created automatically on first boot; see passwords.txt.
+
+    admin       everything, including changing other people's roles
+    strategy    everything except role changes; all analysis screens
+    picklist    the shared picklist-meeting screen, and nothing else
+    1, 2, 3     demo scouter accounts
+
+  Anyone else who signs in gets a plain scouter account created for them,
+  which is how the rest of the team gets in. An admin can change any
+  account's role from the dashboard, or set HAZEHUB_ADMIN_IDS /
+  HAZEHUB_STRATEGY_IDS / HAZEHUB_PICKLIST_IDS to assign roles up front.
+
+  There is no separate picklist password. Picklist access is the account role.

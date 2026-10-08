@@ -1,7 +1,9 @@
 "use client";
 import React, { useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { HeatPoint } from "@/lib/types";
-import { Hotkeys, ignoreHotkey } from "@/lib/hotkeys";
+
+import { DEFAULT_HOTKEYS, Hotkeys, ignoreHotkey } from "@/lib/hotkeys";
 import { MetricLabel } from "./MetricLabel";
 
 const FIELD_SRC = "/field.png";
@@ -14,35 +16,61 @@ function colorFor(p: HeatPoint): string {
 /** Interactive scoring map used on the scout form. Each tap logs an attempt. */
 export function FieldInput({
   points,
-  onChange,
-  hotkeys,
-  active,
+  onChange, hotkeys = DEFAULT_HOTKEYS, active = true,
 }: {
+  hotkeys?: Hotkeys; active?: boolean;
   points: HeatPoint[];
   onChange: (pts: HeatPoint[]) => void;
-  hotkeys?: Hotkeys;
-  active?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [phase, setPhase] = useState<"auto" | "teleop">("teleop");
   const [result, setResult] = useState<"made" | "missed">("made");
 
+  function undo() {
+    onChange(points.slice(0, -1));
+  }
+
+  function clear() {
+    onChange([]);
+  }
+
   useEffect(() => {
-    if (!hotkeys || !active) return;
-    const handle = (e: KeyboardEvent) => {
-      if (ignoreHotkey(e)) return;
-      const key = e.key.toLowerCase();
-      if (key === hotkeys.auto) setPhase("auto");
-      else if (key === hotkeys.teleop) setPhase("teleop");
-      else if (key === hotkeys.made) setResult("made");
-      else if (key === hotkeys.missed) setResult("missed");
-      else if (key === hotkeys.undo) onChange(points.slice(0, -1));
-      else return;
-      e.preventDefault();
+    const onKey = (e: KeyboardEvent) => {
+      if (!active || ignoreHotkey(e)) return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      if (target?.isContentEditable || tag === "input" || tag === "textarea" || tag === "select") return;
+
+      switch (e.key.toLowerCase()) {
+        case hotkeys.auto:
+          e.preventDefault();
+          setPhase("auto");
+          break;
+        case hotkeys.teleop:
+          e.preventDefault();
+          setPhase("teleop");
+          break;
+        case hotkeys.made:
+          e.preventDefault();
+          setResult("made");
+          break;
+        case hotkeys.missed:
+          e.preventDefault();
+          setResult("missed");
+          break;
+        case hotkeys.undo:
+          e.preventDefault();
+          undo();
+          break;
+        case hotkeys.clear:
+          e.preventDefault();
+          clear();
+          break;
+      }
     };
-    window.addEventListener("keydown", handle);
-    return () => window.removeEventListener("keydown", handle);
-  }, [hotkeys, active, points, onChange]);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [points, onChange, hotkeys, active]);
 
   function add(e: React.MouseEvent) {
     const el = ref.current;
@@ -62,22 +90,22 @@ export function FieldInput({
   };
 
   return (
-    <div>
+    <div className="field-input">
       <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
         <div className="seg">
-          <button type="button" className={phase === "auto" ? "on" : ""} onClick={() => setPhase("auto")}>
+          <button type="button" className={phase === "auto" ? "on" : ""} aria-pressed={phase === "auto"} onClick={() => setPhase("auto")} title={hotkeys.auto.toUpperCase()}>
             Auto
           </button>
-          <button type="button" className={phase === "teleop" ? "on" : ""} onClick={() => setPhase("teleop")}>
+          <button type="button" className={phase === "teleop" ? "on" : ""} aria-pressed={phase === "teleop"} onClick={() => setPhase("teleop")} title={hotkeys.teleop.toUpperCase()}>
             Teleop
           </button>
         </div>
         <div className="seg">
-          <button type="button" className={result === "made" ? "on" : ""} onClick={() => setResult("made")}>
-            ✓ Made
+          <button type="button" className={result === "made" ? "on" : ""} aria-pressed={result === "made"} onClick={() => setResult("made")} title={hotkeys.made.toUpperCase()}>
+            Made
           </button>
-          <button type="button" className={result === "missed" ? "on" : ""} onClick={() => setResult("missed")}>
-            ✗ Missed
+          <button type="button" className={result === "missed" ? "on" : ""} aria-pressed={result === "missed"} onClick={() => setResult("missed")} title={hotkeys.missed.toUpperCase()}>
+            Missed
           </button>
         </div>
       </div>
@@ -101,16 +129,25 @@ export function FieldInput({
         </svg>
       </div>
 
+      <div className="heatmap-keybinds" aria-label="Heatmap keyboard shortcuts">
+        <span><kbd>{hotkeys.auto.toUpperCase()}</kbd> Auto</span>
+        <span><kbd>{hotkeys.teleop.toUpperCase()}</kbd> Teleop</span>
+        <span><kbd>{hotkeys.made.toUpperCase()}</kbd> Made</span>
+        <span><kbd>{hotkeys.missed.toUpperCase()}</kbd> Missed</span>
+        <span><kbd>{hotkeys.undo.toUpperCase()}</kbd> Undo</span>
+        <span><kbd>{hotkeys.clear.toUpperCase()}</kbd> Clear</span>
+      </div>
+
       <div className="row" style={{ justifyContent: "space-between", marginTop: 10 }}>
         <div className="row" style={{ gap: 8, fontSize: "0.8rem" }}>
-          <span className="badge" style={{ color: "#22d3ee" }}>Auto {counts.autoMade}/{counts.autoMade + counts.autoMiss}</span>
-          <span className="badge" style={{ color: "#a855f7" }}>Teleop {counts.teleMade}/{counts.teleMade + counts.teleMiss}</span>
+          <span className="badge">Auto {counts.autoMade}/{counts.autoMade + counts.autoMiss}</span>
+          <span className="badge">Teleop {counts.teleMade}/{counts.teleMade + counts.teleMiss}</span>
         </div>
         <div className="btn-row">
-          <button type="button" className="btn sm ghost" onClick={() => onChange(points.slice(0, -1))} disabled={!points.length}>
+          <button type="button" className="btn sm ghost" onClick={undo} disabled={!points.length} title={hotkeys.undo.toUpperCase()}>
             Undo
           </button>
-          <button type="button" className="btn sm ghost" onClick={() => onChange([])} disabled={!points.length}>
+          <button type="button" className="btn sm ghost" onClick={clear} disabled={!points.length} title={hotkeys.clear.toUpperCase()}>
             Clear
           </button>
         </div>
@@ -119,70 +156,361 @@ export function FieldInput({
   );
 }
 
-/** Read-only aggregated heatmap overlay (team search / analysis). */
+// --------------------------------------------------------------------------- #
+// Read-only heatmap                                                            #
+// --------------------------------------------------------------------------- #
+// The original drew one translucent dot per shot, so a team with 80 attempts
+// read as purple soup. Binning into coloured squares fixed the readability but
+// looked like a spreadsheet rather than a heatmap.
+//
+// This draws a real density field: every attempt is a soft blob, the blobs are
+// blurred into each other, and the resulting intensity is mapped through a
+// colour ramp inside the SVG filter. Busy areas glow hot, one-off shots fade
+// away. Individual made and missed markers can be layered on top, and the
+// whole thing filters by phase and by driver station, because where a robot
+// starts changes which parts of the field it can reach.
+
+export type StationFilter = "all" | "red1" | "red2" | "red3" | "blue1" | "blue2" | "blue3";
+
+/** Which driver station the scout was watching, if the report carried it. */
+function stationKey(p: HeatPoint): StationFilter | "" {
+  if (!p.alliance || !p.station) return "";
+  return `${p.alliance}${p.station}` as StationFilter;
+}
+
+function stationLabel(s: StationFilter): string {
+  if (s === "all") return "All stations";
+  return s.replace("red", "Red ").replace("blue", "Blue ");
+}
+
+/**
+ * The density field.
+ *
+ * Each attempt is a soft radial blob. feGaussianBlur melts them together, the
+ * first feColorMatrix copies the accumulated alpha into the colour channels,
+ * and feComponentTransfer maps that intensity through the ramp. The copy step
+ * is the part that is easy to miss: without it the colour tables would be
+ * reading channels that are all zero, and every pixel would come out the
+ * same shade.
+ */
+function DensityLayer({
+  id,
+  points,
+  blobRadius,
+}: {
+  id: string;
+  points: HeatPoint[];
+  blobRadius: number;
+}) {
+  return (
+    <>
+      <defs>
+        <radialGradient id={`${id}-blob`}>
+          <stop offset="0%" stopColor="#fff" stopOpacity="0.85" />
+          <stop offset="55%" stopColor="#fff" stopOpacity="0.30" />
+          <stop offset="100%" stopColor="#fff" stopOpacity="0" />
+        </radialGradient>
+        <filter
+          id={`${id}-heat`}
+          x="-15%"
+          y="-15%"
+          width="130%"
+          height="130%"
+          colorInterpolationFilters="sRGB"
+        >
+          <feGaussianBlur in="SourceGraphic" stdDeviation="1.6" result="blurred" />
+          <feColorMatrix
+            in="blurred"
+            type="matrix"
+            values="0 0 0 1 0
+                    0 0 0 1 0
+                    0 0 0 1 0
+                    0 0 0 1 0"
+            result="intensity"
+          />
+          <feComponentTransfer in="intensity">
+            <feFuncR type="table" tableValues="0.20 0.30 0.40 0.52 0.65 0.78" />
+            <feFuncG type="table" tableValues="0.10 0.17 0.23 0.32 0.44 0.60" />
+            <feFuncB type="table" tableValues="0.30 0.45 0.60 0.73 0.87 1" />
+            <feFuncA type="table" tableValues="0 0.35 0.60 0.75 0.85 0.92" />
+          </feComponentTransfer>
+        </filter>
+      </defs>
+      <g filter={`url(#${id}-heat)`}>
+        {points.map((p, i) => (
+          <circle key={i} cx={p.x * 100} cy={p.y * 50} r={blobRadius} fill={`url(#${id}-blob)`} />
+        ))}
+      </g>
+    </>
+  );
+}
+
 export function FieldHeatmap({
   points,
   height = 300,
-  stats,
+  expandable = true,
+  showControls = true, stats: cloudStats,
 }: {
   points: HeatPoint[];
   height?: number;
-  stats?: { total: number; made: number; accuracy: number | null };
+  expandable?: boolean;
+  showControls?: boolean;
+  stats?: { total: number; made: number; accuracy: number | null; filters?: Record<string, {total: number; made: number; accuracy: number | null}> };
 }) {
-  const [showShots, setShowShots] = useState(true);
-  const [expanded, setExpanded] = useState(false);
-  const dialog = useRef<HTMLDialogElement>(null);
-  const id = useId().replace(/:/g, "");
-  useEffect(() => {
-    if (expanded && dialog.current && !dialog.current.open) dialog.current.showModal();
-  }, [expanded]);
-  const map = (large = false) => (
-    <div className="field-wrap analysis-field" style={{ maxWidth: large ? "100%" : height * 2, margin: "0 auto" }}>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img className="field-bg" src={FIELD_SRC} alt="Scoring positions on the field" style={{ opacity: 0.52 }} />
-      <svg className="field-svg" viewBox="0 0 1000 500" aria-label="Shot locations and density">
-        <defs>
-          <filter id={`${id}-${large}-blur`} x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="14" /></filter>
-        </defs>
-        <g filter={`url(#${id}-${large}-blur)`}>
-          {points.map((p, i) => (
-            <circle
-              key={i}
-              cx={p.x * 1000}
-              cy={p.y * 500}
-              r={30}
-              fill="#b56dff"
-              opacity={0.24}
-            />
-          ))}
-        </g>
-        {showShots && points.map((p, i) => (
-          <g key={i} className="shot-dot">
-            <circle cx={p.x * 1000} cy={p.y * 500} r={12} fill={colorFor(p)} opacity=".15" />
-            <circle cx={p.x * 1000} cy={p.y * 500} r={5} fill={p.result === "made" ? colorFor(p) : "#21132f"} stroke={p.result === "made" ? "#f7efff" : "#fbbf24"} strokeWidth="1.6" />
-            <title>{p.phase === "auto" ? "Auto" : "Teleop"} · {p.result}{p.match ? ` · match ${p.match}` : ""}</title>
-          </g>
+  // Filter and gradient ids must be unique, or two heatmaps on one page will
+  // both render with whichever definition happened to win.
+  const uid = useId().replace(/:/g, "");
+  const [open, setOpen] = useState(false);
+  const [phase, setPhase] = useState<"all" | "auto" | "teleop">("all");
+  const [station, setStation] = useState<StationFilter>("all");
+  const [markers, setMarkers] = useState(true);
+
+  const stationsPresent = Array.from(
+    new Set(points.map((p) => stationKey(p)).filter(Boolean))
+  ).sort() as StationFilter[];
+
+  const filtered = points.filter(
+    (p) =>
+      (phase === "all" || p.phase === phase) &&
+      (station === "all" || stationKey(p) === station)
+  );
+  const selectedStats = cloudStats?.filters?.[`${phase}|${station}`] || (phase === "all" && station === "all" ? cloudStats : undefined);
+
+  // Three attempts need fatter blobs to register at all; two hundred need
+  // thinner ones or the whole field saturates into one red smear.
+  const blobRadius = filtered.length > 120 ? 3.2 : filtered.length > 40 ? 4.2 : 5.4;
+
+  function map(large: boolean) {
+    return (
+      <div
+        className="field-wrap"
+        style={{
+          maxHeight: large ? undefined : height,
+          cursor: expandable && !large ? "zoom-in" : undefined,
+        }}
+        onClick={expandable && !large ? () => setOpen(true) : undefined}
+        title={expandable && !large ? "Click to open the full size map" : undefined}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img className="field-bg" src={FIELD_SRC} alt="field" style={{ opacity: 0.45 }} />
+        <svg className="field-svg" viewBox="0 0 100 50" preserveAspectRatio="none">
+          <DensityLayer
+            id={`${uid}${large ? "-lg" : ""}`}
+            points={filtered}
+            blobRadius={blobRadius}
+          />
+          {markers &&
+            filtered.map((p, i) => (
+              <circle
+                className="shot-dot" key={`m${i}`}
+                cx={p.x * 100}
+                cy={p.y * 50}
+                r={p.result === "made" ? 0.8 : 0.6}
+                fill={colorFor(p)}
+                stroke="#fff"
+                strokeWidth={0.18}
+                opacity={0.9}
+              />
+            ))}
+        </svg>
+      </div>
+    );
+  }
+
+  const controls = showControls && (
+    <div className="row heatmap-controls" style={{ gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+      <div className="seg">
+        {(["all", "auto", "teleop"] as const).map((p) => (
+          <button key={p} type="button" className={phase === p ? "on" : ""} onClick={() => setPhase(p)}>
+            {p === "all" ? "Both" : p === "auto" ? "Auto" : "Teleop"}
+          </button>
         ))}
-      </svg>
+      </div>
+      {stationsPresent.length > 1 && (
+        <div className="seg">
+          <button type="button" className={station === "all" ? "on" : ""} onClick={() => setStation("all")}>
+            All stations
+          </button>
+          {stationsPresent.map((s) => (
+            <button key={s} type="button" className={station === s ? "on" : ""} onClick={() => setStation(s)}>
+              {stationLabel(s)}
+            </button>
+          ))}
+        </div>
+      )}
+      <label className="row" style={{gap: 8}}><input type="checkbox" checked={markers} onChange={e => setMarkers(e.target.checked)} />Show each shot</label>
     </div>
   );
-  return <div className="heatmap-panel">
-    <div className="heatmap-tools">
-      <label className="shot-toggle"><input type="checkbox" checked={showShots} onChange={e => setShowShots(e.target.checked)} /> Show each shot</label>
-      <button className="btn sm ghost" onClick={() => setExpanded(true)} aria-label="Open scoring heatmap full size">Open full size <span aria-hidden>↗</span></button>
+
+  const stats = (
+    <div className="row heatmap-stats" style={{ gap: 16, marginTop: 12, flexWrap: "wrap" }}>
+      <span className="badge muted">{selectedStats?.total ?? "—"} <MetricLabel metric="attempts">attempts</MetricLabel></span>
+      <span className="badge green">{selectedStats?.made ?? "—"} <MetricLabel metric="made">made</MetricLabel></span>
+      <span className="badge haze">
+        {selectedStats?.accuracy == null ? "—" : `${Math.round(selectedStats.accuracy * 100)}%`} <MetricLabel metric="accuracy">accuracy</MetricLabel>
+      </span>
     </div>
-    {map()}
-    {stats && <div className="heatmap-stats">
-      <div><strong>{stats.total}</strong><span><MetricLabel metric="attempts">attempts</MetricLabel></span></div>
-      <div><strong className="made-text">{stats.made}</strong><span><MetricLabel metric="made">made</MetricLabel></span></div>
-      <div><strong className="haze-text">{stats.accuracy == null ? "—" : `${Math.round(stats.accuracy * 100)}%`}</strong><span><MetricLabel metric="accuracy">accuracy</MetricLabel></span></div>
-    </div>}
-    <div className="heatmap-legend"><span>Shots from here</span><span>a few</span><i className="density-ramp" /><span>a lot</span></div>
-    {showShots && <div className="shot-key"><span><i className="auto-dot" />Auto made</span><span><i className="tele-dot" />Teleop made</span><span><i className="miss-dot" />Missed</span></div>}
-    {expanded && <dialog ref={dialog} className="heatmap-dialog" onCancel={() => setExpanded(false)} onClick={e => { if (e.target === e.currentTarget) setExpanded(false); }}>
-      <div className="card-h"><div><h3>Scoring Heatmap</h3><p className="muted">Every recorded location, in detail.</p></div><button className="btn ghost" onClick={() => setExpanded(false)}>Close</button></div>
-      {map(true)}
-      <div className="heatmap-legend"><span>Shots from here</span><span>a few</span><i className="density-ramp" /><span>a lot</span></div>
-    </dialog>}
-  </div>;
+  );
+
+  const legend = (
+    <div className="heatmap-legend">
+      <span className="faint">Shots from here:</span>
+      <span className="faint">a few</span>
+      <span className="heat-ramp" aria-hidden />
+      <span className="faint">a lot</span>
+      {markers && <span className="faint">Cyan: auto made. Purple: teleop made. Amber: missed.</span>}
+    </div>
+  );
+
+  if (!points.length) {
+    return <p className="faint" style={{ margin: 0 }}>No scoring positions recorded yet.</p>;
+  }
+
+  return (
+    <>
+      {controls}
+      {map(false)}
+      {stats}
+      {expandable && (
+        <button type="button" className="btn sm ghost" style={{ marginTop: 8 }} onClick={() => setOpen(true)} aria-label="Open scoring heatmap full size">
+          Open full size
+        </button>
+      )}
+      {legend}
+      {open && (
+        <ZoomableField onClose={() => setOpen(false)} title={`${filtered.length} attempts`}>
+          {map(true)}
+          {controls}
+          {stats}
+          {legend}
+        </ZoomableField>
+      )}
+    </>
+  );
+}
+
+/**
+ * Full-screen field with scroll and pinch zoom plus drag to pan.
+ *
+ * Portalled to <body> deliberately. .card sets a backdrop-filter, which makes
+ * it a containing block for position:fixed, so rendering this inline pinned
+ * the overlay to the card rather than the viewport and it opened far below
+ * the fold. The Modal component in ui.tsx portals for exactly this reason.
+ *
+ * Pan and zoom is a plain CSS transform rather than a library: the whole
+ * interaction is scale, then translate on drag, and these are borrowed
+ * Chromebooks, so the right answer is thirty lines and no extra bundle.
+ */
+function ZoomableField({
+  children,
+  onClose,
+  title,
+}: {
+  children: React.ReactNode;
+  onClose: () => void;
+  title?: string;
+}) {
+  const [mounted, setMounted] = useState(false);
+  const [scale, setScale] = useState(1);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
+  const pinch = useRef<number | null>(null);
+
+  useEffect(() => setMounted(true), []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previous;
+    };
+  }, [onClose]);
+
+  const clampScale = (s: number) => Math.min(6, Math.max(1, s));
+
+  function onWheel(e: React.WheelEvent) {
+    setScale((s) => {
+      const next = clampScale(s * (e.deltaY < 0 ? 1.15 : 0.87));
+      if (next === 1) setOffset({ x: 0, y: 0 });
+      return next;
+    });
+  }
+  function onPointerDown(e: React.PointerEvent) {
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    drag.current = { x: e.clientX, y: e.clientY, ox: offset.x, oy: offset.y };
+  }
+  function onPointerMove(e: React.PointerEvent) {
+    if (!drag.current || scale === 1) return;
+    setOffset({
+      x: drag.current.ox + (e.clientX - drag.current.x),
+      y: drag.current.oy + (e.clientY - drag.current.y),
+    });
+  }
+  function onPointerUp() {
+    drag.current = null;
+  }
+  function onTouchMove(e: React.TouchEvent) {
+    if (e.touches.length !== 2) return;
+    const a = e.touches[0];
+    const b = e.touches[1];
+    const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+    if (pinch.current != null) setScale((s) => clampScale(s * (dist / pinch.current!)));
+    pinch.current = dist;
+  }
+
+  if (!mounted) return null;
+
+  return createPortal(
+    <div className="field-zoom-backdrop" onClick={onClose}>
+      <div className="field-zoom" role="dialog" aria-modal="true" aria-label="Scoring map" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h3 style={{ margin: 0 }}>
+            Scoring map {title ? <span className="faint">· {title}</span> : null}
+          </h3>
+          <div className="btn-row">
+            <button
+              className="btn sm ghost"
+              onClick={() => {
+                setScale(1);
+                setOffset({ x: 0, y: 0 });
+              }}
+            >
+              Reset zoom
+            </button>
+            <button className="btn sm ghost" onClick={onClose}>Close</button>
+          </div>
+        </div>
+        <div
+          className="field-zoom-stage"
+          onWheel={onWheel}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerLeave={onPointerUp}
+          onTouchMove={onTouchMove}
+          onTouchEnd={() => {
+            pinch.current = null;
+          }}
+          style={{ cursor: scale > 1 ? "grab" : "default" }}
+        >
+          <div
+            style={{
+              transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
+              transformOrigin: "center center",
+              transition: drag.current ? "none" : "transform 0.08s linear",
+            }}
+          >
+            {children}
+          </div>
+        </div>
+
+      </div>
+    </div>,
+    document.body,
+  );
 }

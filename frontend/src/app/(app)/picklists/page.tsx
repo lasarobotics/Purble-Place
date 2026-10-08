@@ -1,45 +1,32 @@
 "use client";
-import { useEffect, useState, useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/lib/toast";
 import { onBus } from "@/lib/bus";
 import { timeAgo } from "@/lib/format";
 import type { Picklist, PicklistItem, Team } from "@/lib/types";
-import { Loading, Empty } from "@/components/ui";
-import { ClickableTeam } from "@/components/TeamDetailModal";
-
-const PICKLIST_PASSWORD = "PickListSTRAT";
-const toSlots = (items: PicklistItem[]) => {
-  const slots = items.map((it) => String(it.team || ""));
-  while (slots.length < 4) slots.push("");
-  return slots;
-};
-const toItems = (slots: string[]): PicklistItem[] =>
-  slots
-    .map((slot) => parseInt(slot.replace(/[^0-9]/g, ""), 10))
-    .filter((team, index, all) => team && all.indexOf(team) === index)
-    .map((team) => ({ team, tier: "first" }));
+import { Loading } from "@/components/ui";
+import { PicklistBoard } from "@/components/PicklistBoard";
+import { FinalPicklists } from "@/components/FinalPicklists";
 
 export default function PicklistsPage() {
   const { session } = useAuth();
   const toast = useToast();
-  const [mine, setMine] = useState<Picklist[]>([]);
-  const [active, setActive] = useState<Picklist | null>(null);
+  const [lists, setLists] = useState<Picklist[]>([]);
+  const [round, setRound] = useState<1 | 2>(1);
+  const [teams, setTeams] = useState<Record<number, Team>>({});
+  const [pool, setPool] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
-  const [unlocked, setUnlocked] = useState(false);
-  const [password, setPassword] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<string>("");
+  const pendingSave = useRef<any>(null);
 
   const load = useCallback(async () => {
     try {
-      const list = await api<Picklist[]>("/api/picklists/mine");
-      setMine(list);
+      setLists(await api<Picklist[]>("/api/picklists/mine"));
     } catch {}
     setLoading(false);
-  }, []);
-
-  useEffect(() => {
-    setUnlocked(sessionStorage.getItem("hazehub.picklist.unlocked") === "1");
   }, []);
 
   useEffect(() => {
@@ -47,147 +34,92 @@ export default function PicklistsPage() {
     return onBus((e) => { if (e === "picklist_changed") load(); });
   }, [load]);
 
+  // The pool is every team that has been scouted at this event, plus anyone
+  // already on the list, so a ranked team never vanishes if scouting is thin.
   useEffect(() => {
-    setActive((cur) => cur || mine[0] || null);
-  }, [mine]);
+    (async () => {
+      let nums: number[] = [];
+      try {
+        nums = await api<number[]>("/api/admin/event-teams");
+      } catch {
+        // Scouters cannot reach the admin route. Fall back to the schedule.
+        try {
+          const res = await api<{ matches: { red: number[]; blue: number[] }[] }>("/api/matches");
+          nums = Array.from(new Set(res.matches.flatMap((m) => [...m.red, ...m.blue])));
+        } catch {}
+      }
+      const ranked = lists.flatMap((l) => l.items.map((i) => i.team));
+      const all = Array.from(new Set([...nums, ...ranked])).sort((a, b) => a - b);
+      setPool(all);
+      if (all.length) {
+        try {
+          const rows = await api<Team[]>("/api/teams/batch", { method: "POST", body: { teams: all.slice(0, 24) } });
+          setTeams((cur) => ({ ...cur, ...Object.fromEntries(rows.map((t) => [t.team_number, t])) }));
+          for (let i = 24; i < all.length; i += 24) {
+            const more = await api<Team[]>("/api/teams/batch", { method: "POST", body: { teams: all.slice(i, i + 24) } });
+            setTeams((cur) => ({ ...cur, ...Object.fromEntries(more.map((t) => [t.team_number, t])) }));
+          }
+        } catch {}
+      }
+    })();
+  }, [lists]);
 
-  async function createList() {
-    const name = prompt("Name your picklist:", "My Picklist");
-    if (!name) return;
-    const p = await api<Picklist>("/api/picklists", { method: "POST", body: { name, items: [] } });
-    toast("Picklist created", "ok");
-    setMine((x) => [...x, p]);
-    setActive(p);
-  }
+  const active = lists.find((l) => l.pick_round === round);
 
-  async function send(p: Picklist) {
-    try {
-      const updated = await api<Picklist>(`/api/picklists/${p.id}`, { method: "PUT", body: { name: p.name, items: p.items } });
-      toast("Picklist sent", "ok");
-      setMine((x) => x.map((m) => (m.id === updated.id ? updated : m)));
-      setActive(updated);
-    } catch (e: any) { toast(e.message || "Send failed", "err"); }
-  }
-
-  async function remove(p: Picklist) {
-    if (!confirm(`Delete "${p.name}"?`)) return;
-    await api(`/api/picklists/${p.id}`, { method: "DELETE" });
-    setMine((x) => x.filter((m) => m.id !== p.id));
-    setActive(null);
-    toast("Deleted", "ok");
-  }
+  // Autosave. A picklist meeting moves fast and nobody should lose an edit
+  // because they forgot to press a button, but a keystroke per write would be
+  // wasteful, so edits are debounced into one save.
+  const save = useCallback(
+    (list: Picklist, items: PicklistItem[]) => {
+      clearTimeout(pendingSave.current);
+      pendingSave.current = setTimeout(async () => {
+        setSaving(true);
+        try {
+          const updated = await api<Picklist>(`/api/picklists/${list.id}`, {
+            method: "PUT",
+            body: { name: list.name, items },
+          });
+          setLists((cur) => cur.map((l) => (l.id === updated.id ? updated : l)));
+          setSavedAt(new Date().toISOString());
+        } catch (e: any) {
+          toast(e.message || "Could not save", "err");
+        } finally {
+          setSaving(false);
+        }
+      }, 700);
+    },
+    [toast]
+  );
 
   if (loading) return <Loading />;
-  if (!unlocked) {
-    return (
-      <div>
-        <div className="page-title"><h1>Picklists</h1></div>
-        <div className="card" style={{ maxWidth: 420 }}>
-          <h3>Picklist Password</h3>
-          <label className="field">
-            <span>Password</span>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && password === PICKLIST_PASSWORD) {
-                  sessionStorage.setItem("hazehub.picklist.unlocked", "1");
-                  setUnlocked(true);
-                }
-              }}
-            />
-          </label>
-          <button
-            className="btn primary block"
-            onClick={() => {
-              if (password !== PICKLIST_PASSWORD) return toast("Incorrect picklist password", "err");
-              sessionStorage.setItem("hazehub.picklist.unlocked", "1");
-              setUnlocked(true);
-            }}
-          >
-            Unlock Picklists
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div>
       <div className="page-title"><h1>Picklists</h1></div>
-      <p className="page-sub">Create a strategy list, fill the four default team slots, add more teams if needed, then send it to admin.</p>
+
+
+      <FinalPicklists teams={teams} />
 
       <div className="row" style={{ gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-        {mine.map((p) => (
-          <button key={p.id} className={"chip" + (active?.id === p.id ? " on" : "")} onClick={() => setActive(p)}>{p.name}</button>
-        ))}
-        <button className="btn sm primary" onClick={createList}>+ Create Picklist</button>
+        <div className="seg">
+          <button className={round === 1 ? "on" : ""} onClick={() => setRound(1)}>First pick</button>
+          <button className={round === 2 ? "on" : ""} onClick={() => setRound(2)}>Second pick</button>
+        </div>
+        <span className="badge muted">
+          {saving ? "Saving" : savedAt ? `Saved ${timeAgo(savedAt)}` : "Changes save automatically"}
+        </span>
       </div>
 
-      {active ? (
-        <Editor key={active.id} list={active} canEdit={active.owner_id === session?.scout_id || !!session?.is_admin} onSend={send} onDelete={!active.is_master ? remove : undefined} />
-      ) : (
-        <Empty icon="clipboard" title="No picklists yet" sub="Create one to start ranking teams." />
+      {active && (
+        <PicklistBoard
+          key={active.id}
+          list={active}
+          teams={teams}
+          pool={pool}
+          canEdit={active.owner_id === session?.scout_id || !!session?.is_admin}
+          onChange={(items) => save(active, items)}
+        />
       )}
-    </div>
-  );
-}
-
-function Editor({ list, canEdit, onSend, onDelete }: { list: Picklist; canEdit: boolean; onSend: (p: Picklist) => void; onDelete?: (p: Picklist) => void }) {
-  const [slots, setSlots] = useState<string[]>(() => toSlots(list.items || []));
-  const [teams, setTeams] = useState<Record<number, Team>>({});
-  const [dirty, setDirty] = useState(false);
-
-  useEffect(() => { setSlots(toSlots(list.items || [])); setDirty(false); }, [list.id, list.updated_at]);
-  useEffect(() => {
-    const nums = Array.from(new Set(slots.map((slot) => parseInt(slot.replace(/[^0-9]/g, ""), 10)))).filter((n) => n && !teams[n]);
-    if (!nums.length) return;
-    api<Team[]>("/api/teams/batch", { method: "POST", body: { teams: nums } })
-      .then((rows) => setTeams((cur) => ({ ...cur, ...Object.fromEntries(rows.map((t) => [t.team_number, t])) })))
-      .catch(() => {});
-  }, [slots, teams]);
-
-  const upd = (next: string[]) => { setSlots(next); setDirty(true); };
-  const sentItems = toItems(slots);
-
-  return (
-    <div className="card">
-      <div className="card-h">
-        <div>
-          <h3 style={{ margin: 0 }}>{list.name} {list.is_master && <span className="badge haze">master</span>}</h3>
-          <div className="faint" style={{ fontSize: "0.75rem" }}>by {list.owner_name} · updated {timeAgo(list.updated_at)}</div>
-        </div>
-        <div className="btn-row">
-          {onDelete && canEdit && <button className="btn sm danger" onClick={() => onDelete(list)}>Delete</button>}
-          {canEdit && <button className="btn sm primary" onClick={() => onSend({ ...list, items: sentItems })}>{dirty ? "Send Picklist" : "Send Picklist Again"}</button>}
-        </div>
-      </div>
-
-      <div className="grid" style={{ gap: 8 }}>
-        {slots.map((slot, i) => {
-          const n = parseInt(slot.replace(/[^0-9]/g, ""), 10);
-          return (
-            <div key={i} className="card tight pick-slot">
-              <span className="rank-chip">{i + 1}</span>
-              {n ? <ClickableTeam team={teams[n] || { team_number: n, nickname: "" }} /> : <span className="faint">Blank team slot</span>}
-              {canEdit && (
-                <input
-                  value={slot}
-                  onChange={(e) => upd(slots.map((x, k) => k === i ? e.target.value : x))}
-                  placeholder="Team number"
-                  inputMode="numeric"
-                />
-              )}
-              {canEdit && slots.length > 4 && (
-                <button className="btn sm ghost" onClick={() => upd(slots.filter((_, k) => k !== i))}>Remove</button>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      {canEdit && <button className="btn" style={{ marginTop: 12 }} onClick={() => upd([...slots, ""])}>+ Add Team</button>}
-      <p className="faint" style={{ fontSize: "0.75rem" }}>{sentItems.length} teams will be sent. You can send this picklist again after edits.</p>
     </div>
   );
 }

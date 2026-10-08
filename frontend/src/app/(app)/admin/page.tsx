@@ -4,11 +4,27 @@ import { api } from "@/lib/api";
 import { useToast } from "@/lib/toast";
 import { onBus } from "@/lib/bus";
 import { matchLabel } from "@/lib/format";
-import type { Bet, MatchRec } from "@/lib/types";
+import type { Bet, MatchRec, Role } from "@/lib/types";
+import { ROLE_LABEL } from "@/lib/types";
 import { Loading, Stat, Stepper, TeamIdentity } from "@/components/ui";
 
-interface AdminSettings { current_event: string; current_match: number; betting_enabled: boolean; season: number; is_azure: boolean; }
-interface ScouterRow { scout_id: string; display_name: string; is_admin: boolean; bucks: number; matches_scouted: number; }
+// environment: "cloud-run" | "firebase" | "emulator" | "local"
+interface AdminSettings {
+  current_event: string;
+  current_match: number;
+  betting_enabled: boolean;
+  post_comp_mode: boolean;
+  season: number;
+  environment: string;
+}
+
+const ENV_LABEL: Record<string, string> = {
+  "cloud-run": "Firebase",
+  firebase: "Firebase",
+  emulator: "Emulator",
+  local: "Local",
+};
+interface ScouterRow { scout_id: string; display_name: string; role: string; is_admin: boolean; bucks: number; matches_scouted: number; }
 interface AdminBet extends Bet { scout_name?: string; }
 
 export default function AdminDashboard() {
@@ -49,7 +65,7 @@ export default function AdminDashboard() {
     try {
       const r = await api<{ matches: number; bets_settled?: number }>("/api/admin/event", { method: "POST", body: { event_key: event.trim() } });
       if (r.matches === 0) {
-        toast("Event set, but TBA returned no schedule — check the key (e.g. 2026txaus), or the schedule isn't published yet", "err");
+        toast("Event set, but TBA returned no schedule, check the key (e.g. 2026txaus), or the schedule isn't published yet", "err");
       } else {
         toast(`Event set · ${r.matches} matches loaded`, "ok");
       }
@@ -79,6 +95,19 @@ export default function AdminDashboard() {
       await load();
     } catch (e: any) { toast(e.message || "Failed", "err"); } finally { setBusy(""); }
   }
+  async function togglePostComp(enabled: boolean) {
+    const msg = enabled
+      ? "Turn on Post-Comp Mode? Visitors will see a 404 until the unlock code is entered."
+      : "Turn off Post-Comp Mode and make the site public again?";
+    if (!confirm(msg)) return;
+    setBusy("post-comp-toggle");
+    try {
+      const r = await api<{ post_comp_mode: boolean }>("/api/admin/post-comp/toggle", { method: "POST", body: { enabled } });
+      setS((cur) => cur ? { ...cur, post_comp_mode: r.post_comp_mode } : cur);
+      toast(`Post-Comp Mode ${r.post_comp_mode ? "enabled" : "disabled"}`, "ok");
+      await load();
+    } catch (e: any) { toast(e.message || "Failed", "err"); } finally { setBusy(""); }
+  }
   async function deleteBet(bet: AdminBet) {
     if (!confirm(`Delete bet #${bet.id} from ${bet.scout_name || bet.scout_id}?`)) return;
     await api(`/api/admin/bets/${bet.id}`, { method: "DELETE" });
@@ -93,65 +122,64 @@ export default function AdminDashboard() {
   return (
     <div>
       <div className="page-title"><h1>Admin Dashboard</h1>
-        <span className={`badge ${s.is_azure ? "blue" : "muted"}`}>{s.is_azure ? "Azure" : "Local"} · {s.season}</span>
+        <span className={`badge ${s.environment === "cloud-run" || s.environment === "firebase" ? "blue" : "muted"}`}>
+          {ENV_LABEL[s.environment] || s.environment} · {s.season}
+        </span>
       </div>
-      <p className="page-sub">Control the event, match flow, betting and scouts.</p>
+
 
       <div className="grid cols-4" style={{ marginBottom: 18 }}>
-        <Stat label="Event" value={s.current_event || "—"} />
-        <Stat label="Current Match" value={s.current_match || "—"} accent />
-        <Stat label="Open Bets" value={bets.filter((b) => b.status === "open").length} />
-        <Stat label="Betting" value={s.betting_enabled ? "ON" : "OFF"} />
+        <Stat label="Event" value={s.current_event || "-"} />
+        <Stat label="Current Match" value={s.current_match || "-"} accent />
+        <Stat label="Accounts" value={scouters.length} />
+        <Stat label="Matches Scouted" value={scouters.reduce((a, sc) => a + sc.matches_scouted, 0)} />
       </div>
 
-      <div className="grid cols-2">
         <div className="card">
           <h3>Event</h3>
           <label className="field"><span>TBA Event Key</span>
             <input value={event} onChange={(e) => setEvent(e.target.value)} placeholder="e.g. 2026txende" />
           </label>
-          <button className="btn primary" onClick={saveEvent} disabled={busy === "event"}>{busy === "event" ? "Loading schedule…" : "Set event & sync schedule"}</button>
-          <p className="faint" style={{ fontSize: "0.75rem", marginTop: 8 }}>Pulls the match schedule + teams from The Blue Alliance.</p>
+          <button className="btn primary" onClick={saveEvent} disabled={busy === "event"}>{busy === "event" ? "Loading schedule..." : "Set event & sync schedule"}</button>
+
         </div>
 
-        <div className="card">
-          <h3>Betting Recovery</h3>
-          <p className="muted">Bets lock when scouting starts. Winners settle from TBA results; payouts use Statbotics odds captured when the bet was placed.</p>
-          <div className="seg" style={{ marginBottom: 12 }}>
-            <button
-              className={s.betting_enabled ? "on" : ""}
-              onClick={() => toggleBetting(true)}
-              disabled={busy === "betting-toggle" || s.betting_enabled}
-            >
-              Turn On
-            </button>
-            <button
-              className={!s.betting_enabled ? "on red" : ""}
-              onClick={() => toggleBetting(false)}
-              disabled={busy === "betting-toggle" || !s.betting_enabled}
-            >
-              Turn Off
-            </button>
-          </div>
-          <button className="btn danger block" onClick={resetBetting}>Reset everyone to 100 Purple Bucks</button>
-          <p className="faint" style={{ fontSize: "0.75rem", marginTop: 8 }}>Use reset only for event setup/testing mistakes. Individual bad bets can be deleted below.</p>
+      <div className="card" style={{ marginTop: 16 }}>
+        <div className="card-h"><h3>Site Access</h3><span className={`badge ${s.post_comp_mode ? "amber" : "green"}`}>{s.post_comp_mode ? "Post-comp" : "Open"}</span></div>
+        <p className="muted" style={{ marginTop: 0 }}>
+          Post-Comp Mode shows visitors a 404 and keeps the app from making API calls until the unlock code is entered.
+        </p>
+        <div className="seg">
+          <button
+            className={!s.post_comp_mode ? "on" : ""}
+            onClick={() => togglePostComp(false)}
+            disabled={busy === "post-comp-toggle" || !s.post_comp_mode}
+          >
+            Open
+          </button>
+          <button
+            className={s.post_comp_mode ? "on red" : ""}
+            onClick={() => togglePostComp(true)}
+            disabled={busy === "post-comp-toggle" || s.post_comp_mode}
+          >
+            Post-Comp Mode
+          </button>
         </div>
       </div>
 
       <div className="card" style={{ marginTop: 16 }}>
-        <div className="card-h"><h3>Match Flow</h3>
+        <div className="card-h"><h3>Match Schedule</h3>
           <div className="row" style={{ gap: 10 }}>
-            <span className="muted">Current match on field</span>
+            <span className="muted">Current match</span>
             <Stepper value={curMatch} onChange={saveCurrent} />
           </div>
         </div>
-        <p className="faint" style={{ fontSize: "0.78rem", marginTop: 0 }}>Advancing the field pointer syncs TBA results and settles finished matches. It does not manually lock bets or set winners.</p>
         <div className="table-wrap" style={{ maxHeight: 360, overflowY: "auto" }}>
           <table className="data">
             <thead><tr><th>Match</th><th>Red</th><th>Blue</th><th>Result</th><th>Bet Status</th></tr></thead>
             <tbody>
               {qm.map((m) => (
-                <tr key={m.match_key} style={m.match_number === curMatch ? { background: "rgba(102,51,153,0.22)" } : {}}>
+                <tr key={m.match_key} style={m.match_number === curMatch ? { fontWeight: 700 } : {}}>
                   <td>{m.match_number}{m.match_number === curMatch ? " · live" : ""}</td>
                   <td>
                     <div className="match-team-list">
@@ -167,7 +195,7 @@ export default function AdminDashboard() {
                       ))}
                     </div>
                   </td>
-                  <td>{m.winner ? <span className={`badge ${m.winner === "red" ? "red" : m.winner === "blue" ? "blue" : "muted"}`}>{m.winner}</span> : <span className="faint">—</span>}</td>
+                  <td>{m.winner ? <span className={`badge ${m.winner === "red" ? "red" : m.winner === "blue" ? "blue" : "muted"}`}>{m.winner}</span> : <span className="faint">-</span>}</td>
                   <td>
                     <span className={`badge ${m.betting_locked || m.winner ? "amber" : "green"}`}>
                       {m.winner ? "settled" : m.betting_locked ? "locked by scouting" : "open"}
@@ -179,6 +207,57 @@ export default function AdminDashboard() {
             </tbody>
           </table>
         </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 16 }}>
+        <div className="card-h"><h3>Accounts</h3><span className="badge muted">{scouters.length}</span></div>
+        <div className="table-wrap">
+          <table className="data">
+            <thead><tr><th>Account</th><th>Role</th><th className="num">Matches</th><th className="num">Bucks</th></tr></thead>
+            <tbody>
+              {scouters.map((sc) => (
+                <tr key={sc.scout_id}>
+                  <td>{sc.display_name} <span className="faint mono">{sc.scout_id}</span></td>
+                  <td>
+                    <span className={"badge " + (sc.role === "admin" || sc.role === "strategy" ? "haze" : "muted")}>
+                      {ROLE_LABEL[sc.role as Role] || "Scouter"}
+                    </span>
+                  </td>
+                  <td className="num mono">{sc.matches_scouted}</td>
+                  <td className="num mono">{sc.bucks}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Betting is the last thing that matters at an event: it does not
+          affect a single scouting decision, and putting it up top pushed the
+          event and schedule controls below the fold. */}
+      <div className="admin-betting">
+        <h2 className="admin-section-title">Betting</h2>
+      <div className="card">
+        <h3>Betting Recovery</h3>
+
+        <div className="seg" style={{ marginBottom: 12 }}>
+          <button
+            className={s.betting_enabled ? "on" : ""}
+            onClick={() => toggleBetting(true)}
+            disabled={busy === "betting-toggle" || s.betting_enabled}
+          >
+            Turn On
+          </button>
+          <button
+            className={!s.betting_enabled ? "on red" : ""}
+            onClick={() => toggleBetting(false)}
+            disabled={busy === "betting-toggle" || !s.betting_enabled}
+          >
+            Turn Off
+          </button>
+        </div>
+        <button className="btn danger block" onClick={resetBetting}>Reset everyone to 100 Purple Bucks</button>
+
       </div>
 
       <div className="card" style={{ marginTop: 16 }}>
@@ -207,24 +286,6 @@ export default function AdminDashboard() {
           </div>
         )}
       </div>
-
-      <div className="card" style={{ marginTop: 16 }}>
-        <div className="card-h"><h3>Scouts</h3></div>
-        <div className="table-wrap">
-          <table className="data">
-            <thead><tr><th>Scout</th><th>Role</th><th className="num">Matches</th><th className="num">Bucks</th></tr></thead>
-            <tbody>
-              {scouters.map((sc) => (
-                <tr key={sc.scout_id}>
-                  <td>{sc.display_name}</td>
-                  <td>{sc.is_admin ? <span className="badge haze">admin</span> : <span className="badge muted">scout</span>}</td>
-                  <td className="num mono">{sc.matches_scouted}</td>
-                  <td className="num mono">{sc.bucks}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
       </div>
     </div>
   );

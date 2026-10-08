@@ -5,6 +5,7 @@ function metric(key: string, label: string, description: string, formula: string
 }
 metric("avg_points", "Avg points", "Mean performance points across attended scouting reports, using the configured scoring proxy.", "Σ report points ÷ attended reports");
 metric("matches", "Matches", "Number of attended scouting reports; multiple observers count separately.", "count(attended reports)");
+metric("match_points", "Points per match", "Mean performance points reported for each match; multiple scouts of the same match are averaged.", "Σ points reported for that match ÷ attended reports for that match");
 metric("max_points", "Peak points", "Highest performance score reported for this team.", "max(report points)");
 metric("min_points", "Floor", "Lowest performance score reported for this team.", "min(report points)");
 metric("std_points", "Scoring deviation", "Population standard deviation of report scores; lower means less variation.", "σ = √[Σ(points − mean)² / n]");
@@ -24,9 +25,9 @@ for (const phase of ["auto", "teleop"]) {
   metric(`${phase}_accuracy`, `${phase === "auto" ? "Auto" : "Teleop"} accuracy`, `Share of ${phase} attempts that were made; unavailable without attempts.`, `${phase} made ÷ ${phase} attempts`, true);
   for (const result of ["made", "missed"]) metric(`${phase}_${result}`, `${phase === "auto" ? "Auto" : "Teleop"} ${result}`, `Total ${result} ${phase} attempts across attended reports.`, `Σ ${phase} ${result} attempts`);
 }
-metric("avg_auto_points", "Avg auto points", "Mean autonomous proxy points, including leave and auto-climb bonuses.", "Σ(auto attempt points + 3 × leave + 4 × auto climb) ÷ attended reports");
+metric("avg_auto_points", "Avg auto points", "Mean autonomous proxy points, including leave and auto-climb bonuses.", "Σ(auto attempt points + configured leave bonus + configured auto climb bonus) ÷ attended reports");
 metric("avg_teleop_points", "Avg teleop points", "Mean teleoperated scoring-attempt points before endgame, defense bonuses, and penalties.", "Σ teleop attempt points ÷ attended reports");
-metric("avg_endgame_points", "Avg endgame points", "Mean endgame climb proxy points: none = 0, L1 = 3, L2 = 6, L3 = 12.", "Σ endgame climb points ÷ attended reports");
+metric("avg_endgame_points", "Avg endgame points", "Mean endgame climb points using each report’s season scoring definition.", "Σ endgame climb points ÷ attended reports");
 metric("median_points", "Median points", "Middle report score after sorting; averages the middle pair for an even report count.", "median(report points)");
 metric("recent_points", "Recent form", "Average of the latest three observed match means, or all available matches when fewer than three exist.", "Σ latest match means ÷ min(3, observed matches)");
 metric("trend", "Scoring trend", "Least-squares scoring change per observed match, using chronological match means; requires two matches.", "Σ[(i − mean i)(pointsᵢ − mean points)] ÷ Σ(i − mean i)²");
@@ -47,7 +48,17 @@ metric("qual_pct", "Eye-test percentile", "Percentile of the rating, failure, an
 metric("score", "Review score", "Review priority combining scout disagreement and the gap between output and qualitative percentiles.", "0.55 × min(1, spread / max(6, avg points)) + 0.45 × |output percentile − eye-test percentile|");
 metric("max_spread", "Max spread", "Largest score difference between scouts observing the same team and match.", "max over matches(max report points − min report points)");
 
-const aliases: Record<string, string> = { avg: "avg_points", peak: "max_points", driver: "avg_driver", "defense stops": "total_stops", "consist.": "consistency", "statbotics epa": "epa" };
+metric("defense_capability", "Defense Capability", "Observed defensive contribution on a 0 to 100 scale. Non-defense and failed reports contribute zero; this is a heuristic, not opponent-adjusted impact.", "100 × Σ[active defense × (0.65 × rating / 5 + 0.35 × stops / (stops + 1))] ÷ attended reports");
+metric("skew_distribution", "Skew Distribution", "Adjusted sample skewness of report scores. Positive values indicate a longer high-score tail; requires three reports. s is sample standard deviation.", "n × Σ[(score − mean) / s]³ ÷ [(n − 1)(n − 2)]");
+metric("foul_match_rate", "Foul Match Rate", "Share of attended reports with at least one foul.", "reports with fouls > 0 ÷ attended reports", true);
+metric("climb_success_rate", "Climb Success Rate", "Share of attended reports with an endgame climb other than none.", "reports with a climb ÷ attended reports", true);
+metric("ranking_point_prediction", "Ranking Point Prediction", "Projected total across scheduled qualification matches: actual or projected result points plus fuel and climb bonuses at 90% of configured thresholds. Missing thresholds use event 75th-percentile projected totals; this is a heuristic.", "Σ qualification matches (result RP + fuel bonus + climb bonus)");
+for (const key of ["defense_capability", "consistency", "skew_distribution", "failure_rate", "climb_success_rate"]) {
+  const base = METRICS[key];
+  metric(`l4m_${key}`, `L4M ${base.label}`, `The same measure using reports from the latest four observed matches (or fewer available). ${base.description}`, base.formula, base.percent);
+}
+
+const aliases: Record<string, string> = { floor: "min_points", avg: "avg_points", peak: "max_points", driver: "avg_driver", "defense stops": "total_stops", "consist.": "consistency", "statbotics epa": "epa" };
 export function metricKey(label: string) {
   return aliases[label.toLowerCase()] || Object.keys(METRICS).find(k => METRICS[k].label.toLowerCase() === label.toLowerCase());
 }

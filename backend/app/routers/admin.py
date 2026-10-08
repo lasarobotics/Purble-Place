@@ -1,19 +1,17 @@
 """Admin: event/match control, betting management, analytics."""
-
 from __future__ import annotations
 
 import re
-from datetime import UTC, datetime
-from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
-from pymongo.database import Database
 
+from .. import repo
 from ..analytics import (
     RANK_METRICS,
     analysis_bundle,
     compare_teams,
+    data_analysis,
     data_picklist,
     event_teams,
     rank_teams,
@@ -22,15 +20,15 @@ from ..analytics import (
     team_heatmap,
     team_summary,
 )
-from ..auth import require_admin
+from ..archive import archive_event, archive_if_worthwhile
+from ..auth import require_admin, require_full_admin
 from ..config import settings
-from ..database import database_dependency
 from ..external import sync_event_matches
+from ..firestore_db import guard
+from ..models import ROLE_ADMIN, ROLE_SCOUTER, ROLE_STRATEGY, ROLE_PICKLIST, ROLES, Bet, Scouter
 from ..realtime import emit
-from ..store import all_settings, get_setting, set_setting
-from ..views import ScouterView, list_matches, list_scouters, scouter_names
-from .betting import bet_dict, resolve_match_bets
-from .teams import entry_report
+from .betting import resolve_match_bets
+from .teams import report_dict, scout_name
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -43,27 +41,24 @@ def _youtube_id(value: str) -> str:
     return match.group(1) if match else value
 
 
-def _settle_finished_matches(db: Database, event_key: str) -> int:
+def _settle_finished_matches(event_key: str) -> int:
     settled = 0
-    for match in list_matches(db, event_key):
+    for match in repo.matches_for_event(event_key):
         if match.winner is not None:
-            settled += resolve_match_bets(db, match)
+            settled += resolve_match_bets(match)
     return settled
 
 
 @router.get("/settings")
-def get_settings(
-    db: Database = Depends(database_dependency),
-    _: ScouterView = Depends(require_admin),
-) -> dict:
-    s = all_settings(db)
+def get_settings(_: Scouter = Depends(require_admin)) -> dict:
+    s = repo.all_settings()
     return {
         "current_event": s.get("current_event", ""),
         "current_match": int(s.get("current_match", "0") or 0),
         "betting_enabled": s.get("betting_enabled", "1") == "1",
-        "season": settings.season,
-        "is_azure": False,
-        "is_vercel": settings.is_vercel,
+        "post_comp_mode": s.get("post_comp_mode", "0") == "1",
+        "season": settings.SEASON,
+        "environment": settings.ENVIRONMENT,
     }
 
 
@@ -72,26 +67,32 @@ class EventIn(BaseModel):
 
 
 @router.post("/event")
-def set_event(
+async def set_event(
     body: EventIn,
-    db: Database = Depends(database_dependency),
-    _: ScouterView = Depends(require_admin),
+    _: Scouter = Depends(require_admin),
 ) -> dict:
-    event_key = body.event_key.strip().lower()
-    if event_key and not re.fullmatch(r"\d{4}[a-z0-9]+", event_key):
-        raise HTTPException(
-            status_code=400,
-            detail="Event key must look like 2026txaus (year + TBA short name)",
-        )
-    previous = get_setting(db, "current_event")
-    set_setting(db, "current_event", event_key)
-    if event_key != previous:
-        # New event → the old field pointer is meaningless.
-        set_setting(db, "current_match", "0")
-    matches = sync_event_matches(db, event_key) if event_key else []
-    settled = _settle_finished_matches(db, event_key) if event_key else 0
-    emit(db, "settings_changed", {"current_event": event_key})
-    return {"ok": True, "event": event_key, "matches": len(matches), "bets_settled": settled}
+    event_key = body.event_key.strip()
+    # Freeze the outgoing event first. Switching is the moment its records
+    # stop being readable from the cache, so this is the last chance to roll
+    # them up cheaply, and doing it here means nobody has to remember to.
+    previous = repo.current_event()
+    archived = None
+    if previous and previous != event_key:
+        rolled = archive_if_worthwhile(previous)
+        archived = rolled.event_key if rolled else None
+    # This re-scopes the event-filtered caches, which costs one full read of
+    # the new event's documents: the only bulk read outside a cold start.
+    repo.set_setting("current_event", event_key)
+    matches = await sync_event_matches(event_key) if event_key else []
+    settled = _settle_finished_matches(event_key) if event_key else 0
+    emit("settings_changed", {"current_event": event_key})
+    return {
+        "ok": True,
+        "event": event_key,
+        "matches": len(matches),
+        "bets_settled": settled,
+        "archived": archived,
+    }
 
 
 class CurrentMatchIn(BaseModel):
@@ -99,19 +100,19 @@ class CurrentMatchIn(BaseModel):
 
 
 @router.post("/current-match")
-def set_current_match(
+async def set_current_match(
     body: CurrentMatchIn,
-    db: Database = Depends(database_dependency),
-    _: ScouterView = Depends(require_admin),
+    _: Scouter = Depends(require_admin),
 ) -> dict:
-    set_setting(db, "current_match", str(body.match_number))
-    # Pull fresh results and settle any matches that just finished.
-    event_key = get_setting(db, "current_event")
+    repo.set_setting("current_match", str(body.match_number))
+    # Pull fresh results and settle any matches that just finished. The
+    # schedule sync only writes matches whose data actually changed.
+    event_key = repo.current_event()
     settled = 0
     if event_key:
-        sync_event_matches(db, event_key)
-        settled = _settle_finished_matches(db, event_key)
-    emit(db, "match_advanced", {"current_match": body.match_number})
+        await sync_event_matches(event_key)
+        settled = _settle_finished_matches(event_key)
+    emit("match_advanced", {"current_match": body.match_number})
     return {"ok": True, "current_match": body.match_number, "bets_settled": settled}
 
 
@@ -119,78 +120,101 @@ class ToggleIn(BaseModel):
     enabled: bool
 
 
+def _set_post_comp_unlock_cookie(response: Response) -> None:
+    response.set_cookie(
+        "post_comp_unlocked",
+        "1",
+        max_age=60 * 60 * 24,
+        httponly=False,
+        samesite="lax",
+        path="/",
+    )
+
+
 @router.post("/betting/toggle")
 def toggle_betting(
     body: ToggleIn,
-    db: Database = Depends(database_dependency),
-    _: ScouterView = Depends(require_admin),
+    _: Scouter = Depends(require_admin),
 ) -> dict:
-    set_setting(db, "betting_enabled", "1" if body.enabled else "0")
-    emit(db, "settings_changed", {"betting_enabled": body.enabled})
+    repo.set_setting("betting_enabled", "1" if body.enabled else "0")
+    emit("settings_changed", {"betting_enabled": body.enabled})
     return {"ok": True, "betting_enabled": body.enabled}
 
 
-@router.post("/betting/reset")
-def reset_betting(
-    db: Database = Depends(database_dependency),
-    _: ScouterView = Depends(require_admin),
+@router.post("/post-comp/toggle")
+def toggle_post_comp(
+    body: ToggleIn,
+    response: Response,
+    _: Scouter = Depends(require_admin),
 ) -> dict:
-    """Wipe all bets and reset every scouter to the starting balance."""
-    db.bets.delete_many({})
-    db.scouters.update_many(
-        {},
-        {
-            "$set": {
-                "bucks": settings.starting_bucks,
-                "updated_at": datetime.now(UTC),
-            }
-        },
-    )
-    emit(db, "betting_reset", {})
-    return {"ok": True, "starting": settings.starting_bucks}
+    repo.set_setting("post_comp_mode", "1" if body.enabled else "0")
+    if body.enabled:
+        _set_post_comp_unlock_cookie(response)
+    else:
+        response.delete_cookie("post_comp_unlocked", path="/")
+    emit("settings_changed", {"post_comp_mode": body.enabled})
+    return {"ok": True, "post_comp_mode": body.enabled}
+
+
+@router.post("/betting/reset")
+def reset_betting(_: Scouter = Depends(require_admin)) -> dict:
+    """Wipe all bets and reset every scouter to the starting balance.
+
+    Both halves run as batched commits (chunked below Firestore's 500
+    operations per commit), so resetting a full event is a few commits rather
+    than hundreds of individual writes.
+    """
+    deleted = repo.delete_all_bets()
+    rows = repo.scouters()
+    for s in rows:
+        s.bucks = settings.STARTING_BUCKS
+    repo.save_scouters(rows)
+    emit("betting_reset", {})
+    return {"ok": True, "starting": settings.STARTING_BUCKS, "bets_deleted": deleted}
+
+
+def _admin_bet_dict(bet: Bet) -> dict:
+    return {
+        "id": bet.id,
+        "scout_id": bet.scout_id,
+        "scout_name": scout_name(bet.scout_id),
+        "match_key": bet.match_key,
+        "match_number": bet.match_number,
+        "comp_level": bet.comp_level,
+        "pick": bet.pick,
+        "wager": bet.wager,
+        "win_prob": bet.win_prob,
+        "multiplier": bet.multiplier,
+        "potential_payout": bet.potential_payout,
+        "status": bet.status,
+        "payout": bet.payout,
+        "created_at": bet.created_at.isoformat(),
+    }
 
 
 @router.get("/bets")
-def list_bets(
-    db: Database = Depends(database_dependency),
-    _: ScouterView = Depends(require_admin),
-) -> list[dict]:
-    rows = list(db.bets.find({}).sort("created_at", -1))
-    names = scouter_names(db, (str(b.get("scouter_id")) for b in rows))
-    out = []
-    for b in rows:
-        d = bet_dict(b)
-        d["scout_name"] = names.get(str(b.get("scouter_id")), b.get("scouter_id"))
-        out.append(d)
-    return out
+def list_bets(_: Scouter = Depends(require_admin)) -> list[dict]:
+    return [_admin_bet_dict(bet) for bet in repo.bets()]
 
 
 @router.delete("/bets/{bet_id}")
 def delete_bet(
-    bet_id: str,
-    db: Database = Depends(database_dependency),
-    _: ScouterView = Depends(require_admin),
+    bet_id: int,
+    _: Scouter = Depends(require_admin),
 ) -> dict:
-    bet = db.bets.find_one({"_id": bet_id})
+    bet = repo.bet(bet_id)
     if not bet:
         raise HTTPException(status_code=404, detail="Bet not found")
-    adjust = 0
-    if bet.get("status") in ("open", "lost"):
-        adjust = int(bet.get("wager", 0))
-    elif bet.get("status") == "won":
-        adjust = -max(0, int(bet.get("payout", 0)) - int(bet.get("wager", 0)))
-    scouter = None
-    if adjust:
-        scouter = db.scouters.find_one_and_update(
-            {"_id": bet.get("scouter_id")},
-            {"$inc": {"bucks": adjust}},
-            return_document=True,
-        )
-    else:
-        scouter = db.scouters.find_one({"_id": bet.get("scouter_id")})
-    db.bets.delete_one({"_id": bet_id})
-    emit(db, "bet_deleted", {"id": bet_id})
-    return {"ok": True, "bucks": int(scouter["bucks"]) if scouter else None}
+    scouter = repo.scouter(bet.scout_id)
+    if scouter:
+        if bet.status in ("open", "lost"):
+            scouter.bucks += bet.wager
+        elif bet.status == "won":
+            scouter.bucks -= max(0, bet.payout - bet.wager)
+        repo.save_scouter(scouter)
+    repo.delete_bet(bet_id)
+    emit("bet_deleted", {"id": bet_id})
+    return {"ok": True, "bucks": scouter.bucks if scouter else None}
 
 
 class FilmIn(BaseModel):
@@ -203,30 +227,25 @@ class FilmIn(BaseModel):
 @router.post("/match/youtube")
 def set_film(
     body: FilmIn,
-    db: Database = Depends(database_dependency),
-    _: ScouterView = Depends(require_admin),
+    _: Scouter = Depends(require_admin),
 ) -> dict:
     """Save the film for a match: video link, written takeaway, and the
     timestamped key-events play-by-play."""
-    update: dict[str, Any] = {
-        "youtube_key": _youtube_id(body.youtube_key),
-        "updated_at": datetime.now(UTC),
-    }
-    if body.film_summary is not None:
-        update["film_summary"] = body.film_summary
-    if body.film_events is not None:
-        update["film_events"] = body.film_events
-    result = db.matches.update_one({"_id": body.match_key}, {"$set": update})
-    if result.matched_count == 0:
+    m = repo.match_by_key(body.match_key)
+    if not m:
         raise HTTPException(status_code=404, detail="Match not found")
-    emit(db, "film_updated", {"match_key": body.match_key})
+    m.youtube_key = _youtube_id(body.youtube_key)
+    if body.film_summary is not None:
+        m.film_summary = body.film_summary
+    if body.film_events is not None:
+        m.film_events = body.film_events
+    repo.save_match(m)
+    emit("film_updated", {"match_key": body.match_key})
     return {"ok": True}
 
 
 @router.post("/match/result")
-def set_result(
-    _: ScouterView = Depends(require_admin),
-) -> dict:
+def set_result(_: Scouter = Depends(require_admin)) -> dict:
     raise HTTPException(status_code=400, detail="Manual result setting is disabled. Winners are pulled from TBA.")
 
 
@@ -234,88 +253,85 @@ def set_result(
 # Analytics                                                                    #
 # --------------------------------------------------------------------------- #
 @router.get("/metrics")
-def metrics(_: ScouterView = Depends(require_admin)) -> dict:
+def metrics(_: Scouter = Depends(require_admin)) -> dict:
     return {"metrics": [{"key": k, "label": v} for k, v in RANK_METRICS.items()]}
 
 
 @router.get("/analysis")
 def get_analysis(
     event: str | None = None,
-    db: Database = Depends(database_dependency),
-    _: ScouterView = Depends(require_admin),
+    _: Scouter = Depends(require_admin),
 ) -> dict:
-    return analysis_bundle(db, (event or get_setting(db, "current_event")).strip())
+    return analysis_bundle(repo.resolve_event(event))
 
 
 @router.get("/event-teams")
 def list_event_teams(
     event: str | None = None,
-    db: Database = Depends(database_dependency),
-    _: ScouterView = Depends(require_admin),
+    _: Scouter = Depends(require_admin),
 ) -> list[int]:
-    event_key = (event or get_setting(db, "current_event")).strip()
-    return event_teams(db, event_key)
+    return event_teams(repo.resolve_event(event))
 
 
 @router.get("/rank")
-def rank(
+async def rank(
     metric: str = "avg_points",
     event: str | None = None,
-    db: Database = Depends(database_dependency),
-    _: ScouterView = Depends(require_admin),
+    _: Scouter = Depends(require_admin),
 ) -> dict:
-    event_key = (event or get_setting(db, "current_event")).strip()
-    return {"metric": metric, "teams": rank_teams(db, event_key, metric)}
+    event_key = repo.resolve_event(event)
+    return {"metric": metric, "teams": rank_teams(event_key, metric)}
+
+
+@router.get("/data-analysis")
+async def get_data_analysis(
+    event: str | None = None,
+    _: Scouter = Depends(require_admin),
+) -> dict:
+    return {"teams": data_analysis(repo.resolve_event(event))}
 
 
 @router.get("/data-picklist")
-def get_data_picklist(
+async def get_data_picklist(
     event: str | None = None,
-    db: Database = Depends(database_dependency),
-    _: ScouterView = Depends(require_admin),
+    _: Scouter = Depends(require_admin),
 ) -> dict:
-    event_key = (event or get_setting(db, "current_event")).strip()
-    return data_picklist(db, event_key)
+    return data_picklist(repo.resolve_event(event))
 
 
 @router.get("/disagreements")
 def get_disagreements(
     event: str | None = None,
-    db: Database = Depends(database_dependency),
-    _: ScouterView = Depends(require_admin),
+    _: Scouter = Depends(require_admin),
 ) -> dict:
     """Consensus radar: teams where scouts disagree with each other, or the
     numbers disagree with the qualitative reads."""
-    event_key = (event or get_setting(db, "current_event")).strip()
-    return scout_disagreements(db, event_key)
+    return scout_disagreements(repo.resolve_event(event))
 
 
 @router.get("/compare")
-def compare(
+async def compare(
     teams: str,
     event: str | None = None,
-    db: Database = Depends(database_dependency),
-    _: ScouterView = Depends(require_admin),
+    _: Scouter = Depends(require_admin),
 ) -> dict:
-    event_key = (event or get_setting(db, "current_event")).strip()
+    event_key = repo.resolve_event(event)
     nums = []
     for part in teams.split(","):
         part = part.strip()
         if part.isdigit():
             nums.append(int(part))
     nums = nums[:6]
-    return compare_teams(db, event_key, nums)
+    return compare_teams(event_key, nums)
 
 
 @router.get("/team/{team}/summary")
-def get_team_summary(
+async def get_team_summary(
     team: int,
     event: str | None = None,
-    db: Database = Depends(database_dependency),
-    _: ScouterView = Depends(require_admin),
+    _: Scouter = Depends(require_admin),
 ) -> dict:
-    event_key = (event or get_setting(db, "current_event")).strip()
-    return team_summary(db, event_key, team)
+    return team_summary(repo.resolve_event(event), team)
 
 
 @router.get("/team/{team}/heatmap")
@@ -323,43 +339,186 @@ def get_team_heatmap(
     team: int,
     phase: str | None = None,
     event: str | None = None,
-    db: Database = Depends(database_dependency),
-    _: ScouterView = Depends(require_admin),
+    _: Scouter = Depends(require_admin),
 ) -> dict:
-    event_key = (event or get_setting(db, "current_event")).strip()
-    return team_heatmap(db, event_key, team, phase)
+    return team_heatmap(repo.resolve_event(event), team, phase)
 
 
 @router.get("/team/{team}/reports")
 def get_team_reports(
     team: int,
     event: str | None = None,
-    db: Database = Depends(database_dependency),
-    _: ScouterView = Depends(require_admin),
+    _: Scouter = Depends(require_admin),
 ) -> list[dict]:
-    event_key = (event or get_setting(db, "current_event")).strip()
-    rows = team_entries(db, event_key, team)
-    names = scouter_names(db, (e.scout_id for e in rows))
-    return [entry_report(e, names.get(e.scout_id, e.scout_id)) for e in rows]
+    event_key = repo.resolve_event(event)
+    return [
+        report_dict(entry, scout_name(entry.scout_id))
+        for entry in team_entries(event_key, team)
+    ]
 
 
 @router.get("/scouters")
-def scouters(
-    db: Database = Depends(database_dependency),
-    _: ScouterView = Depends(require_admin),
-) -> list[dict]:
+def scouters(_: Scouter = Depends(require_admin)) -> list[dict]:
     out = []
-    for s in list_scouters(db):
+    for s in repo.scouters():
+        seen = repo.last_seen(s)
         out.append(
             {
                 "scout_id": s.scout_id,
                 "s_number": s.s_number,
-                "display_name": s.display_name,
+                "display_name": s.display_name or s.scout_id,
+                "role": s.role,
                 "is_admin": s.is_admin,
                 "bucks": s.bucks,
                 "matches_scouted": s.matches_scouted,
-                "last_seen": s.last_seen.isoformat(),
+                "last_seen": seen.isoformat() if seen else None,
             }
         )
     out.sort(key=lambda r: -r["matches_scouted"])
     return out
+
+
+class RoleIn(BaseModel):
+    role: str
+
+
+@router.post("/scouters/{scout_id}/role")
+def set_role(
+    scout_id: str,
+    body: RoleIn,
+    admin: Scouter = Depends(require_full_admin),
+) -> dict:
+    """Change an account's role.
+
+    Admin only, not strategy: letting strategy accounts promote each other
+    would make the distinction meaningless.
+    """
+    role = (body.role or "").strip().lower()
+    if role not in ROLES:
+        raise HTTPException(
+            status_code=400, detail=f"Role must be one of {', '.join(ROLES)}"
+        )
+    target = repo.scouter(scout_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Scouter not found")
+    if target.scout_id == admin.scout_id and role != ROLE_ADMIN:
+        # Otherwise the last admin can lock everyone out of event control.
+        raise HTTPException(
+            status_code=400, detail="You cannot remove your own admin role"
+        )
+    target.role = role
+    repo.save_scouter(target)
+    emit("roles_changed", {"scout_id": target.scout_id, "role": role})
+    return {"ok": True, "scout_id": target.scout_id, "role": role}
+
+
+@router.get("/roles")
+def list_roles(_: Scouter = Depends(require_admin)) -> dict:
+    return {
+        "roles": [
+            {"key": ROLE_SCOUTER, "label": "Scouter",
+             "description": "Collects match and pit data. Builds their own picklists."},
+            {"key": ROLE_STRATEGY, "label": "Strategy",
+             "description": "Everything a scouter does, plus all analysis screens. "
+                            "Their picklists outrank scouter lists in the meeting."},
+            {"key": ROLE_ADMIN, "label": "Admin",
+             "description": "Strategy, plus event control, film and account roles."},
+            {"key": ROLE_PICKLIST, "label": "Picklist meeting",
+             "description": "Shared screen account for the picklist meeting. "
+                            "Can only view teams and edit picklists."},
+        ]
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Firestore quota                                                              #
+# --------------------------------------------------------------------------- #
+@router.get("/firestore-usage")
+def firestore_usage(_: Scouter = Depends(require_admin)) -> dict:
+    """Where today's Firestore document operations went.
+
+    ``projected_12h`` extrapolates the current rate over a full competition
+    day: if it stays under the free-tier limits, the event costs nothing.
+    """
+    return {
+        **guard.snapshot(),
+        "cache": repo.cache_stats(),
+        "note": (
+            "Reads are dominated by the one-time load at startup; steady-state "
+            "requests are served from memory. Writes track actual submissions."
+        ),
+    }
+
+
+@router.post("/cache/reload")
+def reload_cache(_: Scouter = Depends(require_admin)) -> dict:
+    """Re-read the current event from Firestore.
+
+    Only needed if data was changed outside this service (a console edit, a
+    manual import). Costs one read per document in the event.
+    """
+    event_key = repo.current_event()
+    from ..cache import store
+
+    store.retarget_event("")
+    store.retarget_event(event_key)
+    repo.invalidate_memo()
+    return {"ok": True, "event": event_key, "cache": repo.cache_stats()}
+
+
+# --------------------------------------------------------------------------- #
+# Event archives                                                               #
+# --------------------------------------------------------------------------- #
+@router.get("/archives")
+def list_archives(_: Scouter = Depends(require_admin)) -> list[dict]:
+    """Every event this installation has finished, newest first.
+
+    Summaries only. The per-team detail is a second request, because the
+    whole point of the archive is that the list stays small enough to load
+    without thinking about it.
+    """
+    return [
+        {
+            "event_key": a.event_key,
+            "name": a.name,
+            "season": a.season,
+            "game_name": a.game_name,
+            "archived_at": a.archived_at.isoformat(),
+            "counts": a.counts,
+        }
+        for a in repo.archives()
+    ]
+
+
+@router.get("/archives/{event_key}")
+def get_archive(event_key: str, _: Scouter = Depends(require_admin)) -> dict:
+    row = repo.archive(event_key)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No archive for {event_key}")
+    return {
+        "event_key": row.event_key,
+        "name": row.name,
+        "season": row.season,
+        "game_name": row.game_name,
+        "archived_at": row.archived_at.isoformat(),
+        "counts": row.counts,
+        "teams": row.teams,
+        "pit": row.pit,
+        "picklists": row.picklists,
+    }
+
+
+@router.post("/archives/{event_key}")
+def create_archive(event_key: str, _: Scouter = Depends(require_admin)) -> dict:
+    """Archive an event now.
+
+    Normally this happens by itself when the current event changes. Doing it
+    by hand is for taking a checkpoint mid-event, or for rebuilding an archive
+    after late scouting has synced in. Re-running overwrites, so it is safe.
+    """
+    event_key = (event_key or "").strip()
+    if event_key != repo.current_event() and not repo.event(event_key):
+        raise HTTPException(status_code=404, detail=f"Unknown event {event_key}")
+    row = archive_event(event_key)
+    emit("event_archived", {"event": row.event_key})
+    return {"ok": True, "event": row.event_key, "counts": row.counts}

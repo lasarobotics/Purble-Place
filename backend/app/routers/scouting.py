@@ -1,35 +1,105 @@
-"""Match scouting + pit scouting."""
 
+"""Match scouting + pit scouting.
+
+Submissions follow the direct-to-cloud contract: the device assigns a UUID and
+a SHA-256 payload hash; the server commits exactly once, returns the original
+acknowledgement for identical retries, and 409s a UUID reused with a different
+payload (corrections must be new records that supersede the original).
+
+On Firestore that contract is enforced by the storage layer rather than by
+application logic: the submission UUID **is** the document ID, and the write
+uses ``create()``, which fails if the document already exists. A device that
+replays its whole offline queue cannot produce a duplicate.
+"""
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from pymongo.database import Database
 
+from .. import repo, schema
 from ..auth import current_scouter
-from ..database import database_dependency
+from ..cache import WriteTooLarge
 from ..external import sync_team
-from ..models import MatchScoutingDocument, PitScoutingDocument, ScoutingData
+from ..models import PitEntry, Scouter, ScoutEntry
 from ..realtime import emit
-from ..repositories import ConflictError, HazeHubRepository, ReferenceNotFoundError
 from ..scoring import compute_points
-from ..store import get_setting
-from ..views import EntryView, ScouterView, list_entries
 
 router = APIRouter(prefix="/api/scout", tags=["scouting"])
 
-PAYLOAD_KEYS = (
-    "heatmap", "auto_leave", "auto_climb", "climb", "climb_seconds",
+# Fields that define the observation itself (identity + payload). The server
+# hashes these for clients that didn't send a hash of their own.
+_HASHED_FIELDS = (
+    "event_key", "match_number", "comp_level", "team_number", "alliance",
+    "station", "heatmap", "auto_leave", "auto_climb", "climb", "climb_seconds",
     "tags", "played_defense", "defense_rating", "defense_on",
-    "successful_stops", "driver_skill", "speed_rating",
-    "failure", "failure_details",
+    "successful_stops", "driver_skill", "speed_rating", "fouls",
+    "failure", "failure_details", "no_show", "notes",
 )
 
 
+def canonical_hash(data: dict[str, Any]) -> str:
+    """SHA-256 of the canonical (sorted-keys) JSON of the observation."""
+    subset = {k: data.get(k) for k in _HASHED_FIELDS}
+    canonical = json.dumps(subset, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def validate_submission(data: dict[str, Any]) -> str | None:
+    """Field validation shared by the single and batch paths.
+
+    Returns an error string (or None). Kept out of the Pydantic model on
+    purpose: one invalid record in a batch must fail individually, not 422 the
+    whole request.
+
+    The size bounds are Firestore's, pulled forward: a document is capped at
+    1 MiB and at 40,000 index entries, so an absurd heatmap is rejected here
+    with a clear message instead of failing mid-commit.
+    """
+    try:
+        if int(data.get("match_number") or 0) < 1:
+            return "match_number must be at least 1"
+        if int(data.get("team_number") or 0) < 1:
+            return "team_number must be at least 1"
+        if not 1 <= int(data.get("station") or 1) <= 3:
+            return "station must be 1-3"
+    except (TypeError, ValueError):
+        return "match_number/team_number/station must be integers"
+    if data.get("alliance") not in ("red", "blue"):
+        return "alliance must be red or blue"
+    if data.get("comp_level") not in ("qm", "qf", "sf", "f"):
+        return "comp_level must be qm/qf/sf/f"
+    if len(str(data.get("notes") or "")) > schema.MAX_NOTES_CHARS:
+        return f"notes over maximum length ({schema.MAX_NOTES_CHARS})"
+    if len(data.get("heatmap") or []) > schema.MAX_HEATMAP_ATTEMPTS:
+        return f"heatmap over maximum length ({schema.MAX_HEATMAP_ATTEMPTS} attempts)"
+    if len(data.get("tags") or []) > schema.MAX_TAGS:
+        return f"too many tags (max {schema.MAX_TAGS})"
+    return None
+
+
 class ScoutIn(BaseModel):
+    season_id: str = ""
+    game_version: int = 0
+    form_id: str = ""
+    form_version: int = 0
+    responses: dict[str, Any] = Field(default_factory=dict)
+    actions: list[dict[str, Any]] = Field(default_factory=list)
     client_uuid: Optional[str] = None
+    # Canonical idempotency key assigned on the device (falls back to
+    # client_uuid, then a server-generated UUID, for older clients).
+    submission_id: Optional[str] = None
+    # When the device created the record (ISO 8601). Preserved through sync so
+    # the cloud keeps the true observation time even for records synced late.
+    client_ts: Optional[str] = None
+    # SHA-256 of the canonical payload, computed on the device.
+    payload_hash: Optional[str] = None
+    schema_version: int = 1
+    # Corrections: a new UUID that supersedes an acknowledged record.
+    supersedes_submission_id: Optional[str] = None
     event_key: Optional[str] = None
     match_number: int
     comp_level: str = "qm"
@@ -58,10 +128,10 @@ class ScoutIn(BaseModel):
     notes: str = ""
 
 
-def entry_dict(e: EntryView) -> dict:
+def _entry_dict(e: ScoutEntry) -> dict:
     return {
         "id": e.id,
-        "client_uuid": e.client_uuid,
+        "client_uuid": e.client_uuid or e.submission_id,
         "event_key": e.event_key,
         "match_number": e.match_number,
         "comp_level": e.comp_level,
@@ -88,128 +158,129 @@ def entry_dict(e: EntryView) -> dict:
         "notes": e.notes,
         "points": e.points,
         "created_at": e.created_at.isoformat(),
+        # Direct-to-cloud submission envelope. A record in this API *is* in
+        # Firestore, so its status is always "synced" from the server's view;
+        # the device's own queue tracks anything not yet committed here.
+        "submission_id": e.submission_id,
+        "client_ts": e.client_ts.isoformat() if e.client_ts else None,
+        "azure_received_at": e.azure_received_at.isoformat() if e.azure_received_at else None,
+        "payload_hash": e.payload_hash,
+        "schema_version": e.schema_version,
+        "supersedes_submission_id": e.supersedes_submission_id,
+        "cloud_status": e.cloud_status,
     }
 
 
-def build_document(body: ScoutIn, event_key: str, scout_id: str) -> MatchScoutingDocument:
-    submission = body.model_dump()
-    payload = {k: submission[k] for k in PAYLOAD_KEYS}
-    payload["foul_count"] = int(body.fouls or 0)
-    points = 0.0 if body.no_show else compute_points(
-        {**submission, "foul_count": payload["foul_count"]}
-    )
-    return MatchScoutingDocument(
-        client_submission_id=body.client_uuid or None,
-        event_key=event_key,
-        comp_level=body.comp_level,
-        match_num=int(body.match_number),
-        team_num=int(body.team_number),
-        alliance=body.alliance,
-        station=max(1, min(3, int(body.station or 1))),
-        scouter_id=scout_id,
-        data=ScoutingData(**payload),
-        points=points,
-        no_show=bool(body.no_show),
-        comments=body.notes or None,
-    )
+def lock_betting_for_match(event_key: str, comp_level: str, match_number: int) -> bool:
+    """First scouting report on a match closes its betting window.
 
-
-def find_by_client_uuid(db: Database, client_uuid: str | None) -> EntryView | None:
-    if not client_uuid:
-        return None
-    doc = db.match_scouting.find_one({"client_submission_id": client_uuid})
-    return EntryView(doc) if doc else None
+    Returns whether a match record was found. ``repo.save_match`` skips the
+    Firestore write when the flag was already set, so the second through
+    twelfth reports on the same match cost nothing.
+    """
+    match = repo.match_by_number(event_key, comp_level, match_number)
+    if match is None:
+        return False
+    if not match.betting_locked:
+        match.betting_locked = True
+        repo.save_match(match)
+    return True
 
 
 @router.post("")
-def submit_scout(
+async def submit_scout(
     body: ScoutIn,
-    db: Database = Depends(database_dependency),
-    scouter: ScouterView = Depends(current_scouter),
+    scouter: Scouter = Depends(current_scouter),
 ) -> dict:
-    event_key = (body.event_key or get_setting(db, "current_event")).strip()
-    if not event_key:
-        raise HTTPException(status_code=400, detail="No event configured yet")
+    event_key = repo.resolve_event(body.event_key)
 
-    # Idempotency: re-syncing the same offline entry must not duplicate.
-    existing = find_by_client_uuid(db, body.client_uuid)
-    if existing:
-        return {"ok": True, "duplicate": True, "entry": entry_dict(existing)}
+    error = validate_submission(body.model_dump())
+    if error:
+        raise HTTPException(status_code=422, detail=error)
 
-    try:
-        document = build_document(body, event_key, scouter.scout_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-    repo = HazeHubRepository(db)
-    try:
-        stored = repo.submit_match_scouting(document)
-    except ReferenceNotFoundError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except ConflictError as exc:
-        # Unique-key clash: either the same offline entry raced in, or this
-        # scouter already covered this robot in this match.
-        existing = find_by_client_uuid(db, body.client_uuid)
+    # Direct-to-cloud idempotency (PUT semantics on the submission UUID):
+    #   same UUID + same payload hash      → return the original acknowledgement
+    #   same UUID + different payload hash → 409, never overwrite
+    key = body.submission_id or body.client_uuid
+    if key:
+        existing = repo.scouting_by_submission(key)
         if existing:
-            return {"ok": True, "duplicate": True, "entry": entry_dict(existing)}
-        raise HTTPException(
-            status_code=409,
-            detail="You already submitted a report for this robot in this match",
-        ) from exc
+            if (
+                body.payload_hash
+                and existing.payload_hash
+                and body.payload_hash != existing.payload_hash
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Submission UUID exists with a different payload: "
+                    "submit a correction instead of overwriting",
+                )
+            return {"ok": True, "duplicate": True, "entry": _entry_dict(existing)}
 
-    db.scouters.update_one(
-        {"_id": scouter.scout_id}, {"$inc": {"matches_scouted": 1}}
-    )
+    data = body.model_dump()
+    data["event_key"] = event_key
+    data["scout_id"] = scouter.scout_id
+    # A no-show robot scores nothing regardless of stray taps.
+    data["points"] = 0.0 if body.no_show else compute_points(data)
+    if not data.get("payload_hash"):
+        # Older clients don't hash; compute one server-side so later retries
+        # and recovery imports can still be conflict-checked.
+        data["payload_hash"] = canonical_hash(data)
 
-    # First scouting report on a match closes its betting window.
-    match = db.matches.find_one({"_id": document.match_key}, {"betting_locked": 1})
-    if match and not match.get("betting_locked"):
-        db.matches.update_one(
-            {"_id": document.match_key}, {"$set": {"betting_locked": True}}
-        )
+    entry = ScoutEntry.from_submission(data)
+
+    try:
+        created = repo.create_scouting(entry)
+    except WriteTooLarge as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    if not created:
+        # Lost a race with a concurrent retry of the same UUID.
+        stored = repo.scouting_by_submission(entry.submission_id)
+        if stored:
+            return {"ok": True, "duplicate": True, "entry": _entry_dict(stored)}
+
+    # Counter bumps are coalesced: a scout submitting six reports in a minute
+    # costs one scouters write, not six.
+    scouter.matches_scouted += 1
+    repo.save_scouter(scouter, coalesce=True)
+
+    matched = lock_betting_for_match(event_key, body.comp_level, body.match_number)
 
     # Warm the team cache the first time we see a team (best effort).
-    if db.team_cache.find_one({"_id": int(body.team_number)}, {"_id": 1}) is None:
+    if repo.team(body.team_number) is None:
         try:
-            sync_team(db, body.team_number)
-        except Exception:
+            await sync_team(body.team_number)
+        except Exception:  # noqa: BLE001
             pass
 
-    emit(
-        db,
-        "scout_submitted",
-        {
-            "team": document.team_num,
-            "match": document.match_num,
-            "bets_locked": bool(match),
-        },
-    )
-    return {"ok": True, "duplicate": False, "entry": entry_dict(EntryView(stored))}
+    # Acknowledgement: the record is committed to Firestore: the device can
+    # mark it "acknowledged"; every dashboard refetches.
+    emit("submission_ack", {
+        "submission_id": entry.submission_id,
+        "id": entry.id,
+        "azure_received_at": entry.azure_received_at.isoformat(),
+    })
+    emit("scout_submitted", {
+        "team": entry.team_number,
+        "match": entry.match_number,
+        "bets_locked": matched,
+    })
+    return {"ok": True, "duplicate": False, "entry": _entry_dict(entry)}
 
 
 @router.get("/mine")
-def my_entries(
-    db: Database = Depends(database_dependency),
-    scouter: ScouterView = Depends(current_scouter),
-) -> list[dict]:
-    rows = list_entries(db, scout_id=scouter.scout_id)
-    rows.sort(key=lambda e: e.created_at, reverse=True)
-    return [entry_dict(e) for e in rows]
+def my_entries(scouter: Scouter = Depends(current_scouter)) -> list[dict]:
+    return [_entry_dict(e) for e in repo.scouting_for_scout(scouter.scout_id)]
 
 
 @router.get("/last-assignment")
-def last_assignment(
-    db: Database = Depends(database_dependency),
-    scouter: ScouterView = Depends(current_scouter),
-) -> dict:
+def last_assignment(scouter: Scouter = Depends(current_scouter)) -> dict:
     """Remember the scouter's last alliance + station so the next match
     auto-fills the same slot (they can still change it)."""
-    doc = db.match_scouting.find_one(
-        {"scouter_id": scouter.scout_id}, sort=[("submitted_at", -1)]
-    )
-    if not doc:
+    rows = repo.scouting_for_scout(scouter.scout_id)
+    if not rows:
         return {"alliance": "red", "station": 1}
-    last = EntryView(doc)
+    last = rows[0]
     return {"alliance": last.alliance, "station": last.station}
 
 
@@ -217,21 +288,49 @@ def last_assignment(
 def entries_for_match(
     match_number: int,
     event: str | None = None,
-    db: Database = Depends(database_dependency),
-    _: ScouterView = Depends(current_scouter),
+    _: Scouter = Depends(current_scouter),
 ) -> list[dict]:
-    event_key = (event or get_setting(db, "current_event")).strip()
-    rows = list_entries(db, event_key, match_number=match_number)
-    return [entry_dict(e) for e in rows]
+    event_key = repo.resolve_event(event)
+    return [_entry_dict(e) for e in repo.scouting_for_match(event_key, match_number)]
+
+
+@router.get("/team/{team_number}")
+def entries_for_team(
+    team_number: int,
+    event: str | None = None,
+    _: Scouter = Depends(current_scouter),
+) -> list[dict]:
+    """Every report on one robot this event, in match order.
+
+    Backs the ``@all:field`` reference in a picklist justification, which
+    pulls one measurement across the whole event rather than one match. Same
+    shape as ``/match/{n}`` so the reader renders both the same way.
+    """
+    event_key = repo.resolve_event(event)
+    rows = sorted(
+        repo.scouting_for_team(event_key, team_number),
+        key=lambda e: (e.match_number, e.id or 0),
+    )
+    return [_entry_dict(e) for e in rows]
 
 
 # --------------------------------------------------------------------------- #
 # Pit scouting                                                                 #
 # --------------------------------------------------------------------------- #
 class PitIn(BaseModel):
+    """A pit report.
+
+    Two ways in. The named fields are the ones the analytics and the team
+    detail popup read. ``answers`` is what the pit form actually collected,
+    keyed by field key: anything whose key matches a named field is folded
+    into it, and everything else is kept in ``responses`` so a form built for
+    a new game does not need a schema change to store its questions.
+    """
+
     event_key: Optional[str] = None
     team_number: int
     drivetrain: str = ""
+    archetype: str = ""
     weight_lbs: Optional[float] = None
     width_in: Optional[float] = None
     length_in: Optional[float] = None
@@ -240,6 +339,15 @@ class PitIn(BaseModel):
     capabilities: list[str] = Field(default_factory=list)
     robot_photo: str = ""
     notes: str = ""
+    answers: dict[str, Any] = Field(default_factory=dict)
+    form_version: int = 0
+
+
+#: PitEntry columns that a form field may fill in by using the same key.
+PIT_COLUMNS = {
+    "drivetrain", "archetype", "weight_lbs", "width_in", "length_in",
+    "can_climb", "auto_routine", "capabilities", "robot_photo", "notes",
+}
 
 
 pit_router = APIRouter(prefix="/api/pit", tags=["pit"])
@@ -248,56 +356,94 @@ pit_router = APIRouter(prefix="/api/pit", tags=["pit"])
 @pit_router.post("")
 def submit_pit(
     body: PitIn,
-    db: Database = Depends(database_dependency),
-    scouter: ScouterView = Depends(current_scouter),
+    scouter: Scouter = Depends(current_scouter),
 ) -> dict:
-    event_key = (body.event_key or get_setting(db, "current_event")).strip()
-    if not event_key:
-        raise HTTPException(status_code=400, detail="No event configured yet")
+    event_key = repo.resolve_event(body.event_key)
+    row = repo.pit(event_key, body.team_number) or PitEntry(
+        event_key=event_key, team_number=body.team_number
+    )
+    data = body.model_dump()
+    data.pop("event_key", None)
+    answers = data.pop("answers", None) or {}
+    form_version = data.pop("form_version", 0)
+
+    for k, v in data.items():
+        setattr(row, k, v)
+
+    # Split what the form collected: known keys fill their column so the
+    # existing screens keep working, the rest is kept verbatim.
+    extra = {}
+    for key, value in answers.items():
+        if key in PIT_COLUMNS:
+            setattr(row, key, value)
+        elif key != "team_number":
+            extra[key] = value
+    if answers:
+        row.responses = extra
+        row.form_version = int(form_version or 0)
+
+    row.event_key = event_key
+    row.scout_id = scouter.scout_id
     try:
-        document = PitScoutingDocument(
-            event_key=event_key,
-            team_num=int(body.team_number),
-            scouter_id=scouter.scout_id,
-            drivetrain=body.drivetrain,
-            weight_lbs=body.weight_lbs,
-            width_in=body.width_in,
-            length_in=body.length_in,
-            can_climb=body.can_climb,
-            auto_routine=body.auto_routine,
-            capabilities=body.capabilities,
-            robot_photo=body.robot_photo,
-            notes=body.notes,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    HazeHubRepository(db).upsert_pit_scouting(document)
-    emit(db, "pit_submitted", {"team": body.team_number})
+        repo.save_pit(row)
+    except WriteTooLarge as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    emit("pit_submitted", {"team": body.team_number})
     return {"ok": True}
+
+
+def _pit_dict(row) -> dict:
+    return {
+        "team_number": row.team_number,
+        "drivetrain": row.drivetrain,
+        "archetype": row.archetype,
+        "weight_lbs": row.weight_lbs,
+        "width_in": row.width_in,
+        "length_in": row.length_in,
+        "can_climb": row.can_climb,
+        "auto_routine": row.auto_routine,
+        "capabilities": row.capabilities,
+        "robot_photo": row.robot_photo,
+        "notes": row.notes,
+        "responses": row.responses,
+        "form_version": row.form_version,
+        "scout_id": row.scout_id,
+        "updated_at": row.updated_at.isoformat(),
+    }
+
+
+@pit_router.get("")
+def list_pit(
+    event: str | None = None,
+    photos: bool = False,
+    _: Scouter = Depends(current_scouter),
+) -> list[dict]:
+    """Every pit report at this event.
+
+    Photos are base64 blobs measured in hundreds of KiB, so the list omits
+    them unless asked; the page that shows one fetches that team on its own.
+    """
+    event_key = repo.resolve_event(event)
+    out = []
+    for row in repo.pits_for_event(event_key):
+        data = _pit_dict(row)
+        if not photos:
+            data["robot_photo"] = ""
+            data["has_photo"] = bool(row.robot_photo)
+        else:
+            data["has_photo"] = bool(row.robot_photo)
+        out.append(data)
+    return out
 
 
 @pit_router.get("/{team_number}")
 def get_pit(
     team_number: int,
     event: str | None = None,
-    db: Database = Depends(database_dependency),
-    _: ScouterView = Depends(current_scouter),
+    _: Scouter = Depends(current_scouter),
 ) -> dict | None:
-    event_key = (event or get_setting(db, "current_event")).strip()
-    row = db.pit_scouting.find_one(
-        {"event_key": event_key, "team_num": int(team_number)}
-    )
+    event_key = repo.resolve_event(event)
+    row = repo.pit(event_key, team_number)
     if not row:
         return None
-    return {
-        "team_number": row.get("team_num"),
-        "drivetrain": row.get("drivetrain") or "",
-        "weight_lbs": row.get("weight_lbs"),
-        "width_in": row.get("width_in"),
-        "length_in": row.get("length_in"),
-        "can_climb": row.get("can_climb") or "none",
-        "auto_routine": row.get("auto_routine") or "",
-        "capabilities": row.get("capabilities") or [],
-        "robot_photo": row.get("robot_photo") or "",
-        "notes": row.get("notes") or "",
-    }
+    return _pit_dict(row)

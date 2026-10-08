@@ -4,39 +4,71 @@ import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth";
 import { useLiveEvents } from "@/lib/ws";
+import { api } from "@/lib/api";
+import { loadSchedule } from "@/lib/schedule";
 import { emitBus, onBus, DATA_EVENTS } from "@/lib/bus";
 import { flushQueue } from "@/lib/sync";
-import { pendingCount } from "@/lib/db";
+import { pendingCount, requestPersistentStorage } from "@/lib/db";
+import { useBattery } from "@/lib/battery";
+import { useOffline } from "@/lib/offline";
 import { Loading } from "./ui";
 import { Icon } from "./icons";
-import { api } from "@/lib/api";
+import { ROLE_LABEL } from "@/lib/types";
 
-const MAIN_NAV = [
+// Betting is not in here on purpose: it lives on the scouting page now, next
+// to the match it is about, rather than behind a tab of its own.
+interface NavItem { href: string; label: string; icon: string }
+
+const MAIN_NAV: NavItem[] = [
   { href: "/home", label: "Home", icon: "home" },
   { href: "/scout", label: "Scout", icon: "clipboard" },
-  { href: "/prematch", label: "Pre-Match", icon: "bot" },
-  { href: "/film", label: "Film", icon: "film" },
-  { href: "/betting", label: "Betting", icon: "coins" },
+  { href: "/pit", label: "Pit Scout", icon: "wrench" },
   { href: "/picklists", label: "Picklists", icon: "list" },
+  { href: "/status", label: "Devices", icon: "refresh" },
   { href: "/account", label: "Account", icon: "user" },
 ];
 
-const ADMIN_NAV = [
-  { href: "/admin", label: "Dashboard", icon: "sliders" },
-  { href: "/admin/team-search", label: "Team Search", icon: "search" },
-  { href: "/admin/team-rank", label: "Team Rank", icon: "chart" },
-  { href: "/admin/data-picklist", label: "Data Picklist", icon: "trend" },
-  { href: "/admin/compare", label: "Compare Robots", icon: "scale" },
-  { href: "/admin/consensus", label: "Consensus Radar", icon: "radar" },
-  { href: "/admin/picklists", label: "All Pick Lists", icon: "folder" },
+// The picklist meeting account reaches exactly two screens. Everything else
+// is hidden here and refused by the server, so a mis-tap on a shared screen
+// cannot advance the match or settle bets.
+const PICKLIST_NAV = [
+  { href: "/meeting", label: "Picklist Meeting", icon: "folder" },
+  { href: "/account", label: "Account", icon: "user" },
+];
+
+// Admin navigation groups event operations, analysis and picklists.
+const ADMIN_GROUPS: { title: string; items: NavItem[] }[] = [
+  {
+    title: "Event",
+    items: [
+      { href: "/admin", label: "Dashboard", icon: "sliders" },
+      { href: "/admin/system", label: "System Health", icon: "refresh" },
+    ],
+  },
+  {
+    title: "Analysis",
+    items: [
+      { href: "/admin/team-search", label: "Team Search", icon: "search" },
+      { href: "/admin/team-rank", label: "Team Rank", icon: "chart" },
+      { href: "/admin/compare", label: "Compare", icon: "scale" },
+    ],
+  },
+  {
+    title: "Picklists",
+    items: [
+      { href: "/meeting", label: "Picklist Meeting", icon: "folder" },
+      { href: "/admin/picklists", label: "All Picklists", icon: "folder" },
+      { href: "/admin/data-picklist", label: "Data Picklist", icon: "trend" },
+    ],
+  },
 ];
 
 const MOBILE_NAV = [
   { href: "/home", label: "Home", icon: "home" },
   { href: "/scout", label: "Scout", icon: "clipboard" },
-  { href: "/prematch", label: "Match", icon: "bot" },
-  { href: "/film", label: "Film", icon: "film" },
-  { href: "/betting", label: "Bets", icon: "coins" },
+  { href: "/pit", label: "Pit", icon: "wrench" },
+  { href: "/picklists", label: "Picks", icon: "list" },
+  { href: "/status", label: "Devices", icon: "refresh" },
 ];
 
 export function Shell({ children }: { children: React.ReactNode }) {
@@ -45,62 +77,49 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [online, setOnline] = useState(true);
   const [pending, setPending] = useState(0);
-  const [snapshot, setSnapshot] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (!session) return;
-    // One shared event analysis bundle prepares every ranking and team view.
-    api("/api/matches?include_teams=true").catch(() => {});
-    if (session.is_admin) api("/api/admin/rank?metric=avg_points").catch(() => {});
-    let timer: ReturnType<typeof setTimeout>;
-    const warm = () => {
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        api("/api/matches?include_teams=true").catch(() => {});
-        if (session.is_admin) api("/api/admin/rank?metric=avg_points").catch(() => {});
-      }, 250);
-    };
-    const unsubscribe = onBus(event => {
-      if (DATA_EVENTS.includes(event)) {
-        clearTimeout(timer);
-        timer = setTimeout(() => {
-          if (session.is_admin) api("/api/admin/rank?metric=avg_points").catch(() => {});
-          if (event === "settings_changed") api("/api/matches?include_teams=true").catch(() => {});
-        }, 250);
-      }
-    });
-    window.addEventListener("online", warm);
-    return () => { unsubscribe(); clearTimeout(timer); window.removeEventListener("online", warm); };
-  }, [session?.scout_id]);
-
-  useEffect(() => {
-    const onSnapshot = (e: Event) => setSnapshot((e as CustomEvent<number>).detail);
-    window.addEventListener("offline-snapshot", onSnapshot);
-    return () => window.removeEventListener("offline-snapshot", onSnapshot);
-  }, []);
-
-  useEffect(() => {
-    if (!session || !("serviceWorker" in navigator) || process.env.NODE_ENV !== "production") return;
-    const prepare = async () => {
-      try {
-        await navigator.serviceWorker.register("/sw.js");
-        const registration = await navigator.serviceWorker.ready;
-        registration.active?.postMessage({ type: "WARM_ROUTES", routes: ["/login", ...MAIN_NAV.map(n => n.href), ...(session.is_admin ? ADMIN_NAV.map(n => n.href) : [])] });
-      } catch { /* Online app remains usable if offline storage is unavailable. */ }
-    };
-    prepare();
-    window.addEventListener("online", prepare);
-    return () => window.removeEventListener("online", prepare);
-  }, [session?.scout_id]);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const battery = useBattery();
+  // Registers the service worker that keeps the app loadable with no signal.
+  const offline = useOffline();
 
   useEffect(() => {
     if (!loading && !session) router.replace("/login");
   }, [loading, session, router]);
 
+  // Keep a picklist meeting account inside the two screens it is for. The
+  // server rejects the rest anyway; this stops the account from landing on a
+  // page of permission errors.
+  useEffect(() => {
+    if (!session?.picklist_only) return;
+    const allowed = ["/meeting", "/account"];
+    if (!allowed.some((prefix) => pathname.startsWith(prefix))) router.replace("/meeting");
+  }, [session, pathname, router]);
+
   useLiveEvents((event, payload) => emitBus(event, payload));
+  useEffect(() => {
+    if (!session) return;
+    const warm = () => {
+      if (!navigator.onLine) return;
+      void loadSchedule().catch(() => {});
+      if (session.is_admin) void api("/api/admin/event-teams").catch(() => {});
+    };
+    warm();
+    navigator.serviceWorker?.ready.then(reg => reg.active?.postMessage({type: "WARM_ROUTES", routes:
+      [...MAIN_NAV.map(n => n.href), "/login", ...(session.is_admin ? ADMIN_GROUPS.flatMap(g => g.items.map(n => n.href)) : [])]}));
+    let timer: ReturnType<typeof setTimeout>;
+    const off = onBus(event => { if (DATA_EVENTS.includes(event)) { clearTimeout(timer); timer = setTimeout(warm, 250); } });
+    window.addEventListener("online", warm);
+    return () => {off(); clearTimeout(timer); window.removeEventListener("online", warm);};
+  }, [session]);
+
+  // Ask the browser to protect IndexedDB from automatic eviction, queued
+  // scouting records must survive restarts (best effort; result on /status).
+  useEffect(() => {
+    requestPersistentStorage();
+  }, []);
 
   useEffect(() => {
-    const upd = () => { setOnline(navigator.onLine); if (navigator.onLine) setSnapshot(null); };
+    const upd = () => setOnline(navigator.onLine);
     upd();
     window.addEventListener("online", upd);
     window.addEventListener("offline", upd);
@@ -121,89 +140,137 @@ export function Shell({ children }: { children: React.ReactNode }) {
       if (alive) setPending(await pendingCount());
     };
     tick();
+    const changed = () => { void pendingCount().then(n => { if (alive) setPending(n); }); };
+    window.addEventListener("scout-queue-changed", changed);
     const id = setInterval(tick, 8000);
-    const updateCount = () => { pendingCount().then(setPending); };
-    window.addEventListener("scout-queue-changed", updateCount);
     window.addEventListener("online", tick);
     return () => {
       alive = false;
       clearInterval(id);
+      window.removeEventListener("scout-queue-changed", changed);
       window.removeEventListener("online", tick);
-      window.removeEventListener("scout-queue-changed", updateCount);
     };
   }, [online]);
 
-  if (loading) return <Loading label="Connecting to HazeHub…" />;
-  if (!session) return <Loading label="Redirecting…" />;
+  if (loading) return <Loading label="Connecting to HazeHub..." />;
+  if (!session) return <Loading label="Redirecting..." />;
 
   const isActive = (href: string) =>
     href === "/admin" ? pathname === "/admin" : pathname.startsWith(href);
-  const mobileNav = session.is_admin
-    ? [...MOBILE_NAV.slice(0, 4), { href: "/admin", label: "Admin", icon: "sliders" }]
-    : MOBILE_NAV;
+  const picklistOnly = session.picklist_only;
+  const mainNav = picklistOnly ? PICKLIST_NAV : MAIN_NAV;
+  // The sheet shows everything the account can actually reach, so it is built
+  // from the same lists the sidebar uses rather than a second hand-kept copy.
+  const sheetGroups = picklistOnly
+    ? [{ title: "Picklist Meeting", items: PICKLIST_NAV }]
+    : session.is_admin
+      ? [{ title: "Scouting", items: MAIN_NAV }, ...ADMIN_GROUPS]
+      : [{ title: "Scouting", items: MAIN_NAV }];
+  const mobileNav = picklistOnly
+    ? PICKLIST_NAV
+    : session.is_admin
+      ? [...MOBILE_NAV.slice(0, 4), { href: "/admin", label: "Admin", icon: "sliders" }]
+      : MOBILE_NAV;
 
   return (
     <div className="shell">
       <aside className="sidebar">
         <Link href="/home" className="brand">
-          <span className="logo" />
           <span className="name">Haze<b>Hub</b></span>
         </Link>
-        <div className="nav-section">Scouting</div>
-        {MAIN_NAV.map((n) => (
+        <div className="nav-section">{picklistOnly ? "Picklist Meeting" : "Scouting"}</div>
+        {mainNav.map((n) => (
           <Link key={n.href} href={n.href} className={"nav-link" + (isActive(n.href) ? " active" : "")}>
             <span className="ico"><Icon name={n.icon} /></span> {n.label}
           </Link>
         ))}
-        {session.is_admin && (
-          <>
-            <div className="nav-section">Admin · Strategy</div>
-            {ADMIN_NAV.map((n) => (
-              <Link key={n.href} href={n.href} className={"nav-link" + (isActive(n.href) ? " active" : "")}>
-                <span className="ico"><Icon name={n.icon} /></span> {n.label}
-              </Link>
-            ))}
-          </>
-        )}
+        {session.is_admin &&
+          ADMIN_GROUPS.map((group) => (
+            <div key={group.title}>
+              <div className="nav-section">{group.title}</div>
+              {group.items.map((n) => (
+                <Link
+                  key={n.href}
+                  href={n.href}
+                  className={"nav-link" + (isActive(n.href) ? " active" : "")}
+                >
+                  <span className="ico"><Icon name={n.icon} /></span> {n.label}
+                </Link>
+              ))}
+            </div>
+          ))}
         <div className="sidebar-foot">
           <div className="divider" />
           <div className="row" style={{ justifyContent: "space-between" }}>
             <div>
               <div style={{ fontWeight: 700 }}>{session.display_name}</div>
               <div className="faint" style={{ fontSize: "0.75rem" }}>
-                {session.is_admin ? "Administrator" : "Scout"}
+                {ROLE_LABEL[session.role] || "Scouter"}
               </div>
             </div>
             <button className="btn sm ghost" onClick={logout}>Sign out</button>
           </div>
-          <div className="faint" style={{ fontSize: "0.68rem", marginTop: 10, letterSpacing: "0.04em" }}>
-            FRC 418 PURPLE HAZE · FRC 436 PURPLE RAIN
-          </div>
+
         </div>
       </aside>
 
       <div className="main">
-        {(!online || snapshot) && <div className="badge amber" role="status" style={{ margin: 12 }}>
-          {!online ? "Offline · " : "Cached data used · "}showing saved cloud analysis{snapshot ? ` from ${new Date(snapshot).toLocaleString()}` : ""}. New scouting syncs when connected.
-        </div>}
         <header className="topbar">
           <div className="brand topbar-brand" style={{ fontSize: "1rem" }}>
-            <span className="logo" style={{ width: 26, height: 26 }} />
             <span className="name" style={{ fontSize: "1rem" }}>Haze<b>Hub</b></span>
           </div>
+          <details className="mobile-menu">
+            <summary>Menu</summary>
+            <nav aria-label="Mobile" onClick={(e) => {
+              if ((e.target as HTMLElement).closest("a")) e.currentTarget.closest("details")?.removeAttribute("open");
+            }}>
+              {sheetGroups.flatMap((group) => group.items).map((n) => (
+                <Link key={n.href} href={n.href} className={"nav-link" + (isActive(n.href) ? " active" : "")}>
+                  {n.label}
+                </Link>
+              ))}
+              <button className="nav-link signout" onClick={logout}>Sign out</button>
+            </nav>
+          </details>
           <div className="row" style={{ gap: 10, marginLeft: "auto" }}>
             {pending > 0 && (
               <span className="badge amber" title="Entries waiting to sync">
                 <Icon name="refresh" size={12} /> {pending} queued
               </span>
             )}
-            <span className="badge muted" title={online ? "Online" : "Offline — saving locally"}>
+            <span
+              className="badge muted"
+              title={
+                online
+                  ? "Connected"
+                  : offline.ready
+                    ? "No connection. The app is running from the copy on this device and your scouting is queued."
+                    : "No connection. Your scouting is queued on this device."
+              }
+            >
               <span className={"dot " + (online ? "green" : "red")} /> {online ? "Live" : "Offline"}
             </span>
+            {/* A flat battery is what actually ends a scout's day, so the
+                level sits next to the thing they already glance at. Absent
+                entirely on browsers without the Battery Status API rather
+                than showing a guess. */}
+            {battery && (
+              <span
+                className={"badge battery" + (battery.percent <= 20 && !battery.charging ? " low" : "")}
+                title={battery.charging ? "Charging" : "On battery"}
+              >
+                <Icon name={battery.charging ? "sparkles" : "battery"} size={12} />
+                {battery.percent}%
+              </span>
+            )}
             <span className="badge haze">{session.bucks} PB</span>
           </div>
         </header>
-        {!online && <div className="offline-bar">Offline — your scouting is saved on this device and will sync automatically.</div>}
+        {!online && (
+          <div className="offline-bar">
+            Offline · Saved on this device
+          </div>
+        )}
         <main className="content">{children}</main>
       </div>
 
@@ -214,7 +281,86 @@ export function Shell({ children }: { children: React.ReactNode }) {
             {n.label}
           </Link>
         ))}
+        {/* Five tabs fit across a phone; an admin has thirteen screens. The
+            rest were simply unreachable on mobile before this. */}
+        <button
+          type="button"
+          className={"more-tab" + (menuOpen ? " active" : "")}
+          onClick={() => setMenuOpen(true)}
+          aria-haspopup="dialog"
+          aria-expanded={menuOpen}
+        >
+          <span className="ico"><Icon name="menu" size={20} /></span>
+          All tabs
+        </button>
       </nav>
+
+      {menuOpen && (
+        <NavSheet
+          groups={sheetGroups}
+          isActive={isActive}
+          onClose={() => setMenuOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Full-screen tab picker for phones.
+ *
+ * Rendered as a sheet rather than a scrolling tab strip because a strip you
+ * have to swipe hides exactly the thing you are looking for, and people are
+ * doing this one-handed in the stands between matches.
+ */
+function NavSheet({
+  groups,
+  isActive,
+  onClose,
+}: {
+  groups: { title: string; items: NavItem[] }[];
+  isActive: (href: string) => boolean;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previous;
+    };
+  }, [onClose]);
+
+  return (
+    <div className="nav-sheet-back" onClick={onClose} role="dialog" aria-label="All tabs">
+      <div className="nav-sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="nav-sheet-head">
+          <h2>All tabs</h2>
+          <button className="btn sm ghost" onClick={onClose}>Close</button>
+        </div>
+        <div className="nav-sheet-body">
+          {groups.map((g) => (
+            <section key={g.title}>
+              <div className="nav-section">{g.title}</div>
+              <div className="nav-sheet-grid">
+                {g.items.map((n) => (
+                  <Link
+                    key={n.href}
+                    href={n.href}
+                    onClick={onClose}
+                    className={"nav-sheet-item" + (isActive(n.href) ? " active" : "")}
+                  >
+                    <span className="ico"><Icon name={n.icon} size={22} /></span>
+                    <span>{n.label}</span>
+                  </Link>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

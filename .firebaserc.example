@@ -1,0 +1,6 @@
+{
+  "_comment": "Copy this file to .firebaserc and put your own Firebase project ID in. `firebase use --add` writes it for you.",
+  "projects": {
+    "default": "hazehub-REPLACE-ME"
+  }
+}

@@ -1,7 +1,7 @@
 "use client";
+import { useCallback, useEffect, useState } from "react";
 import { MetricLabel } from "@/components/MetricLabel";
 import { METRICS } from "@/lib/metrics";
-import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useLiveRefetch } from "@/lib/bus";
 import { num } from "@/lib/format";
@@ -11,7 +11,7 @@ import { FieldHeatmap } from "@/components/Field";
 
 interface CompareData {
   teams: TeamSummary[];
-  metrics: { key: string; label: string; better: string; values: { team: number; value: number | null; best: boolean }[] }[];
+  metrics: { key: string; label: string; better: string; values: { team: number; value: number; best: boolean }[] }[];
 }
 
 const SLOTS = 6;
@@ -19,7 +19,7 @@ const SLOTS = 6;
 export default function ComparePage() {
   const [available, setAvailable] = useState<number[]>([]);
   const [teamProfiles, setTeamProfiles] = useState<Record<number, Team>>({});
-  // Fixed dropdown slots, like the Google Sheet — no free typing.
+  // Fixed dropdown slots, like the Google Sheet, no free typing.
   const [slots, setSlots] = useState<(number | null)[]>(Array(SLOTS).fill(null));
   const [data, setData] = useState<CompareData | null>(null);
   const [heats, setHeats] = useState<Record<number, any>>({});
@@ -45,8 +45,7 @@ export default function ComparePage() {
     setSlots((cur) => cur.map((v, k) => (k === i ? n : v)));
   }
 
-  const selectedKey = selected.join(",");
-  const loadComparison = useCallback(() => {
+  useLiveRefetch(useCallback(() => {
     if (selected.length < 2) { setData(null); return; }
     setLoading(true);
     api<CompareData>(`/api/admin/compare?teams=${selected.join(",")}`).then(setData).catch(() => {}).finally(() => setLoading(false));
@@ -54,27 +53,26 @@ export default function ComparePage() {
       api<any>(`/api/admin/team/${n}/heatmap`).then((h) => setHeats((x) => ({ ...x, [n]: h }))).catch(() => {});
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedKey]);
-  useLiveRefetch(loadComparison);
+  }, [selected.join(",")]));
 
-  const fmt = (key: string, v: number | null) => v == null ? "\u2014" : METRICS[key]?.percent ? `${(v * 100).toFixed(0)}%` : num(v, key === "epa" || key.includes("foul") ? 0 : 1);
-  const label = (t: number) => `${t}${teamProfiles[t]?.nickname ? ` — ${teamProfiles[t].nickname}` : ""}`;
+  const fmt = (key: string, v: number) => v == null ? "—" : METRICS[key]?.percent ? `${(v * 100).toFixed(0)}%` : num(v, key === "epa" || key.includes("foul") ? 0 : 1);
+  const label = (t: number) => `${t}${teamProfiles[t]?.nickname ? `. ${teamProfiles[t].nickname}` : ""}`;
 
   return (
     <div>
       <div className="page-title"><h1>Compare Robots</h1></div>
-      <p className="page-sub">Pick 2–6 robots from the event — best value in each row is highlighted.</p>
+
 
       <div className="card" style={{ marginBottom: 16 }}>
         {available.length === 0 ? (
-          <Empty icon="scale" title="No teams at this event yet" sub="Set an event in the Dashboard to load the team list." />
+          <Empty icon="scale" title="No teams at this event yet" />
         ) : (
           <div className="compare-slots">
             {slots.map((val, i) => (
               <label key={i} className="field compare-slot">
                 <span>Robot {i + 1}{i < 2 ? "" : " (optional)"}</span>
                 <select value={val ?? ""} onChange={(e) => setSlot(i, e.target.value)}>
-                  <option value="">— pick a team —</option>
+                  <option value="">. pick a team. </option>
                   {available
                     .filter((t) => t === val || !selected.includes(t))
                     .map((t) => (
@@ -88,7 +86,7 @@ export default function ComparePage() {
       </div>
 
       {selected.length < 2 ? (
-        <Empty icon="scale" title="Pick at least 2 robots" sub="Use the dropdowns above — the list comes straight from the event." />
+        <Empty icon="scale" title="Pick at least 2 robots" sub="Use the dropdowns above, the list comes straight from the event." />
       ) : loading || !data ? <Loading /> : (
         <>
           <div className="card team-name-white" style={{ marginBottom: 16 }}>
@@ -107,13 +105,13 @@ export default function ComparePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr><td className="muted">Nickname</td>{data.teams.map((t) => <td key={t.team} className="num faint">{t.nickname || "—"}</td>)}</tr>
+                  <tr><td className="muted">Nickname</td>{data.teams.map((t) => <td key={t.team} className="num faint">{t.nickname || "-"}</td>)}</tr>
                   <tr><td className="muted">Matches</td>{data.teams.map((t) => <td key={t.team} className="num mono">{t.matches}</td>)}</tr>
                   {data.metrics.map((row) => (
                     <tr key={row.key}>
-                      <td className="muted"><MetricLabel metric={row.key}>{row.label}</MetricLabel></td>
+                      <td className="muted">{row.label}</td>
                       {row.values.map((v) => (
-                        <td key={v.team} className="num mono" style={v.best ? { color: "var(--haze-glow)", fontWeight: 800, background: "rgba(102,51,153,0.18)" } : {}}>
+                        <td key={v.team} className="num mono" style={v.best ? { fontWeight: 700 } : {}}>
                           {fmt(row.key, v.value)}{v.best ? " ★" : ""}
                         </td>
                       ))}
@@ -128,7 +126,7 @@ export default function ComparePage() {
             {data.teams.map((t) => (
               <div key={t.team} className="card tight">
                 <div className="card-h"><h3 style={{ fontSize: "0.95rem" }}>{t.team} heatmap</h3></div>
-                {heats[t.team]?.points?.length ? <FieldHeatmap points={heats[t.team].points} height={150} /> : <Empty icon="map" title="No map" />}
+                {heats[t.team]?.points?.length ? <FieldHeatmap stats={heats[t.team]} points={heats[t.team].points} height={150} /> : <Empty icon="map" title="No map" />}
               </div>
             ))}
           </div>

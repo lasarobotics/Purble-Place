@@ -39,7 +39,7 @@ export default function AccountPage() {
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="row" style={{ justifyContent: "space-between" }}>
           <div className="row" style={{ gap: 14 }}>
-            <div className="avatar lg" style={{ display: "grid", placeItems: "center", fontWeight: 800, fontSize: "1.3rem", background: "linear-gradient(135deg,var(--haze),var(--haze-deep))" }}>
+            <div className="avatar lg" style={{ display: "grid", placeItems: "center", fontWeight: 800, fontSize: "1.3rem", background: "var(--panel-2)" }}>
               {session?.display_name?.[0]?.toUpperCase()}
             </div>
             <div>
@@ -72,7 +72,7 @@ export default function AccountPage() {
                       <td>{matchLabel(e.comp_level, e.match_number)}</td>
                       <td><TeamIdentity team={teams[e.team_number] || { team_number: e.team_number, nickname: "" }} showNickname={false} /></td>
                       <td className="num mono">{e.points}</td>
-                      <td className="faint">{e.created_at ? timeAgo(e.created_at) : "—"}</td>
+                      <td className="faint">{e.created_at ? timeAgo(e.created_at) : "-"}</td>
                     </tr>
                   ))}
                 </tbody>

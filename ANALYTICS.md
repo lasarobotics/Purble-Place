@@ -1,67 +1,50 @@
 # Analysis and offline scouting
 
-These features belong to the deployed `frontend` (Next.js) and `backend` (FastAPI/MongoDB)
-applications. The separate root Vite/Express prototype is unchanged.
+The merged application uses Next.js, FastAPI and Firestore. The neutral grey panels,
+purple accents, navigation and typography follow commit e3ed209.
 
-## Metrics
+## Cloud analysis
 
-The backend computes phase accuracy; auto, teleop, and endgame point averages;
-median output; recent form; scoring trend; attendance; operational reliability;
-auto leave rate; and average fouls/stops, alongside the existing rankings,
-consistency, schedule adjustment, and consensus metrics. Rates without a denominator
-and trends without two observed matches are unavailable rather than fabricated zeros.
-Scoring uses the existing configurable proxy in `backend/app/scoring.py`, not an
-assertion of official game scoring. Most averages use attended reports; recent form
-and trend first average multiple observers of the same match. Hover, keyboard focus,
-or tap a metric label for its definition and formatted equation.
+All metric formulas run in backend/app/analytics.py. Defense contribution is an
+explicit 0-100 heuristic combining participation, rating and diminishing-return
+stops. Recent-four metrics use distinct matches, including playoff rounds. Skew
+uses adjusted sample skewness and requires three reports. Ranking point predictions
+are heuristics across qualification matches using season thresholds (event upper
+quartiles when not configured). Tooltips explain formulas and their limitations.
 
-## Cloud processing and efficient access
+The /api/admin/analysis snapshot is memoized against scouting, team, match, season
+and scouter revisions. Reads use the Firestore write-through memory cache: viewing
+analytics adds no Firestore queries or derived-document writes. The client shares
+one compressed snapshot across rankings, comparison and team details. Live events
+invalidate it and debounce refreshes. Unchanged API snapshots avoid IndexedDB writes.
+Multi-instance deployments must enable the incoming cache's snapshot listeners;
+otherwise retain its single-instance deployment setting.
 
-`GET /api/admin/analysis` builds a shared event snapshot with one scouting query,
-one schedule query, one batched profile query, and one batched scout-name query.
-Per-team summaries are reused within the request. Metric rankings are transmitted
-as team-number orders instead of repeating every summary. The client selects cloud
-results for ranking, comparison, team details, filtered heatmaps, and consensus;
-it does not calculate analytics formulas. Payloads are compressed.
+## Offline operation
 
-Simultaneous readers share a request. Server change events invalidate the shared
-snapshot and trigger a debounced refresh; reconnect also refreshes it. No derived
-analytics documents are written. Unchanged ordinary API snapshots are not rewritten
-in IndexedDB. Viewing a team no longer forces external TBA/Statbotics refreshes.
+Open the app online once to cache its routes, scripts, schedule and analysis. Offline
+analysis displays the last cloud snapshot; new offline reports are analyzed after
+sync. No client-side analytics recalculation is performed. A previously unseen event
+or uncached screen requires connectivity to download its data.
 
-## Offline behavior
+Scouting drafts and hotkeys are scoped to the signed-in scout. Reports are saved to
+IndexedDB before networking, retain UUIDs, and keep local recovery copies after
+acknowledgment. The sync endpoint accepts up to 50 records per request, uses atomic
+Firestore creates to prevent overwrites, coalesces scout counters, and locks each
+match once per batch. Transient errors retry; invalid or conflicting reports remain
+available for correction. Cross-tab Web Locks prevent redundant flushes where
+supported. The device recovery/export UI from the Firestore app remains available.
+Legacy queue entries without an owner are retained for explicit recovery import.
+Authenticated API responses are cached per account in IndexedDB, never in a shared
+service-worker API cache. Authentication rejection never restores a cached session.
 
-Open the production app online once to cache the app pages, schedule, authenticated
-session, and cloud analysis snapshot. Service workers require HTTPS or localhost;
-they are intentionally disabled in development mode. Scouting and saved cloud
-analysis then work after disconnecting and reloading. Analysis displays its saved
-state while offline; new metrics are computed in the cloud after queued data syncs.
-Data never downloaded, first-time sign-in, live betting, remote video, and remote
-external content still require connectivity.
+Hotkeys can be edited before Start match or the first recorded observation. They
+stay locked until that report is saved. Restored drafts retain the lock.
 
-Scouting drafts survive reloads. Reports are persisted before transmission, partitioned
-by scout, and pinned to their original event. UUIDs and MongoDB unique indexes make
-replays safe. Up to 100 entries sync in one batch with one bulk insertion, one match
-lock update, one scout counter update, and one notification. Browser Web Locks avoid
-parallel outbox flushes across tabs. Rejected reports remain available for correction;
-older entries without ownership require explicit review. Authentication rejection
-requires signing in again and does not discard queued reports.
+## Verification
 
-## Controls and visualizations
-
-Use **Change hotkeys** before starting a match. Bindings are saved per scout on the
-device, require unique letters/numbers, and lock at Start scouting or the first
-recorded observation. Holding a key, modifiers, and typing into form fields do not
-trigger actions. Phase/result shortcuts select the next field tap; they do not
-invent a shot location.
-
-Heatmaps offer Both/Auto/Teleop, a shot-dot toggle, density and outcome legends,
-cloud-calculated totals, and a full-size dialog. Trend graphs have responsive axes,
-purple shading, smooth non-overshooting segments, and focusable/tappable points.
-
-## Validation
-
-Run `python -m pytest tests -q` from `backend` with its environment activated.
-Run `npm run build` and `npm run test:e2e` from `frontend` (install Playwright Chromium
-first). Browser tests use fixtures; production deployment and live database load
-testing are separate steps.
+Run `backend/.venv/Scripts/python.exe -m pytest backend/tests` and, inside frontend,
+`npm run build` then `npm run test:e2e`. Browser tests use mocked cloud responses;
+they cover offline reload/sync, rejected report recovery, hotkeys, formula tooltips,
+chart/heatmap controls, authentication rejection and mobile layout. They do not
+claim to validate a deployed Firestore project or production quotas.

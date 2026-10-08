@@ -8,7 +8,6 @@ import type { HeatPoint, Team, TeamSummary } from "@/lib/types";
 import { Empty, Loading, Modal, Stat, TeamIdentity } from "@/components/ui";
 import { FieldHeatmap } from "@/components/Field";
 import { LineChart } from "@/components/Chart";
-import { HazeIntel, TagCloud } from "@/components/Insight";
 
 type TeamLike = Pick<Team, "team_number"> & Partial<Team>;
 
@@ -98,16 +97,13 @@ export function ClickableTeam({
 
 function TeamDetailBody({ data }: { data: TeamDetail }) {
   const { summary, reports } = data;
-  const [phase, setPhase] = useState("all");
-  const heatmap = data.heatmaps?.[phase] || data.heatmap;
+  const heatmap = data.heatmap;
   return (
     <div className="team-detail">
       <div className="card tight">
         <TeamIdentity team={summary} size="lg" />
-        <TagCloud tags={summary.tags} />
       </div>
 
-      <HazeIntel teamNumber={summary.team} />
 
       <div className="grid cols-4">
         <Stat label="Matches" value={summary.matches} />
@@ -122,7 +118,7 @@ function TeamDetailBody({ data }: { data: TeamDetail }) {
           <LineChart data={summary.match_points.map((m) => ({ x: `${m.comp_level && m.comp_level !== "qm" ? m.comp_level.toUpperCase() : "Q"}${m.match}`, y: m.points }))} height={150} label="Points per match" />
         </div>
         <div className="card tight">
-          <div className="card-h"><h3>Scoring Heatmap</h3><div className="seg" aria-label="Scoring phase">{["all", "auto", "teleop"].map(p => <button key={p} className={phase === p ? "on" : ""} onClick={() => setPhase(p)}>{p === "all" ? "Both" : p === "auto" ? "Auto" : "Teleop"}</button>)}</div></div>
+          <div className="card-h"><h3>Scoring Heatmap</h3></div>
           {heatmap.points.length ? (
             <>
               <FieldHeatmap points={heatmap.points} stats={heatmap} />
@@ -167,11 +163,6 @@ function TeamDetailBody({ data }: { data: TeamDetail }) {
                     {r.no_show && <span className="badge red">No show</span>}
                   </div>
                 </div>
-                {r.tags && r.tags.length > 0 && (
-                  <div className="tag-list" style={{ marginTop: 8 }}>
-                    {r.tags.map((t) => <span key={t} className="chip static sm">{t}</span>)}
-                  </div>
-                )}
                 <div className="report-grid">
                   <div>
                     <span className="faint">Autonomous</span>
@@ -192,7 +183,7 @@ function TeamDetailBody({ data }: { data: TeamDetail }) {
                 </div>
               </article>
             ))}
-            {reports.length > 8 && <p className="faint" style={{ margin: 0 }}>Showing 8 of {reports.length} reports. Use Team Search for the full list.</p>}
+            {reports.length > 8 && <p className="faint" style={{ margin: 0 }}>8 / {reports.length} reports</p>}
           </div>
         )}
       </div>

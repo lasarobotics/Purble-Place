@@ -1,6 +1,8 @@
 "use client";
 import React, { useEffect, useId, useRef, useState } from "react";
 
+import { MetricLabel } from "./MetricLabel";
+
 interface Pt { x: number | string; y: number; }
 
 export function LineChart({ data, height = 220, color = "#bd8cff", label }: { data: Pt[]; height?: number; color?: string; label?: string }) {
@@ -33,7 +35,7 @@ export function LineChart({ data, height = 220, color = "#bd8cff", label }: { da
   const active = activeIndex == null ? null : data[activeIndex];
   const labelEvery = Math.max(1, Math.ceil(data.length / Math.max(2, Math.floor(width / 70))));
   return <div ref={ref} className="chart-wrap trend-chart">
-    <div className="trend-caption"><span><i style={{ background: color }} />{label || "Performance"}</span><small>Hover or tap a dot</small></div>
+    <div className="trend-caption"><span><i style={{ background: color }} /><MetricLabel>{label || "Performance"}</MetricLabel></span><small>Hover or tap a dot</small></div>
     <svg viewBox={`0 0 ${width} ${H}`} width="100%" height={H} aria-label={label || "Performance trend"} role="img" onMouseLeave={() => setHover(null)}>
       <defs><linearGradient id={`${id}-fill`} x1="0" y1="0" x2="0" y2="1">
         <stop offset="0%" stopColor={color} stopOpacity=".25" /><stop offset="100%" stopColor={color} stopOpacity=".015" />

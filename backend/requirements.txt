@@ -1,8 +1,13 @@
-fastapi>=0.115,<1
-pydantic>=2.10,<3
-# pymongo >=4.7 bundles dnspython, so Atlas "mongodb+srv://" URIs work.
-pymongo>=4.11,<5
-# Trusted CA bundle for Atlas TLS on serverless (Vercel) runtimes.
-certifi>=2024.2.2
-httpx>=0.27,<1
-uvicorn>=0.30,<1
+fastapi>=0.110,<0.120
+uvicorn[standard]>=0.27,<0.35
+httpx>=0.26,<0.29
+pydantic>=2.5,<3
+# Cloud Firestore via the Firebase Admin SDK. This is the only datastore
+# dependency — it pulls in google-cloud-firestore and google-auth.
+firebase-admin>=6.5,<7
+# Firestore's daily free-tier quotas reset at midnight US Pacific; the quota
+# guard needs a tz database, which Windows does not ship with Python.
+tzdata>=2024.1; sys_platform == "win32"
+# Optional — Haze Intel upgrades from rule-based summaries to Claude when
+# ANTHROPIC_API_KEY is set. Without the key it stays rule-based (offline safe).
+anthropic>=0.60

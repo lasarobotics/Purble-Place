@@ -3,7 +3,7 @@
 import { localAdmin } from "./identity";
 export function isAnalysisPath(path: string): boolean {
   const url = new URL(path, "http://local");
-  return /^\/api\/admin\/(metrics|event-teams|rank|compare|data-picklist|disagreements)$/.test(url.pathname) ||
+  return /^\/api\/admin\/(metrics|event-teams|rank|compare|data-analysis|data-picklist|disagreements)$/.test(url.pathname) ||
     /^\/api\/admin\/team\/\d+\/(summary|heatmap|reports)$/.test(url.pathname) ||
     (localAdmin() && /^\/api\/teams\/\d+\/scouting$/.test(url.pathname));
 }
@@ -16,6 +16,7 @@ export function selectAnalysis(bundle: any, path: string): any {
     if (!record) throw new Error("Team is not in the saved event analysis");
     return record;
   }
+  if (name === "data-analysis") return { teams: bundle.analysis };
   if (name === "metrics") return { metrics: bundle.metrics };
   if (name === "event-teams") return bundle.teams.map((t: any) => t.team);
   if (name === "data-picklist") return bundle.picklist;

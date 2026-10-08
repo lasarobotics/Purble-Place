@@ -23,6 +23,8 @@ export const DATA_EVENTS = [
   "match_advanced",
   "pit_submitted",
   "film_updated",
+  "season_changed",
+  "form_changed",
 ];
 
 /** Run `load` on mount and again whenever a data-changing live event fires.

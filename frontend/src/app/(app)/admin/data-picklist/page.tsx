@@ -19,12 +19,12 @@ export default function DataPicklistPage() {
   useLiveRefetch(load);
 
   if (loading) return <Loading />;
-  if (!data || data.teams.length === 0) return (<div><h1>Data Picklist</h1><Empty icon="trend" title="Not enough data yet" sub="Scout matches and set an event so EPA + schedule are available." /></div>);
+  if (!data || data.teams.length === 0) return (<div><h1>Data Picklist</h1><Empty icon="trend" title="Not enough data yet" /></div>);
 
   return (
     <div>
       <div className="page-title"><h1>Data Picklist</h1></div>
-      <p className="page-sub">Ranked by true strength — consistency and schedule adjusted.</p>
+
 
       <div className="card">
         <div className="table-wrap">
@@ -51,16 +51,13 @@ export default function DataPicklistPage() {
                   <td className="num mono">{pct(r.reliability)}</td>
                   <td className="num mono">{num(r.opp_strength, 0)}</td>
                   <td className="num mono">{num(r.partner_help, 0)}</td>
-                  <td className="num mono" style={{ color: (r.sos || 0) >= 0 ? "#86efac" : "#fca5a5" }}>{(r.sos || 0) >= 0 ? "+" : ""}{num(r.sos, 0)}</td>
-                  <td className="num mono" style={{ color: (r.sos_adjust || 0) >= 0 ? "#86efac" : "#fca5a5" }}>{(r.sos_adjust || 0) >= 0 ? "+" : ""}{num(r.sos_adjust)}</td>
+                  <td className="num mono">{(r.sos || 0) >= 0 ? "+" : ""}{num(r.sos, 0)}</td>
+                  <td className="num mono">{(r.sos_adjust || 0) >= 0 ? "+" : ""}{num(r.sos_adjust)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        <p className="faint" style={{ fontSize: "0.75rem", marginTop: 12 }}>
-          Green adjust = earned it against a hard schedule · red = inflated by easy match-ups. Event avg EPA {data.event_avg_epa}.
-        </p>
       </div>
     </div>
   );

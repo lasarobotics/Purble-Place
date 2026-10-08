@@ -1,148 +1,232 @@
-"""Environment-backed configuration: MongoDB connection + HazeHub app settings.
-
-Merges the backend-dev database-layer settings (MongoDB) with the application
-settings the API needs (auth, economy, external API keys). Everything has a
-sane local default so `docker compose up -d && uvicorn app.main:app` just
-works; production values come from environment variables (Vercel project
-settings).
 """
+HazeHub configuration.
 
+Everything has a sane local default so the app "just works" with no setup,
+and switches to the Firebase services automatically once the relevant
+environment variables appear.
+
+Datastore selection (see ``cache.Store.start``):
+
+* ``FIRESTORE_EMULATOR_HOST`` set  -> the local Firestore emulator.
+* ``FIREBASE_PROJECT_ID`` set (or running on Cloud Run, where the project is
+  discovered automatically) -> Cloud Firestore.
+* neither -> a JSON file under ``backend/data/`` so a fresh clone runs offline.
+"""
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
 
-BACKEND_DIR = Path(__file__).resolve().parent.parent
+# Repo paths -----------------------------------------------------------------
+APP_DIR = Path(__file__).resolve().parent
+BACKEND_DIR = APP_DIR.parent
+
+# Cloud Run's filesystem is read-only except /tmp. Nothing durable is written
+# there: Firestore holds the data: but the dev fallback store needs a home.
+IS_CLOUD_RUN = bool(os.environ.get("K_SERVICE"))
+DATA_DIR = Path("/tmp/data") if IS_CLOUD_RUN else BACKEND_DIR / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _load_dotenv() -> None:
-    """Load a small .env file without adding another runtime dependency."""
+    """Minimal .env loader (no dependency). Only sets keys not already set."""
     env_file = BACKEND_DIR / ".env"
     if not env_file.exists():
         return
-
-    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if key:
-            os.environ.setdefault(key, value)
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
 
 
 _load_dotenv()
 
 
-@dataclass(frozen=True, slots=True)
+def _firebase_project() -> str:
+    for key in (
+        "FIREBASE_PROJECT_ID",
+        "GOOGLE_CLOUD_PROJECT",
+        "GCLOUD_PROJECT",
+        "GCP_PROJECT",
+    ):
+        value = os.getenv(key, "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _ids(env_var: str, default: str) -> list[str]:
+    """Parse a comma-separated list of scouter IDs, lowercased for matching."""
+    raw = os.getenv(env_var, "").strip() or default
+    return [part.strip().lower() for part in raw.split(",") if part.strip()]
+
+
+#: The complete roster. HazeHub is a closed system: these are the only IDs
+#: that can sign in, and typing anything else is an error rather than a new
+#: account. Sign-up used to be implicit -- whoever typed an ID got one -- which
+#: meant a typo silently created a parallel account whose scouting nobody ever
+#: looked at again.
+#:
+#: The mapping is ``canonical ID -> role``. Matching is case-insensitive and
+#: the canonical spelling here is what gets written to Firestore.
+DEFAULT_ACCOUNTS = "Admin:admin,Strategy:strategy,PicklistMeeting:picklist,1,2,3,Demo"
+
+#: IDs from earlier builds that should land on one of the accounts above
+#: rather than being rejected, so an existing device does not get locked out.
+LEGACY_ACCOUNT_ALIASES = {"picklist": "PicklistMeeting", "picklistmeeting": "PicklistMeeting"}
+
+
+def _accounts(env_var: str, default: str) -> dict[str, str]:
+    """Parse ``Id:role,Id:role`` into an ordered ``{canonical_id: role}`` map.
+
+    A bare entry (no colon) is a scouter, which keeps the numbered scouting
+    accounts short to write.
+    """
+    raw = os.getenv(env_var, "").strip() or default
+    out: dict[str, str] = {}
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        scout_id, _, role = part.partition(":")
+        scout_id = scout_id.strip()
+        if scout_id:
+            out[scout_id] = (role.strip().lower() or "scouter")
+    return out
+
+
+def _environment() -> str:
+    if os.getenv("FIRESTORE_EMULATOR_HOST", "").strip():
+        return "emulator"
+    if IS_CLOUD_RUN:
+        return "cloud-run"
+    if _firebase_project():
+        return "firebase"
+    return "local"
+
+
 class Settings:
-    # MongoDB
-    mongodb_uri: str
-    mongodb_database: str
-    mongodb_timeout_ms: int
+    """Runtime settings, resolved once at import."""
 
     # Identity / branding
-    app_name: str = "HazeHub"
-    brand_color: str = "#663399"
-    season: int = 2026
-    home_teams: tuple[int, ...] = (418, 436)
+    APP_NAME: str = "HazeHub"
+    BRAND_COLOR: str = "#663399"  # Purple Haze
+    # A fallback only. The real season lives in the datastore (app/seasons.py);
+    # this is what a brand new install bootstraps with before one exists.
+    SEASON: int = int(os.getenv("HAZEHUB_SEASON", "2026"))
+
+    # Home teams: FRC 418 Purple Haze / FRC 436 Purple Rain
+    HOME_TEAMS: list[int] = [
+        int(t) for t in os.getenv("HAZEHUB_HOME_TEAMS", "418,436").split(",") if t.strip().isdigit()
+    ]
 
     # Auth
-    team_password: str = "HazeRain!"
-    admin_id: str = "admin"
-    secret_key: str = "purple-haze-dev-secret-change-me"
-    token_ttl_hours: int = 24 * 14
+    TEAM_PASSWORD: str = os.getenv("HAZEHUB_TEAM_PASSWORD", "HazeRain!")
+    ADMIN_ID: str = os.getenv("HAZEHUB_ADMIN_ID", "admin")
+    SECRET_KEY: str = os.getenv("HAZEHUB_SECRET", "purple-haze-dev-secret-change-me")
+    TOKEN_TTL_HOURS: int = 24 * 14
+
+    # Which scouter IDs get which role the first time they sign in. After
+    # that, an admin can change anyone's role from the Admin dashboard, and
+    # that choice wins. Everyone not listed here is a plain scouter.
+    ADMIN_IDS: list[str] = _ids("HAZEHUB_ADMIN_IDS", os.getenv("HAZEHUB_ADMIN_ID", "admin"))
+    STRATEGY_IDS: list[str] = _ids("HAZEHUB_STRATEGY_IDS", "strategy")
+    PICKLIST_IDS: list[str] = _ids("HAZEHUB_PICKLIST_IDS", "picklist")
+
+    # The closed account roster. Set HAZEHUB_ACCOUNTS to change it, e.g.
+    # "Admin:admin,Strategy:strategy,PicklistMeeting:picklist,1,2,3,Demo".
+    ACCOUNTS: dict[str, str] = _accounts("HAZEHUB_ACCOUNTS", DEFAULT_ACCOUNTS)
+    ACCOUNT_ALIASES: dict[str, str] = LEGACY_ACCOUNT_ALIASES
 
     # Economy
-    starting_bucks: int = 100
+    STARTING_BUCKS: int = 100
 
-    # External APIs
-    tba_key: str = ""
-    tba_base: str = "https://www.thebluealliance.com/api/v3"
-    statbotics_base: str = "https://api.statbotics.io/v3"
-    external_ttl_seconds: int = 900
+    # External APIs (keys provided by the team)
+    TBA_KEY: str = os.getenv(
+        "TBA_AUTH_KEY",
+        "rZxJQVjP40eTtskoUbT3OWTKEnKNxk8McjB9QqRdU8mT78o8EN3OuzuMppJTADtV",
+    )
+    TBA_BASE: str = "https://www.thebluealliance.com/api/v3"
+    STATBOTICS_BASE: str = "https://api.statbotics.io/v3"
+    EXTERNAL_TTL_SECONDS: int = int(os.getenv("HAZEHUB_CACHE_TTL", "900"))
 
-    # Environment
-    is_vercel: bool = False
-    cors_extra: tuple[str, ...] = ()
+    # Environment / datastore
+    DATA_DIR: Path = DATA_DIR
+    IS_CLOUD_RUN: bool = IS_CLOUD_RUN
+    FIREBASE_PROJECT_ID: str = _firebase_project()
+    ENVIRONMENT: str = _environment()
+
+    # Firebase Hosting site (used to build the default CORS allowlist).
+    FIREBASE_SITE: str = os.getenv("FIREBASE_SITE", "").strip() or _firebase_project()
+
+    # This API is the shared source of truth. Devices keep their own IndexedDB
+    # queues and sync straight here over HTTPS with UUID + payload-hash
+    # idempotency; the submission UUID is the Firestore document ID, so a
+    # replayed queue can never duplicate a record.
+
+    # Optional UniFi/gateway stats endpoint for the admin network panel. When
+    # unset, the panel reports network fields as "unavailable" rather than
+    # faking numbers (the physical gateway API isn't reachable in dev).
+    GATEWAY_STATS_URL: str = os.getenv("HAZEHUB_GATEWAY_STATS_URL", "").strip()
 
     @property
-    def mongodb_is_default(self) -> bool:
-        """True when MONGODB_URI was never configured (localhost dev default)."""
-        return "localhost:27017" in self.mongodb_uri
+    def DATABASE_CONFIGURED(self) -> bool:
+        """True when a real Firestore database (not the dev file) is in use."""
+        return self.ENVIRONMENT in ("firebase", "cloud-run", "emulator")
 
-    @property
-    def mongodb_host(self) -> str:
-        """Host portion of the Mongo URI with credentials stripped (log-safe)."""
-        uri = self.mongodb_uri
-        after_scheme = uri.split("://", 1)[-1]
-        host = after_scheme.rsplit("@", 1)[-1]
-        return host.split("/", 1)[0].split("?", 1)[0]
-
+    # CORS: local dev front-ends plus the project's Firebase Hosting domains.
+    #
+    # In the normal deployment this is unused: the same process serves the web
+    # app and the API, so every request is same-origin. It matters for
+    # `next dev` against a separately-run backend, and for a split deployment.
     @property
     def cors_origins(self) -> list[str]:
+        extra = os.getenv("HAZEHUB_CORS", "")
         origins = [
             "http://localhost:3000",
             "http://127.0.0.1:3000",
             "http://localhost:3001",
+            "http://localhost:5000",   # firebase emulators:start --only hosting
+            "http://localhost:8000",
         ]
-        origins.extend(self.cors_extra)
-        # Same-origin deployments (Vercel services) don't need CORS, but a
-        # wildcard keeps split deployments working when nothing is configured.
-        if self.is_vercel and not self.cors_extra:
-            origins.append("*")
+        if self.FIREBASE_SITE:
+            origins += [
+                f"https://{self.FIREBASE_SITE}.web.app",
+                f"https://{self.FIREBASE_SITE}.firebaseapp.com",
+            ]
+        if extra:
+            origins.extend(o.strip() for o in extra.split(",") if o.strip())
         return origins
 
-    @classmethod
-    def from_environment(cls) -> "Settings":
-        database_name = os.getenv("MONGODB_DATABASE", "hazehub").strip()
-        if not database_name or any(char in database_name for char in '/\\.$"'):
-            raise ValueError("MONGODB_DATABASE is not a valid MongoDB database name")
+    @property
+    def cors_origin_regex(self) -> str:
+        """Allow any device on a private LAN.
 
-        timeout_ms = int(os.getenv("MONGODB_TIMEOUT_MS", "5000"))
-        if timeout_ms < 100:
-            raise ValueError("MONGODB_TIMEOUT_MS must be at least 100")
-
-        home_teams = tuple(
-            int(t)
-            for t in os.getenv("HAZEHUB_HOME_TEAMS", "418,436").split(",")
-            if t.strip().isdigit()
-        )
-        cors_extra = tuple(
-            o.strip() for o in os.getenv("HAZEHUB_CORS", "").split(",") if o.strip()
-        )
-
-        return cls(
-            mongodb_uri=os.getenv(
-                "MONGODB_URI",
-                "mongodb://hazehub:hazehub_dev_password@localhost:27017/"
-                "?authSource=admin",
-            ).strip(),
-            mongodb_database=database_name,
-            mongodb_timeout_ms=timeout_ms,
-            season=int(os.getenv("HAZEHUB_SEASON", "2026")),
-            home_teams=home_teams or (418, 436),
-            team_password=os.getenv("HAZEHUB_TEAM_PASSWORD", "HazeRain!"),
-            admin_id=os.getenv("HAZEHUB_ADMIN_ID", "admin"),
-            secret_key=os.getenv("HAZEHUB_SECRET", "purple-haze-dev-secret-change-me"),
-            starting_bucks=int(os.getenv("HAZEHUB_STARTING_BUCKS", "100")),
-            tba_key=os.getenv(
-                "TBA_AUTH_KEY",
-                "rZxJQVjP40eTtskoUbT3OWTKEnKNxk8McjB9QqRdU8mT78o8EN3OuzuMppJTADtV",
-            ),
-            external_ttl_seconds=int(os.getenv("HAZEHUB_CACHE_TTL", "900")),
-            is_vercel=os.environ.get("VERCEL") == "1",
-            cors_extra=cors_extra,
+        At an event the tablets reach the host laptop by its LAN address,
+        which nobody knows in advance. This matches only RFC1918 / link-local
+        addresses and .local names, so it cannot open the API to the internet.
+        """
+        return (
+            r"^https?://("
+            r"localhost|127\.0\.0\.1|\[::1\]|"
+            r"10\.\d{1,3}\.\d{1,3}\.\d{1,3}|"
+            r"192\.168\.\d{1,3}\.\d{1,3}|"
+            r"172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|"
+            r"169\.254\.\d{1,3}\.\d{1,3}|"
+            r"[A-Za-z0-9-]+\.local"
+            r")(:\d+)?$"
         )
 
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings.from_environment()
+    return Settings()
 
 
 settings = get_settings()

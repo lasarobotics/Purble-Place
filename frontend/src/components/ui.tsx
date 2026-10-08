@@ -1,12 +1,11 @@
 "use client";
+import { MetricLabel } from "./MetricLabel";
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "@/lib/api";
 import type { Team } from "@/lib/types";
-import { Icon } from "./icons";
-import { MetricLabel } from "./MetricLabel";
 
-// FRC 418 Purple Haze · FRC 436 Purple Rain — highlighted across the app.
+// FRC 418 Purple Haze · FRC 436 Purple Rain, highlighted across the app.
 export const HOME_TEAMS = [418, 436];
 
 type AvatarTeam = Pick<Team, "team_number"> & Partial<Omit<Team, "team_number">>;
@@ -14,7 +13,7 @@ type TeamLike = AvatarTeam | ({ team: number } & Partial<Team>);
 const teamProfileCache = new Map<number, AvatarTeam>();
 const pendingProfiles = new Map<number, Promise<AvatarTeam | null>>();
 
-export function Loading({ label = "Loading…" }: { label?: string }) {
+export function Loading({ label = "Loading..." }: { label?: string }) {
   return (
     <div className="loading-wrap">
       <div style={{ textAlign: "center" }}>
@@ -25,12 +24,10 @@ export function Loading({ label = "Loading…" }: { label?: string }) {
   );
 }
 
-export function Empty({ icon = "inbox", title, sub }: { icon?: string; title: string; sub?: string }) {
+export function Empty({ title }: { icon?: string; title: string; sub?: string }) {
   return (
     <div className="empty">
-      <div className="big"><Icon name={icon} size={34} strokeWidth={1.6} /></div>
       <h3 style={{ margin: "0 0 4px" }}>{title}</h3>
-      {sub && <p style={{ margin: 0 }}>{sub}</p>}
     </div>
   );
 }
@@ -111,7 +108,6 @@ export function TeamAvatar({ team, size = "" }: { team: TeamLike; size?: "sm" | 
     // eslint-disable-next-line @next/next/no-img-element
     return <img className={cls} src={normalized.avatar} alt={`${normalized.team_number}`} />;
   }
-  const hue = (normalized.team_number * 47) % 360;
   return (
     <div
       className={cls}
@@ -119,11 +115,13 @@ export function TeamAvatar({ team, size = "" }: { team: TeamLike; size?: "sm" | 
         display: "grid",
         placeItems: "center",
         fontWeight: 800,
-        fontSize: size === "lg" ? "1rem" : "0.7rem",
-        background: `linear-gradient(135deg, hsl(${hue} 50% 30%), hsl(${(hue + 40) % 360} 55% 22%))`,
+        fontSize: size === "lg" ? "0.9rem" : "0.68rem",
+        background: "var(--panel-2)",
+        overflow: "hidden",
       }}
+      aria-label={`Team ${normalized.team_number}`}
     >
-      {normalized.team_number}
+      {String(normalized.team_number).slice(-2)}
     </div>
   );
 }
@@ -165,6 +163,49 @@ export function Modal({ children, onClose }: { children: React.ReactNode; onClos
   );
 }
 
+/**
+ * Yes/no dialog for a change that quietly ruins data if it was a mis-tap.
+ *
+ * Used by the alliance and station switches on the scouting page: those two
+ * controls decide which robot every following submission is about, and a
+ * thumb brushing them mid-match sends the rest of the day's scouting to the
+ * wrong team without anything looking wrong on screen.
+ */
+export function Confirm({
+  title,
+  body,
+  confirmLabel = "Yes, change it",
+  cancelLabel = "Cancel",
+  onConfirm,
+  onCancel,
+}: {
+  title: string;
+  body?: React.ReactNode;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onCancel(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+
+  return (
+    <Modal onClose={onCancel}>
+      <div className="confirm">
+        <h3>{title}</h3>
+        {body && <div className="confirm-body">{body}</div>}
+        <div className="confirm-actions">
+          <button type="button" className="btn ghost" onClick={onCancel}>{cancelLabel}</button>
+          <button type="button" className="btn primary" onClick={onConfirm} autoFocus>{confirmLabel}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 export function Bar({ value, max = 1 }: { value: number; max?: number }) {
   const w = Math.max(0, Math.min(100, (value / (max || 1)) * 100));
   return (
@@ -191,6 +232,7 @@ export function Segmented<T extends string>({
         <button
           key={o.value}
           className={value === o.value ? "on " + (color ? color(o.value) : "") : ""}
+          aria-pressed={value === o.value}
           onClick={() => onChange(o.value)}
           type="button"
         >
@@ -215,8 +257,9 @@ export function Stepper({
   const set = (v: number) => onChange(Math.max(min, Math.min(max, v)));
   return (
     <div className="stepper">
-      <button type="button" onClick={() => set(value - 1)}>−</button>
+      <button type="button" aria-label="Decrease" disabled={value <= min} onClick={() => set(value - 1)}>−</button>
       <input
+        aria-label="Count"
         value={value}
         inputMode="numeric"
         onChange={(e) => {
@@ -224,7 +267,7 @@ export function Stepper({
           set(isNaN(n) ? 0 : n);
         }}
       />
-      <button type="button" onClick={() => set(value + 1)}>+</button>
+      <button type="button" aria-label="Increase" disabled={value >= max} onClick={() => set(value + 1)}>+</button>
     </div>
   );
 }
@@ -236,15 +279,10 @@ export function Rating({ value, onChange, max = 5 }: { value: number; onChange: 
         <button
           key={n}
           type="button"
+          aria-label={`Rate ${n} of ${max}`}
+          aria-pressed={n === value}
           onClick={() => onChange(n)}
-          className="btn sm"
-          style={{
-            width: 38,
-            padding: "8px 0",
-            background: n <= value ? "var(--haze)" : "var(--panel-2)",
-            color: n <= value ? "#fff" : undefined,
-            borderColor: n <= value ? "var(--haze-deep)" : "var(--border)",
-          }}
+          className={"btn sm rating-button" + (n === value ? " is-selected" : "")}
         >
           {n}
         </button>

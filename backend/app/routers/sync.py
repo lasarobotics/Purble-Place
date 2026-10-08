@@ -1,103 +1,140 @@
-"""Offline sync: the Chromebook/phone queues entries in IndexedDB while the
-connection is down and flushes them here when it returns.  Everything is keyed
-by ``client_uuid`` so replays never duplicate."""
+"""Batch synchronization + recovery imports.
 
+Devices queue submissions in IndexedDB while offline and flush them here when
+the connection returns; recovery JSONL files from a failed Chromebook replay
+through the same endpoint. Everything is keyed by the submission UUID and the
+payload hash, and the response carries an individual result for every record: one bad record never blocks the rest.
+
+Firestore notes
+---------------
+A batch is capped at ``MAX_BATCH`` records, comfortably inside Firestore's
+500-operations-per-commit limit even counting the match-lock writes a batch
+can trigger. New records use one atomic create per report (replays never overwrite), and the per-scout counter is bumped once for the whole batch: so a device that comes back online with 40 queued matches costs roughly 42
+document writes, not 120.
+"""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
-from pymongo.errors import BulkWriteError
-from pymongo.database import Database
+from datetime import datetime, timezone
 
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel
+
+from .. import repo
 from ..auth import current_scouter
-from ..database import database_dependency
+from ..cache import WriteTooLarge, store
+from ..models import Scouter, ScoutEntry
 from ..realtime import emit
-from ..views import ScouterView
-from .scouting import ScoutIn, build_document
+from ..scoring import compute_points
+from .scouting import ScoutIn, canonical_hash, lock_betting_for_match, validate_submission
 
 router = APIRouter(prefix="/api/sync", tags=["sync"])
 
+#: Firestore allows 500 operations per commit; 50 submissions plus their
+#: match-lock and counter writes stays far below that.
+MAX_BATCH = 50
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
 
 class SyncIn(BaseModel):
-    entries: list[ScoutIn] = Field(default_factory=list, max_length=100)
+    entries: list[ScoutIn] = []
 
 
 @router.post("/scout")
 def sync_scout(
     body: SyncIn,
-    db: Database = Depends(database_dependency),
-    scouter: ScouterView = Depends(current_scouter),
+    scouter: Scouter = Depends(current_scouter),
 ) -> dict:
+    results: list[dict] = []
     accepted: list[str] = []
     duplicates: list[str] = []
-    rejected: dict[str, str] = {}
-    ids = [item.client_uuid for item in body.entries if item.client_uuid]
-    existing = {doc["client_submission_id"]: doc for doc in db.match_scouting.find(
-        {"client_submission_id": {"$in": ids}}, {"client_submission_id": 1, "scouter_id": 1, "match_key": 1, "event_key": 1})}
-    documents = []
-    seen = set()
-    for item in body.entries:
-        uuid = item.client_uuid
-        if not uuid:
-            continue
-        if uuid in existing:
-            if existing[uuid].get("scouter_id") == scouter.scout_id:
-                duplicates.append(uuid)
-            else:
-                rejected[uuid] = "Submission identifier belongs to another scout"
-            continue
-        if uuid in seen:
-            continue
-        seen.add(uuid)
-        # Never attach an offline report to whichever event happens to be current.
-        if not item.event_key or not item.event_key.strip():
-            rejected[uuid] = "Choose the original event before retrying this report"
-            continue
-        try:
-            documents.append(build_document(item, item.event_key.strip(), scouter.scout_id).to_bson())
-        except ValueError as exc:
-            rejected[uuid] = str(exc)
+    to_create: list[tuple[dict, ScoutEntry]] = []
 
-    matches = {doc["_id"]: doc for doc in db.matches.find(
-        {"_id": {"$in": list({d["match_key"] for d in documents})}})} if documents else {}
-    valid = []
-    for doc in documents:
-        match = matches.get(doc["match_key"])
-        teams = ((match or {}).get("alliances") or {}).get(doc["alliance"], {}).get("teams", [])
-        if match and doc["team_num"] not in teams:
-            rejected[doc["client_submission_id"]] = "Team is not on the selected alliance; correct the report"
-        else:
-            valid.append(doc)
-    successful = list(valid)
-    if valid:
+    for item in body.entries[:MAX_BATCH]:
+        key = item.submission_id or item.client_uuid or ""
+        result = {"submission_id": key, "status": "created"}
+        results.append(result)
+
+        event_key = (item.event_key or "").strip()
+        if not event_key:
+            result.update(status="invalid", error="No event configured")
+            continue
+
+        error = validate_submission(item.model_dump())
+        if error:
+            result.update(status="invalid", error=error)
+            continue
+
+        existing = repo.scouting_by_submission(key) if key else None
+        if existing is not None:
+            if (
+                item.payload_hash
+                and existing.payload_hash
+                and item.payload_hash != existing.payload_hash
+            ):
+                result.update(
+                    status="conflict",
+                    error="UUID exists with a different payload",
+                )
+            else:
+                result["status"] = "already_exists"
+                duplicates.append(key)
+            continue
+
         try:
-            db.match_scouting.insert_many(valid, ordered=False)
-        except BulkWriteError as exc:
-            # An uncertain acknowledgement is retried with the same UUIDs.
-            if exc.details.get("writeConcernErrors"):
-                raise
-            errors = {error["index"]: error for error in exc.details.get("writeErrors", [])}
-            successful = [doc for i, doc in enumerate(valid) if i not in errors]
-            raced_ids = [valid[i]["client_submission_id"] for i, error in errors.items() if error.get("code") == 11000]
-            raced = {d["client_submission_id"] for d in db.match_scouting.find(
-                {"client_submission_id": {"$in": raced_ids}, "scouter_id": scouter.scout_id}, {"client_submission_id": 1})}
-            for i, error in errors.items():
-                uuid = valid[i]["client_submission_id"]
-                if uuid in raced:
-                    duplicates.append(uuid)
-                elif error.get("code") in (11000, 121):
-                    rejected[uuid] = "Report conflicts with an existing submission" if error.get("code") == 11000 else "Report failed validation; review and retry"
-        accepted = [doc["client_submission_id"] for doc in successful]
-    # Recover locks on replays too, even if the first response was lost.
-    done_ids = set(accepted + duplicates)
-    done_docs = [d for d in valid + list(existing.values()) if d["client_submission_id"] in done_ids]
-    lock_keys = {d["match_key"] for d in done_docs if d.get("match_key")}
-    if lock_keys:
-        db.matches.update_many({"_id": {"$in": list(lock_keys)}, "betting_locked": {"$ne": True}},
-                               {"$set": {"betting_locked": True}})
-    if accepted:
-        db.scouters.update_one({"_id": scouter.scout_id}, {"$inc": {"matches_scouted": len(accepted)}})
-    if accepted or duplicates:
-        emit(db, "scout_submitted", {"synced": len(accepted), "events": list({d["event_key"] for d in done_docs if d.get("event_key")})})
-    return {"ok": True, "accepted": accepted, "accepted_count": len(accepted),
-            "duplicates": duplicates, "rejected": rejected}
+            data = item.model_dump()
+            data["event_key"] = event_key
+            data["scout_id"] = scouter.scout_id
+            data["points"] = 0.0 if item.no_show else compute_points(data)
+            if not data.get("payload_hash"):
+                data["payload_hash"] = canonical_hash(data)
+            entry = ScoutEntry.from_submission(data)
+        except Exception as exc:  # noqa: BLE001: isolate the bad record
+            result.update(status="invalid", error=str(exc)[:300])
+            continue
+
+        to_create.append((result, entry))
+
+    created = 0
+    locked: set[tuple[str, str, int]] = set()
+    for result, entry in to_create:
+        try:
+            # Atomic create never overwrites a concurrent offline replay.
+            if not repo.create_scouting(entry):
+                existing = repo.scouting_by_submission(entry.submission_id)
+                if existing and existing.payload_hash == entry.payload_hash:
+                    result["status"] = "already_exists"
+                    duplicates.append(entry.submission_id)
+                else:
+                    result.update(status="conflict", error="UUID exists with different data")
+                continue
+        except WriteTooLarge as exc:
+            result.update(status="invalid", error=str(exc)[:300])
+            continue
+        except Exception:
+            result.update(status="retry", error="Cloud temporarily unavailable; retry this report")
+            continue
+        created += 1
+        accepted.append(entry.submission_id)
+        slot = (entry.event_key, entry.comp_level, entry.match_number)
+        if slot not in locked:
+            locked.add(slot)
+            lock_betting_for_match(*slot)
+
+    if created:
+        # One counter write for the whole batch, coalesced with any other
+        # recent activity by this scout.
+        scouter.matches_scouted += created
+        repo.save_scouter(scouter, coalesce=True)
+        emit("scout_submitted", {"synced": created})
+
+    return {
+        "ok": True,
+        "results": results,
+        # Back-compat fields for the older client sync loop.
+        "accepted": [u for u in accepted if u],
+        "accepted_count": created,
+        "duplicates": duplicates,
+    }

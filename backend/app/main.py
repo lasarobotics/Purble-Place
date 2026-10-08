@@ -1,126 +1,327 @@
-"""HazeHub FastAPI application (MongoDB edition).
+"""HazeHub FastAPI application.
 
-Serverless-friendly: no in-process state, no WebSockets (clients poll
-``/api/events``), and schema initialization is a cheap version check on warm
-paths.  The same app runs locally under uvicorn and on Vercel as the
-``backend`` service.
+This process is the whole server: the JSON API, the WebSocket hub, and: when a built frontend is present: the web app itself. Serving both from one
+origin is what lets HazeHub run on a laptop on the event LAN with no reverse
+proxy, no CORS configuration, and no Cloud Run (so the Firebase project can
+stay on the free Spark plan).
 """
-
 from __future__ import annotations
 
+import logging
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse
-from pymongo.errors import ConfigurationError, OperationFailure, PyMongoError
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
-from app.config import settings
-from app.database import ensure_schema
-from app.routers import (
-    admin,
-    auth,
-    betting,
-    events,
-    matches,
-    picklists,
-    scouting,
-    sync,
-    teams,
+from . import repo
+from .cache import StoreUnavailable
+from .config import settings
+from .database import close_db, init_db
+from .firestore_db import guard
+from .firestore_db import status as firestore_status
+from .realtime import hub
+from .routers import (
+    admin, auth, betting, events, forms, matches, picklists, scouting, seasons,
+    sync, system, teams,
+)
+from .form_store import seed_builtin_forms
+from .seasons import seed_first_season
+from .seed import seed
+
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("hazehub")
+
+STATIC_FIELD = Path(__file__).resolve().parent / "static_field"
+
+#: The Next.js static export, if it has been built. Override with
+#: HAZEHUB_WEB_DIR when the frontend lives somewhere else.
+WEB_DIR = Path(
+    os.getenv(
+        "HAZEHUB_WEB_DIR",
+        str(Path(__file__).resolve().parents[2] / "frontend" / "out"),
+    )
 )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Best effort: a cold start with MongoDB briefly unreachable should still
-    # boot and serve /api/health; the first real request will retry.
+    # Best effort: a cold start with Firestore briefly unreachable should
+    # still boot and serve /api/health with a clear diagnostic.
+    #
+    # init_db() loads the whole working set into memory. That is the single
+    # burst of Firestore reads in a normal day: a few thousand documents,
+    # once: and every request afterwards is served from RAM.
     try:
-        ensure_schema()
-    except Exception:
-        pass
+        init_db()
+        seed()
+        # A season owns the game, the forms and everything scouted under
+        # them, so it has to exist before any of those are looked up.
+        seed_first_season()
+        # The scouting and pit pages render from these, so a fresh install
+        # needs them before anyone signs in.
+        seed_builtin_forms()
+        # The event pointer decides what every screen shows. If it has gone
+        # stale the app looks empty while the data sits in the datastore under
+        # another key, so it is checked here rather than discovered at an event.
+        repo.reconcile_current_event()
+    except Exception as exc:  # noqa: BLE001
+        log.exception("startup failed: %s", exc)
     yield
+    try:
+        close_db()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 app = FastAPI(title="HazeHub API", version="2.0.0", lifespan=lifespan)
-app.add_middleware(GZipMiddleware, minimum_size=1000)
 
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
+    # Tablets reach the host laptop by whatever LAN address it has that day.
+    allow_origin_regex=settings.cors_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-@app.exception_handler(PyMongoError)
-async def mongo_error_handler(request: Request, exc: PyMongoError) -> JSONResponse:
-    """Turn opaque 500s into an actionable 503 when MongoDB is the problem.
 
-    On Vercel this almost always means MONGODB_URI isn't set (the default
-    points at localhost) or the Atlas connection string / network access list
-    is wrong.
-    """
-    if isinstance(exc, OperationFailure) and "auth" in str(exc).lower():
-        detail = (
-            f"MongoDB Atlas rejected the credentials for '{settings.mongodb_host}' "
-            "(bad auth). The database user's password doesn't match MONGODB_URI — "
-            "update the URI in Vercel (or reset the user's password in Atlas → "
-            "Database Access), then redeploy."
-        )
-    elif isinstance(exc, ConfigurationError):
-        detail = (
-            "MongoDB connection string is invalid: "
-            f"{exc}. Check the MONGODB_URI project setting."
-        )
-    elif settings.mongodb_is_default:
-        detail = (
-            "MONGODB_URI is not set on this deployment, so the backend is "
-            "pointing at localhost. Add MONGODB_URI (a MongoDB Atlas "
-            "mongodb+srv:// connection string) in Vercel → Project → "
-            "Settings → Environment Variables, then redeploy."
-        )
-    else:
-        detail = (
-            f"Could not reach MongoDB at '{settings.mongodb_host}'. Check the "
-            "username/password in MONGODB_URI and allow access from anywhere "
-            "(0.0.0.0/0) in Atlas → Network Access."
-        )
-    return JSONResponse(status_code=503, content={"detail": detail})
+POST_COMP_COOKIE = "post_comp_unlocked"
+POST_COMP_404 = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>404: This page could not be found</title>
+  <style>
+    html,body{height:100%;margin:0;background:#1f1f1f;color:#ededed;font:16px/1.5 Arial,Helvetica,sans-serif}
+    body{display:grid;place-items:center}
+    main{display:flex;align-items:center;gap:22px}
+    h1{font-size:24px;line-height:1;margin:0;padding-right:22px;border-right:1px solid #555}
+    p{margin:0;font-size:14px;color:#cfcfcf}
+  </style>
+</head>
+<body>
+  <main aria-label="404 error">
+    <h1>404</h1>
+    <p>This page could not be found.</p>
+  </main>
+  <script>
+    (function () {
+      var want = ["ArrowLeft","ArrowLeft","ArrowRight","ArrowRight","4","1","8","Control","Control"];
+      var at = 0;
+      function keyName(event) {
+        if (event.key === "Control" || event.code === "ControlLeft" || event.code === "ControlRight") return "Control";
+        if (event.key === "ArrowLeft" || event.key === "ArrowRight") return event.key;
+        if (event.key === "4" || event.code === "Digit4" || event.code === "Numpad4") return "4";
+        if (event.key === "1" || event.code === "Digit1" || event.code === "Numpad1") return "1";
+        if (event.key === "8" || event.code === "Digit8" || event.code === "Numpad8") return "8";
+        return event.key;
+      }
+      window.addEventListener("keydown", function (event) {
+        var key = keyName(event);
+        if (key === want[at]) at += 1;
+        else at = key === want[0] ? 1 : 0;
+        if (at === want.length) {
+          document.cookie = "post_comp_unlocked=1; Max-Age=86400; Path=/; SameSite=Lax";
+          try { window.localStorage.setItem("hazehub.post_comp_unlocked", "1"); } catch (e) {}
+          window.location.href = "/login";
+        }
+      });
+    }());
+  </script>
+</body>
+</html>
+"""
 
+
+def _post_comp_locked(request: Request) -> bool:
+    if repo.setting("post_comp_mode") != "1":
+        return False
+    return request.cookies.get(POST_COMP_COOKIE) != "1"
+
+
+@app.middleware("http")
+async def post_comp_gate(request: Request, call_next):
+    if _post_comp_locked(request):
+        path = request.url.path
+        if path == "/api/health":
+            return await call_next(request)
+        if path.startswith("/api/"):
+            return JSONResponse(status_code=404, content={"detail": "Not found"})
+        return HTMLResponse(POST_COMP_404, status_code=404)
+    return await call_next(request)
 
 for r in (
     auth.router,
+    auth.game_router,
     teams.router,
     matches.router,
     scouting.router,
     scouting.pit_router,
     betting.router,
     picklists.router,
+    forms.router,
+    seasons.router,
     admin.router,
     sync.router,
+    system.router,
     events.router,
 ):
     app.include_router(r)
 
 
+@app.exception_handler(StoreUnavailable)
+def _datastore_unavailable(request: Request, exc: StoreUnavailable) -> JSONResponse:
+    """Answer 503, not 500, when the datastore is unreachable.
+
+    This matters for scouting: a tablet treats 5xx as "retry later" and keeps
+    the submission queued, but 503 plus a real explanation is the difference
+    between someone diagnosing a bad credential in a minute and staring at an
+    opaque "Internal Server Error" for an hour.
+    """
+    log.error("datastore unavailable on %s: %s", request.url.path, exc)
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": (
+                "The database is unreachable, so this could not be saved. "
+                "Your device has kept it queued and will retry. "
+                f"Cause: {exc}"
+            ),
+            "retry": True,
+        },
+    )
+
+
 @app.get("/api/health")
 def health() -> dict:
-    mongo_ok = True
-    try:
-        ensure_schema()
-    except Exception:
-        mongo_ok = False
-    return {
-        "ok": mongo_ok,
-        "app": settings.app_name,
-        "season": settings.season,
-        "environment": "vercel" if settings.is_vercel else "local",
-        "database": "mongodb",
-        "mongodb": {
-            "configured": not settings.mongodb_is_default,
-            "host": settings.mongodb_host,
-            "reachable": mongo_ok,
+    db = firestore_status()
+    cache = repo.cache_stats()
+    quota = guard.snapshot()
+    out = {
+        "ok": bool(cache.get("ready")),
+        "app": settings.APP_NAME,
+        "season": settings.SEASON,
+        "environment": settings.ENVIRONMENT,
+        "database": db,
+        "cache": {
+            "backend": cache.get("backend"),
+            "documents": cache.get("cached_total"),
+            "event": cache.get("event_key"),
         },
-        "realtime": "polling (/api/events)",
+        "quota": {
+            kind: f"{v['used']}/{v['budget']}" for kind, v in quota["operations"].items()
+        },
+        "realtime": "websocket (/ws) with polling fallback (/api/events)",
     }
+    if cache.get("error"):
+        out["error"] = cache["error"]
+    if cache.get("backend") == "local-file":
+        out["warning"] = (
+            "Running on the local development store: data is NOT in Firestore. "
+            "Set FIREBASE_PROJECT_ID (and FIREBASE_SERVICE_ACCOUNT outside Google "
+            "Cloud), or FIRESTORE_EMULATOR_HOST for local emulator use. "
+            "See instructions.txt."
+        )
+    return out
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(ws: WebSocket):
+    await hub.connect(ws)
+    try:
+        while True:
+            # We only push; keep the socket open and ignore inbound pings.
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        await hub.disconnect(ws)
+    except Exception:  # noqa: BLE001
+        await hub.disconnect(ws)
+
+
+if STATIC_FIELD.exists():
+    app.mount("/field", StaticFiles(directory=str(STATIC_FIELD)), name="field")
+
+
+# --------------------------------------------------------------------------- #
+# The web app                                                                  #
+# --------------------------------------------------------------------------- #
+if WEB_DIR.is_dir() and (WEB_DIR / "index.html").exists():
+    # Next.js hashes its assets, so /_next/static can be cached forever.
+    app.mount(
+        "/_next", StaticFiles(directory=str(WEB_DIR / "_next")), name="next-assets"
+    )
+
+    def _resolve(rel: str) -> Path | None:
+        """Map a URL path onto a file in the static export.
+
+        `next build` with `output: "export"` emits `about.html` for /about and
+        `about/index.html` when trailingSlash is on, so try both before
+        falling back to the SPA shell.
+        """
+        rel = rel.strip("/")
+        candidates = (
+            [WEB_DIR / "index.html"]
+            if not rel
+            else [WEB_DIR / rel, WEB_DIR / f"{rel}.html", WEB_DIR / rel / "index.html"]
+        )
+        for candidate in candidates:
+            try:
+                resolved = candidate.resolve()
+                # Never serve anything outside the export directory.
+                resolved.relative_to(WEB_DIR.resolve())
+            except (OSError, ValueError):
+                continue
+            if resolved.is_file():
+                return resolved
+        return None
+
+    #: Extensions that must never fall through to the app shell. A missing
+    #: chunk answered with 200 + HTML looks like a working deploy while the
+    #: page silently fails; a real 404 says what actually happened.
+    _ASSET_SUFFIXES = {
+        ".js", ".css", ".map", ".json", ".txt", ".woff", ".woff2", ".ttf",
+        ".otf", ".eot", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp",
+        ".ico", ".mp4", ".webm", ".xml", ".wasm",
+    }
+
+    # HEAD as well as GET: uptime checkers and platform probes send HEAD to /,
+    # and FastAPI does not derive it from a GET route. Answering 405 makes a
+    # healthy service look unhealthy to whatever is watching it.
+    @app.api_route("/{full_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
+    def serve_web(full_path: str):
+        """Serve the built web app for any non-API path.
+
+        Registered last so every real route wins; unknown *page* paths fall
+        through to the app shell and the client router handles them.
+        """
+        target = _resolve(full_path)
+        if target is None:
+            suffix = Path(full_path).suffix.lower()
+            if suffix and suffix in _ASSET_SUFFIXES:
+                raise HTTPException(status_code=404, detail="Not found")
+            target = WEB_DIR / "404.html"
+            if not target.is_file():
+                target = WEB_DIR / "index.html"
+        no_cache = target.suffix == ".html"
+        return FileResponse(
+            target,
+            headers={"Cache-Control": "no-cache"} if no_cache else None,
+        )
+
+    log.info("serving the web app from %s", WEB_DIR)
+else:
+    log.info(
+        "no built frontend at %s: API only. Build it with "
+        "`cd frontend && npm run build` (HAZEHUB_STATIC_EXPORT=1) to serve "
+        "everything from this one process.",
+        WEB_DIR,
+    )
