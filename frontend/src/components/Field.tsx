@@ -229,9 +229,9 @@ function DensityLayer({
             result="intensity"
           />
           <feComponentTransfer in="intensity">
-            <feFuncR type="table" tableValues="0.20 0.30 0.40 0.52 0.65 0.78" />
-            <feFuncG type="table" tableValues="0.10 0.17 0.23 0.32 0.44 0.60" />
-            <feFuncB type="table" tableValues="0.30 0.45 0.60 0.73 0.87 1" />
+            <feFuncR type="table" tableValues="0.10 0.13 0.35 0.85 0.97 0.99" />
+            <feFuncG type="table" tableValues="0.20 0.60 0.80 0.75 0.45 0.15" />
+            <feFuncB type="table" tableValues="0.55 0.85 0.45 0.20 0.12 0.20" />
             <feFuncA type="table" tableValues="0 0.35 0.60 0.75 0.85 0.92" />
           </feComponentTransfer>
         </filter>
@@ -263,7 +263,7 @@ export function FieldHeatmap({
   const [open, setOpen] = useState(false);
   const [phase, setPhase] = useState<"all" | "auto" | "teleop">("all");
   const [station, setStation] = useState<StationFilter>("all");
-  const [markers, setMarkers] = useState(true);
+  const [markers, setMarkers] = useState(false);
 
   const stationsPresent = Array.from(
     new Set(points.map((p) => stationKey(p)).filter(Boolean))
@@ -306,8 +306,8 @@ export function FieldHeatmap({
                 cx={p.x * 100}
                 cy={p.y * 50}
                 r={p.result === "made" ? 0.8 : 0.6}
-                fill={colorFor(p)}
-                stroke="#fff"
+                fill={p.result === "made" ? "#eafff2" : "#1b0b0b"}
+                stroke={p.result === "made" ? "#0f2d1c" : "#ffd9d9"}
                 strokeWidth={0.18}
                 opacity={0.9}
               />
@@ -338,12 +338,18 @@ export function FieldHeatmap({
           ))}
         </div>
       )}
-      <label className="row" style={{gap: 8}}><input type="checkbox" checked={markers} onChange={e => setMarkers(e.target.checked)} />Show each shot</label>
+      <button
+        type="button"
+        className={"btn sm " + (markers ? "primary" : "ghost")}
+        onClick={() => setMarkers((v) => !v)}
+      >
+        {markers ? "Hide" : "Show"} each shot
+      </button>
     </div>
   );
 
   const stats = (
-    <div className="row heatmap-stats" style={{ gap: 16, marginTop: 12, flexWrap: "wrap" }}>
+    <div className="row heatmap-stats" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
       <span className="badge muted">{selectedStats?.total ?? "—"} <MetricLabel metric="attempts">attempts</MetricLabel></span>
       <span className="badge green">{selectedStats?.made ?? "—"} <MetricLabel metric="made">made</MetricLabel></span>
       <span className="badge haze">
@@ -355,10 +361,10 @@ export function FieldHeatmap({
   const legend = (
     <div className="heatmap-legend">
       <span className="faint">Shots from here:</span>
-      <span className="faint">a few</span>
       <span className="heat-ramp" aria-hidden />
+      <span className="faint">a few</span>
       <span className="faint">a lot</span>
-      {markers && <span className="faint">Cyan: auto made. Purple: teleop made. Amber: missed.</span>}
+      {markers && <span className="faint">Light dots are makes, dark dots are misses.</span>}
     </div>
   );
 
@@ -368,8 +374,8 @@ export function FieldHeatmap({
 
   return (
     <>
-      {controls}
       {map(false)}
+      {controls}
       {stats}
       {expandable && (
         <button type="button" className="btn sm ghost" style={{ marginTop: 8 }} onClick={() => setOpen(true)} aria-label="Open scoring heatmap full size">

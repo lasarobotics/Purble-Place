@@ -56,11 +56,13 @@ export default function ComparePage() {
   }, [selected.join(",")]));
 
   const fmt = (key: string, v: number) => v == null ? "—" : METRICS[key]?.percent ? `${(v * 100).toFixed(0)}%` : num(v, key === "epa" || key.includes("foul") ? 0 : 1);
+  const reference = data?.teams[0]?.scoring_benchmark;
   const label = (t: number) => `${t}${teamProfiles[t]?.nickname ? `. ${teamProfiles[t].nickname}` : ""}`;
 
   return (
     <div>
       <div className="page-title"><h1>Compare Robots</h1></div>
+      {reference?.team != null && reference.avg_points != null && <p className="faint">Scoring reference: Team {reference.team} · {num(reference.avg_points, 2)} average points. Defense and relative scoring use this event leader.</p>}
 
 
       <div className="card" style={{ marginBottom: 16 }}>

@@ -119,10 +119,12 @@ test("heatmap filters, shot toggle, expanded view and interactive trend points",
   await expect(page.getByRole("heading", { name: "Performance Trend" })).toBeVisible();
   await expect(page.locator(".heatmap-stats")).toContainText("29");
   await expect(page.locator(".heatmap-stats")).toContainText("62%");
-  await expect(page.locator(".shot-dot")).toHaveCount(29);
-  await page.getByLabel("Show each shot").uncheck();
   await expect(page.locator(".shot-dot")).toHaveCount(0);
-  await page.getByLabel("Show each shot").check();
+  await page.getByRole("button", { name: "Show each shot" }).click();
+  await expect(page.locator(".shot-dot")).toHaveCount(29);
+  await page.getByRole("button", { name: "Hide each shot" }).click();
+  await expect(page.locator(".shot-dot")).toHaveCount(0);
+  await page.getByRole("button", { name: "Show each shot" }).click();
   await page.getByRole("button", { name: "Auto", exact: true }).click();
   await expect(page.locator(".heatmap-stats")).toContainText("100%");
   await expect(page.locator(".shot-dot")).toHaveCount(10);

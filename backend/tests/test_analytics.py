@@ -37,10 +37,16 @@ def test_adjusted_sample_skew():
     assert a._skew([1, 2, 3]) == pytest.approx(0)
     assert a._skew([1, 1, 4]) == pytest.approx(1.7320508075688772)
 
-def test_defense_is_bounded_and_failure_contributes_zero():
-    assert a._defense_capability([entry(played_defense=True, defense_rating=5, successful_stops=1)]) == 82.5
-    assert a._defense_capability([entry(played_defense=True, defense_rating=5, failure=True)]) == 0
-    assert a._defense_capability([]) is None
+def test_defense_uses_season_points_relative_to_leader(monkeypatch):
+    monkeypatch.setattr(a, "compute_points", lambda data: 3 * data["successful_stops"])
+    reports = [entry(played_defense=True, successful_stops=4), entry(played_defense=True, successful_stops=10, failure=True)]
+    assert a._defense_capability(reports, 60) == 10
+    assert a._defense_capability(reports, 120) == 5
+    assert a._defense_capability([entry(played_defense=False, successful_stops=4)], 60) == 0
+    assert a._defense_capability(reports, 0) is None
+    assert a._defense_capability(reports, None) is None
+    assert a._defense_capability([], 60) is None
+
 
 def test_match_series_separates_playoffs(records):
     records.extend([entry(10,1), entry(30,1), entry(50,1,comp="sf")])
@@ -77,3 +83,37 @@ def test_memo_invalidates_on_revision(monkeypatch):
     revision[0]+=1
     repo.memoized("test-memo", (schema.MATCH_SCOUTING,), build)
     assert build.call_count == 2
+
+
+def test_scoring_reference_uses_event_leader_not_selected_robot(records):
+    records.extend([entry(40, team=1), entry(100, team=2), entry(300, team=3, no_show=True)])
+    reference = a.scoring_benchmark("test")
+    assert reference == {"team": 2, "avg_points": 100}
+    assert a.team_summary("test", 1)["relative_scoring"] == .4
+    assert a.team_summary("test", 2)["relative_scoring"] == 1
+    assert a.team_summary("test", 3)["relative_scoring"] is None
+
+
+def test_scoring_reference_uses_average_not_single_peak_and_breaks_ties(records):
+    records.extend([entry(200, team=1), entry(0, 2, team=1), entry(110, team=2), entry(110, team=3)])
+    assert a.scoring_benchmark("test") == {"team": 2, "avg_points": 110}
+
+
+def test_scoring_reference_missing_positive_scores_is_unavailable(records):
+    records.extend([entry(0), entry(-10, team=2)])
+    assert a.scoring_benchmark("test")["avg_points"] is None
+    assert a.team_summary("test", 1)["relative_scoring"] is None
+
+
+def test_defense_and_last_four_share_event_scoring_leader(records, monkeypatch):
+    monkeypatch.setattr(a, "compute_points", lambda data: 2 * data["successful_stops"])
+    records.extend([entry(10, match=i, played_defense=True, successful_stops=3) for i in range(1,6)])
+    records.append(entry(100, team=2))
+    summary = a.team_summary("test", 1)
+    row = next(row for row in a.data_analysis("test") if row["team"] == 1)
+    assert summary["defense_capability"] == row["defense_capability"] == row["l4m_defense_capability"] == 6
+    assert row["scoring_benchmark"] == {"team": 2, "avg_points": 100}
+    # A new leader changes both relative metrics using cloud data.
+    records.append(entry(200, team=3))
+    assert a.team_summary("test", 1)["defense_capability"] == 3
+    assert a.team_summary("test", 1)["relative_scoring"] == .05

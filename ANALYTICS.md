@@ -5,9 +5,13 @@ purple accents, navigation and typography follow commit e3ed209.
 
 ## Cloud analysis
 
-All metric formulas run in backend/app/analytics.py. Defense contribution is an
-explicit 0-100 heuristic combining participation, rating and diminishing-return
-stops. Recent-four metrics use distinct matches, including playoff rounds. Skew
+All metric formulas run in backend/app/analytics.py. Defense capability is average season-scored defensive-stop points divided by
+the event scoring leader's average points, expressed on a percentage scale. It is
+a proxy, not measured points prevented. Non-defense and failed reports contribute
+zero. A missing or nonpositive reference makes the metric unavailable. The scoring
+leader is the robot with the highest average attended-report score, with ties
+broken by team number. Relative scoring and both defense windows share this
+event-wide reference, regardless of the robots selected in Compare. Recent-four metrics use distinct matches, including playoff rounds. Skew
 uses adjusted sample skewness and requires three reports. Ranking point predictions
 are heuristics across qualification matches using season thresholds (event upper
 quartiles when not configured). Tooltips explain formulas and their limitations.

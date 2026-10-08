@@ -19,7 +19,7 @@ from typing import Any, Optional
 from . import repo, schema
 from . import seasons
 from .models import ScoutEntry
-from .scoring import attempt_value, phase_counts
+from .scoring import attempt_value, compute_points, phase_counts
 
 #: Revision keys for the memoiser: any change to scouting or team data
 #: invalidates every derived aggregate below.
@@ -65,21 +65,44 @@ def _last_four_entries(entries: list[ScoutEntry]) -> list[ScoutEntry]:
     return [e for e in entries if (e.comp_level, e.match_number) in keep]
 
 
-def _defense_capability(entries: list[ScoutEntry]) -> float | None:
-    """0–100 observed defensive contribution, not an opponent-adjusted estimate.
+def scoring_benchmark(event_key: str) -> dict[str, Any]:
+    """The event's highest average-scoring robot, shared by relative metrics.
 
-    Rating contributes 65%, diminishing-return stops 35%; non-defense and
-    failed reports contribute zero. Participation is therefore reflected.
+    Use all attended reports, independently of the selected comparison robots.
+    Equal scores select the lower team number, so the reference is stable.
     """
-    if not entries:
+    def build():
+        best_team = None
+        best_score = 0.0
+        for team in sorted(event_teams(event_key)):
+            reports = [e for e in team_entries(event_key, team) if not e.no_show]
+            if not reports:
+                continue
+            score = statistics.fmean(e.points for e in reports)
+            if score > best_score:
+                best_team, best_score = team, score
+        return {"team": best_team, "avg_points": best_score if best_team is not None else None}
+    return repo.memoized(f"scoring-benchmark:{event_key}", _DEPS, build)
+
+
+def _defense_capability(entries: list[ScoutEntry], benchmark_points: float | None) -> float | None:
+    """Season-scored defensive-stop proxy relative to the event scoring leader.
+
+    This is not measured opponent points prevented. Missing/nonpositive
+    reference scores are unavailable. Non-defense and failed reports count
+    toward attendance but contribute no defensive-stop points.
+    """
+    if not entries or benchmark_points is None or benchmark_points <= 0:
         return None
     total = 0.0
     for e in entries:
         if not e.played_defense or e.failure:
             continue
-        stops = max(0, e.successful_stops)
-        total += .65 * min(5, max(0, e.defense_rating)) / 5 + .35 * stops / (stops + 1)
-    return round(100 * total / len(entries), 2)
+        provenance = {"season_id": e.season_id, "game_version": e.game_version}
+        baseline = compute_points({**provenance, "successful_stops": 0})
+        stopped = compute_points({**provenance, "successful_stops": max(0, e.successful_stops)})
+        total += max(0.0, stopped - baseline)
+    return round(100 * total / len(entries) / benchmark_points, 2)
 
 
 def _percentile(values: list[float], q: float) -> float:
@@ -261,6 +284,7 @@ def _build_team_summary(event_key: str, team: int) -> dict[str, Any]:
     top_tags = sorted(tag_counts.items(), key=lambda kv: -kv[1])
 
     tc = repo.team(team)
+    benchmark = scoring_benchmark(event_key)
     def ratio(a, b):
         return round(a / b, 3) if b else None
     auto_n = counts["auto_made"] + counts["auto_missed"]
@@ -271,6 +295,8 @@ def _build_team_summary(event_key: str, team: int) -> dict[str, Any]:
     denominator = sum((i - xbar) ** 2 for i in range(k))
     trend = sum((i - xbar) * (p - statistics.fmean(series)) for i, p in enumerate(series)) / denominator if denominator else None
     return {
+        "scoring_benchmark": benchmark,
+        "relative_scoring": ratio(statistics.fmean(pts), benchmark["avg_points"]) if pts else None,
         "accuracy": ratio(counts["auto_made"] + counts["teleop_made"], auto_n + tele_n),
         "auto_accuracy": ratio(counts["auto_made"], auto_n),
         "teleop_accuracy": ratio(counts["teleop_made"], tele_n),
@@ -282,7 +308,7 @@ def _build_team_summary(event_key: str, team: int) -> dict[str, Any]:
         "auto_leave_rate": ratio(sum(e.auto_leave for e in entries), n),
         "avg_fouls": ratio(sum(e.fouls for e in entries), n),
         "avg_stops": ratio(sum(e.successful_stops for e in entries), n),
-        "defense_capability": _defense_capability(entries),
+        "defense_capability": _defense_capability(entries, benchmark["avg_points"]),
         "team": team,
         "nickname": tc.nickname if tc else "",
         "avatar": tc.avatar if tc else "",
@@ -336,6 +362,7 @@ def event_teams(event_key: str) -> list[int]:
 # Ranking                                                                      #
 # --------------------------------------------------------------------------- #
 RANK_METRICS = {
+    "relative_scoring": "Scoring vs event leader",
     "defense_capability": "Defense capability",
     "accuracy": "Scoring accuracy",
     "auto_accuracy": "Auto accuracy",
@@ -401,6 +428,7 @@ def data_analysis(event_key: str) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         summaries = all_summaries(event_key)
         rp_predictions = _ranking_point_predictions(event_key)
+        benchmark = scoring_benchmark(event_key)
         for team in event_teams(event_key):
             summary = summaries[team]
             entries = [e for e in team_entries(event_key, team) if not e.no_show]
@@ -413,8 +441,9 @@ def data_analysis(event_key: str) -> list[dict[str, Any]]:
                     "nickname": summary["nickname"],
                     "avatar": summary["avatar"],
                     "matches": summary["matches"],
-                    "defense_capability": _defense_capability(entries),
-                    "l4m_defense_capability": _defense_capability(l4m),
+                    "defense_capability": _defense_capability(entries, benchmark["avg_points"]),
+                    "l4m_defense_capability": _defense_capability(l4m, benchmark["avg_points"]),
+                    "scoring_benchmark": benchmark,
                     "consistency": summary["consistency"],
                     "l4m_consistency": round(_consistency(l4m), 3),
                     "skew_distribution": round(_skew([e.points for e in entries]), 3) if len(entries) >= 3 else None,

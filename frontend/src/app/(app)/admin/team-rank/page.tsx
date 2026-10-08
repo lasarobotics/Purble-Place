@@ -17,6 +17,7 @@ const FMT: Record<string, (v: number) => string> = {
 };
 
 type DataAnalysisRow = Pick<TeamSummary, "team" | "nickname" | "avatar" | "matches"> & {
+  scoring_benchmark?: TeamSummary["scoring_benchmark"];
   defense_capability: number | null;
   l4m_defense_capability: number | null;
   consistency: number;
@@ -32,7 +33,7 @@ type DataAnalysisRow = Pick<TeamSummary, "team" | "nickname" | "avatar" | "match
 };
 
 type SortDir = "asc" | "desc";
-type AnalysisKey = keyof Omit<DataAnalysisRow, "team" | "nickname" | "avatar">;
+type AnalysisKey = keyof Omit<DataAnalysisRow, "team" | "nickname" | "avatar" | "scoring_benchmark">;
 
 const ANALYSIS_COLUMNS: { key: AnalysisKey; label: string; fmt?: (v: number) => string }[] = [
   { key: "defense_capability", label: "Defense Capability", fmt: (v) => num(v, 2) },
@@ -140,6 +141,7 @@ export default function TeamRankPage() {
   };
 
   const fmt = (METRICS[metric]?.percent ? pct : FMT[metric]) || ((v: number) => num(v, metric === "epa" ? 0 : 1));
+  const reference = (tab === "rank" ? rows[0] : analysisRows[0])?.scoring_benchmark;
   const maxVal = Math.max(...rows.map((r) => (r as any)[metric] || 0), 1);
 
   return (
@@ -151,6 +153,9 @@ export default function TeamRankPage() {
         <button type="button" className={tab === "analysis" ? "on" : ""} onClick={() => setTab("analysis")}>Data Analysis</button>
       </div>
 
+      {reference?.team != null && reference.avg_points != null && (tab === "analysis" || ["defense_capability", "relative_scoring"].includes(metric)) && (
+        <p className="faint">Scoring reference: Team {reference.team} · {num(reference.avg_points, 2)} average points. Defense and relative scoring use this event leader.</p>
+      )}
       {tab === "rank" ? (
       <>
       <div className="card" style={{ marginBottom: 16 }}>

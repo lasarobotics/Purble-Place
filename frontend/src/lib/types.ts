@@ -262,6 +262,8 @@ export interface DisagreementRow {
 }
 
 export interface TeamSummary {
+  scoring_benchmark?: { team: number | null; avg_points: number | null };
+  relative_scoring?: number | null;
   team: number;
   nickname: string;
   avatar?: string;
