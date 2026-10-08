@@ -22,6 +22,52 @@ export function FieldInput({
   const [phase, setPhase] = useState<"auto" | "teleop">("teleop");
   const [result, setResult] = useState<"made" | "missed">("made");
 
+  function undo() {
+    onChange(points.slice(0, -1));
+  }
+
+  function clear() {
+    onChange([]);
+  }
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      if (target?.isContentEditable || tag === "input" || tag === "textarea" || tag === "select") return;
+
+      switch (e.key.toLowerCase()) {
+        case "a":
+          e.preventDefault();
+          setPhase("auto");
+          break;
+        case "s":
+          e.preventDefault();
+          setPhase("teleop");
+          break;
+        case "q":
+          e.preventDefault();
+          setResult("made");
+          break;
+        case "w":
+          e.preventDefault();
+          setResult("missed");
+          break;
+        case "z":
+          e.preventDefault();
+          undo();
+          break;
+        case "x":
+          e.preventDefault();
+          clear();
+          break;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [points, onChange]);
+
   function add(e: React.MouseEvent) {
     const el = ref.current;
     if (!el) return;
@@ -43,18 +89,18 @@ export function FieldInput({
     <div className="field-input">
       <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
         <div className="seg">
-          <button type="button" className={phase === "auto" ? "on" : ""} aria-pressed={phase === "auto"} onClick={() => setPhase("auto")}>
+          <button type="button" className={phase === "auto" ? "on" : ""} aria-pressed={phase === "auto"} onClick={() => setPhase("auto")} title="A">
             Auto
           </button>
-          <button type="button" className={phase === "teleop" ? "on" : ""} aria-pressed={phase === "teleop"} onClick={() => setPhase("teleop")}>
+          <button type="button" className={phase === "teleop" ? "on" : ""} aria-pressed={phase === "teleop"} onClick={() => setPhase("teleop")} title="S">
             Teleop
           </button>
         </div>
         <div className="seg">
-          <button type="button" className={result === "made" ? "on" : ""} aria-pressed={result === "made"} onClick={() => setResult("made")}>
+          <button type="button" className={result === "made" ? "on" : ""} aria-pressed={result === "made"} onClick={() => setResult("made")} title="Q">
             Made
           </button>
-          <button type="button" className={result === "missed" ? "on" : ""} aria-pressed={result === "missed"} onClick={() => setResult("missed")}>
+          <button type="button" className={result === "missed" ? "on" : ""} aria-pressed={result === "missed"} onClick={() => setResult("missed")} title="W">
             Missed
           </button>
         </div>
@@ -85,10 +131,10 @@ export function FieldInput({
           <span className="badge">Teleop {counts.teleMade}/{counts.teleMade + counts.teleMiss}</span>
         </div>
         <div className="btn-row">
-          <button type="button" className="btn sm ghost" onClick={() => onChange(points.slice(0, -1))} disabled={!points.length}>
+          <button type="button" className="btn sm ghost" onClick={undo} disabled={!points.length} title="Z">
             Undo
           </button>
-          <button type="button" className="btn sm ghost" onClick={() => onChange([])} disabled={!points.length}>
+          <button type="button" className="btn sm ghost" onClick={clear} disabled={!points.length} title="X">
             Clear
           </button>
         </div>
