@@ -51,6 +51,7 @@ async function fixture(context: BrowserContext, options: { admin?: boolean; scou
     } else if (url.pathname === "/api/matches") response = { event: "2026test", matches: [1, 2].map(n => ({ event_key: "2026test", match_key: `2026test_qm${n}`, comp_level: "qm", match_number: n, red: [418, 2, 3], blue: [4, 5, 6], red_teams: [{ team_number: 418, nickname: "Purple Haze", epa: 40 }] })) };
     else if (url.pathname === "/api/events") response = { now: new Date().toISOString(), events: [] };
     else if (url.pathname === "/api/scout/last-assignment") response = { alliance: "red", station: 1 };
+    else if (url.pathname === "/api/scout/last-data-entry") response = { event: "2026test", last_data_entry: "2026-10-08T15:24:00Z" };
     else if (url.pathname === "/api/sync/scout") {
       const entries = route.request().postDataJSON().entries;
       submissions.push(...entries);
@@ -74,6 +75,8 @@ test("cloud formulas, offline reload, draft and locked hotkeys, then exactly-onc
   await expect(page.locator("tbody td.sticky-team").first()).toHaveCSS("position", "sticky");
   await page.locator("th .metric-label").filter({hasText: "Avg points"}).hover();
   await expect(page.getByRole("tooltip")).toContainText("Mean performance points");
+  await expect(page.getByRole("tooltip")).toContainText("Last data entry:");
+  await expect(page.getByRole("tooltip")).not.toContainText("Computed on the server");
   await expect(page.locator(".metric-fraction")).toBeVisible();
   await page.screenshot({ path: "test-results/metric-tooltip.png", fullPage: true });
   await page.getByRole("button", { name: "Data Analysis" }).click();

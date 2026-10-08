@@ -284,6 +284,22 @@ def last_assignment(scouter: Scouter = Depends(current_scouter)) -> dict:
     return {"alliance": last.alliance, "station": last.station}
 
 
+@router.get("/last-data-entry")
+def last_data_entry(
+    event: str | None = None,
+    _: Scouter = Depends(current_scouter),
+) -> dict:
+    event_key = repo.resolve_event(event)
+    latest = max(
+        (e.created_at for e in repo.scouting_for_event(event_key)),
+        default=None,
+    )
+    return {
+        "event": event_key,
+        "last_data_entry": latest.isoformat() if latest else None,
+    }
+
+
 @router.get("/match/{match_number}")
 def entries_for_match(
     match_number: int,
