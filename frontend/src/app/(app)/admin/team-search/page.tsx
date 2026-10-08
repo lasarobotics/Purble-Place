@@ -1,5 +1,6 @@
 "use client";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
+import { useLiveRefetch } from "@/lib/bus";
 import { api } from "@/lib/api";
 import { matchLabel, num, pct, timeAgo } from "@/lib/format";
 import type { Team, TeamSummary, HeatPoint } from "@/lib/types";
@@ -43,9 +44,13 @@ export default function TeamSearchPage() {
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
 
-  useEffect(() => {
-    api<number[]>("/api/admin/event-teams").then((t) => { setTeams(t); if (t[0]) selectTeam(t[0]); }).catch(() => {});
+  const requestVersion = useRef(0);
+  const loadTeams = useCallback(() => {
+    api<number[]>("/api/admin/event-teams").then(t => {
+      setTeams(t); setTeam(current => current && t.includes(current) ? current : t[0] || null);
+    }).catch(() => {});
   }, []);
+  useLiveRefetch(loadTeams);
 
   useEffect(() => {
     const nums = teams.filter((n) => n && !teamProfiles[n]);
@@ -55,24 +60,23 @@ export default function TeamSearchPage() {
       .catch(() => {});
   }, [teams, teamProfiles]);
 
-  const selectTeam = useCallback(async (n: number) => {
-    setTeam(n); setLoading(true);
-    try {
-      const [s, h, r] = await Promise.all([
-        api<TeamSummary>(`/api/admin/team/${n}/summary`),
-        api<any>(`/api/admin/team/${n}/heatmap`),
-        api<TeamReport[]>(`/api/admin/team/${n}/reports`),
-      ]);
-      setSummary(s); setHeat(h); setReports(r);
-    } catch { setReports([]); }
-    setLoading(false);
-  }, []);
-
-  useEffect(() => {
+  const selectTeam = (n: number) => setTeam(n);
+  const loadTeam = useCallback(() => {
     if (!team) return;
+    const version = ++requestVersion.current;
+    setLoading(true);
     const q = phase ? `?phase=${phase}` : "";
-    api<any>(`/api/admin/team/${team}/heatmap${q}`).then(setHeat).catch(() => {});
-  }, [phase, team]);
+    Promise.all([
+      api<TeamSummary>(`/api/admin/team/${team}/summary`),
+      api<any>(`/api/admin/team/${team}/heatmap${q}`),
+      api<TeamReport[]>(`/api/admin/team/${team}/reports`),
+    ]).then(([s, h, r]) => {
+      if (version !== requestVersion.current) return;
+      setSummary(s); setHeat(h); setReports(r);
+    }).catch(() => { if (version === requestVersion.current) { setSummary(null); setHeat(null); setReports([]); } })
+      .finally(() => { if (version === requestVersion.current) setLoading(false); });
+  }, [team, phase]);
+  useLiveRefetch(loadTeam);
 
   return (
     <div>
@@ -116,26 +120,21 @@ export default function TeamSearchPage() {
             <div className="card">
               <div className="card-h"><h3>Scoring Heatmap</h3>
                 <div className="seg">
-                  <button className={phase === "" ? "on" : ""} onClick={() => setPhase("")}>All</button>
+                  <button className={phase === "" ? "on" : ""} onClick={() => setPhase("")}>Both</button>
                   <button className={phase === "auto" ? "on" : ""} onClick={() => setPhase("auto")}>Auto</button>
                   <button className={phase === "teleop" ? "on" : ""} onClick={() => setPhase("teleop")}>Teleop</button>
                 </div>
               </div>
               {heat && heat.points.length > 0 ? (
                 <>
-                  <FieldHeatmap points={heat.points} />
-                  <div className="row" style={{ justifyContent: "space-between", marginTop: 10 }}>
-                    <span className="badge muted">{heat.total} attempts</span>
-                    <span className="badge green">{heat.made} made</span>
-                    <span className="badge haze">{pct(heat.accuracy)} accuracy</span>
-                  </div>
+                  <FieldHeatmap points={heat.points} stats={heat} />
                 </>
               ) : <Empty icon="map" title="No mapped scoring" />}
             </div>
 
             <div className="card">
               <div className="card-h"><h3>Performance Trend</h3></div>
-              <LineChart data={summary.match_points.map((m) => ({ x: `Q${m.match}`, y: m.points }))} label="Points per match" />
+              <LineChart data={summary.match_points.map((m) => ({ x: `${m.comp_level && m.comp_level !== "qm" ? m.comp_level.toUpperCase() : "Q"}${m.match}`, y: m.points }))} label="Points per match" />
               <div className="divider" />
               <div className="grid cols-2" style={{ gap: 10 }}>
                 <Stat label="Peak" value={num(summary.max_points)} />

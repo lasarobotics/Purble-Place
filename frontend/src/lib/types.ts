@@ -164,6 +164,7 @@ export interface TeamInsight {
 
 export interface DisagreementConflict {
   match: number;
+  comp_level?: string;
   spread: number;
   reports: { scout_id: string; points: number }[];
 }
@@ -202,7 +203,21 @@ export interface TeamSummary {
   total_fouls: number;
   total_stops: number;
   counts: { auto_made: number; auto_missed: number; teleop_made: number; teleop_missed: number };
-  match_points: { match: number; points: number }[];
+  match_points: { match: number; comp_level?: string; points: number }[];
+  accuracy?: number | null;
+  auto_accuracy?: number | null;
+  teleop_accuracy?: number | null;
+  avg_auto_points?: number | null;
+  avg_teleop_points?: number | null;
+  avg_endgame_points?: number | null;
+  median_points?: number | null;
+  recent_points?: number | null;
+  trend?: number | null;
+  attendance_rate?: number | null;
+  operational_rate?: number | null;
+  auto_leave_rate?: number | null;
+  avg_fouls?: number | null;
+  avg_stops?: number | null;
   tags?: { tag: string; count: number }[];
   rank?: number;
   // data-picklist extras

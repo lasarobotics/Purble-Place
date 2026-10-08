@@ -1,4 +1,6 @@
 "use client";
+import { MetricLabel } from "@/components/MetricLabel";
+import { METRICS } from "@/lib/metrics";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useLiveRefetch } from "@/lib/bus";
@@ -30,7 +32,7 @@ export default function TeamRankPage() {
   useEffect(() => setLoading(true), [metric]);
   useLiveRefetch(load);
 
-  const fmt = FMT[metric] || ((v: number) => num(v, metric === "epa" ? 0 : 1));
+  const fmt = (METRICS[metric]?.percent ? pct : FMT[metric]) || ((v: number) => num(v, metric === "epa" ? 0 : 1));
   const maxVal = Math.max(...rows.map((r) => (r as any)[metric] || 0), 1);
 
   return (
@@ -40,7 +42,7 @@ export default function TeamRankPage() {
 
       <div className="card" style={{ marginBottom: 16 }}>
         <label className="field" style={{ margin: 0, maxWidth: 320 }}>
-          <span>Rank by</span>
+          <span>Rank by · <MetricLabel metric={metric} /></span>
           <select value={metric} onChange={(e) => setMetric(e.target.value)}>
             {metrics.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}
           </select>
@@ -51,13 +53,13 @@ export default function TeamRankPage() {
         <div className="card">
           <div className="table-wrap">
             <table className="data">
-              <thead><tr><th>#</th><th>Team</th><th className="num">{metrics.find((m) => m.key === metric)?.label}</th><th style={{ width: "30%" }}></th><th className="num">Matches</th><th className="num">Avg</th><th className="num">Consist.</th></tr></thead>
+              <thead><tr><th>#</th><th>Team</th><th className="num"><MetricLabel metric={metric} /></th><th style={{ width: "30%" }}></th><th className="num"><MetricLabel>Matches</MetricLabel></th><th className="num"><MetricLabel>Avg</MetricLabel></th><th className="num"><MetricLabel>Consist.</MetricLabel></th></tr></thead>
               <tbody>
                 {rows.map((r) => (
                   <tr key={r.team}>
                     <td><span className={rankClass(r.rank || 0)}>{r.rank}</span></td>
                     <td><ClickableTeam team={r} /></td>
-                    <td className="num mono"><b>{fmt((r as any)[metric] || 0)}</b></td>
+                    <td className="num mono"><b>{(r as any)[metric] == null ? "\u2014" : fmt((r as any)[metric])}</b></td>
                     <td><Bar value={(r as any)[metric] || 0} max={maxVal} /></td>
                     <td className="num mono">{r.matches}</td>
                     <td className="num mono">{num(r.avg_points)}</td>

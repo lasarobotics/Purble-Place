@@ -12,6 +12,7 @@ from pymongo.database import Database
 
 from ..analytics import (
     RANK_METRICS,
+    analysis_bundle,
     compare_teams,
     data_picklist,
     event_teams,
@@ -235,6 +236,15 @@ def set_result(
 @router.get("/metrics")
 def metrics(_: ScouterView = Depends(require_admin)) -> dict:
     return {"metrics": [{"key": k, "label": v} for k, v in RANK_METRICS.items()]}
+
+
+@router.get("/analysis")
+def get_analysis(
+    event: str | None = None,
+    db: Database = Depends(database_dependency),
+    _: ScouterView = Depends(require_admin),
+) -> dict:
+    return analysis_bundle(db, (event or get_setting(db, "current_event")).strip())
 
 
 @router.get("/event-teams")

@@ -1,4 +1,6 @@
 "use client";
+import { MetricLabel } from "@/components/MetricLabel";
+import { METRICS } from "@/lib/metrics";
 import { useCallback, useState } from "react";
 import { api } from "@/lib/api";
 import { useLiveRefetch } from "@/lib/bus";
@@ -65,15 +67,15 @@ export default function ConsensusPage() {
 
                 <div className="consensus-meters">
                   <div>
-                    <div className="spread"><span className="faint">Disagreement score</span><b className="mono">{num(t.score, 2)}</b></div>
+                    <div className="spread"><span className="faint"><MetricLabel metric="score">Disagreement score</MetricLabel></span><b className="mono">{num(t.score, 2)}</b></div>
                     <Bar value={t.score} max={1} />
                   </div>
                   <div>
-                    <div className="spread"><span className="faint">Output percentile</span><b className="mono">{pct(t.quant_pct)}</b></div>
+                    <div className="spread"><span className="faint"><MetricLabel>Output percentile</MetricLabel></span><b className="mono">{pct(t.quant_pct)}</b></div>
                     <Bar value={t.quant_pct} max={1} />
                   </div>
                   <div>
-                    <div className="spread"><span className="faint">Eye-test percentile</span><b className="mono">{pct(t.qual_pct)}</b></div>
+                    <div className="spread"><span className="faint"><MetricLabel>Eye-test percentile</MetricLabel></span><b className="mono">{pct(t.qual_pct)}</b></div>
                     <Bar value={t.qual_pct} max={1} />
                   </div>
                 </div>
@@ -88,7 +90,7 @@ export default function ConsensusPage() {
                   <div className="consensus-conflicts">
                     {t.conflicts.map((c) => (
                       <div key={c.match} className="consensus-conflict">
-                        <span className="badge haze">Q{c.match}</span>
+                        <span className="badge haze">{c.comp_level && c.comp_level !== "qm" ? c.comp_level.toUpperCase() : "Q"}{c.match}</span>
                         <span className="badge amber">{num(c.spread, 1)} pt spread</span>
                         {c.reports.map((r, i) => (
                           <span key={i} className="badge muted">

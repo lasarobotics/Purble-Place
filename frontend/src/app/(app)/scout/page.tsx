@@ -1,8 +1,12 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
+import { HotkeySettings } from "@/components/HotkeySettings";
+import { DEFAULT_HOTKEYS, Hotkeys, validHotkeys, ignoreHotkey } from "@/lib/hotkeys";
+import { localOwner } from "@/lib/identity";
+import { emitBus } from "@/lib/bus";
 import { api } from "@/lib/api";
 import { useToast } from "@/lib/toast";
-import { queueScout, uuid } from "@/lib/db";
+import { db, queueScout, uuid, pendingScouts, legacyScouts, PendingScout } from "@/lib/db";
 import { flushQueue } from "@/lib/sync";
 import type { HeatPoint, MatchRec, ScoutEntry } from "@/lib/types";
 import { FieldInput } from "@/components/Field";
@@ -75,18 +79,66 @@ export default function ScoutPage() {
   const [f, setF] = useState<ScoutEntry>(blank());
   const [matches, setMatches] = useState<MatchRec[]>([]);
   const [busy, setBusy] = useState(false);
-  const set = <K extends keyof ScoutEntry>(k: K, v: ScoutEntry[K]) => setF((p) => ({ ...p, [k]: v }));
+  const [started, setStarted] = useState(false);
+  const [hotkeys, setHotkeys] = useState<Hotkeys>(DEFAULT_HOTKEYS);
+  const [editingKeys, setEditingKeys] = useState(false);
+  const [restored, setRestored] = useState(false);
+  const [rejected, setRejected] = useState<PendingScout[]>([]);
+  const currentDraft = useRef({ f, started });
+  currentDraft.current = { f, started };
+  const submitLock = useRef(false);
+  const draftKey = () => `hazehub.draft.${localOwner()}`;
+  const hotkeyKey = () => `hazehub.hotkeys.${localOwner()}`;
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(draftKey()) || "null");
+      if (saved?.f) { setF(saved.f); setStarted(!!saved.started); }
+      const keys = JSON.parse(localStorage.getItem(hotkeyKey()) || "null");
+      if (keys && validHotkeys(keys)) setHotkeys(keys);
+    } catch {}
+    setRestored(true);
+    const loadRejected = () => Promise.all([pendingScouts(), legacyScouts()]).then(([rows, legacy]) => setRejected([...rows.filter(r => r.last_error), ...legacy.map(r => ({ ...r, last_error: "Older offline report: verify ownership and event before submitting." }))]));
+    loadRejected();
+    window.addEventListener("scout-queue-changed", loadRejected);
+    return () => window.removeEventListener("scout-queue-changed", loadRejected);
+  }, []);
+  useEffect(() => {
+    if (!restored) return;
+    const save = () => { try { localStorage.setItem(draftKey(), JSON.stringify(currentDraft.current)); } catch {} };
+    const timer = setTimeout(save, 400);
+    window.addEventListener("pagehide", save);
+    return () => { clearTimeout(timer); window.removeEventListener("pagehide", save); };
+  }, [f, started, restored]);
+  useEffect(() => () => { try { localStorage.setItem(draftKey(), JSON.stringify(currentDraft.current)); } catch {} }, []);
+  useEffect(() => {
+    if (!started || editingKeys || busy || f.no_show) return;
+    const handle = (e: KeyboardEvent) => {
+      if (ignoreHotkey(e)) return;
+      const key = e.key.toLowerCase();
+      if (key === hotkeys.foul) setF(p => ({ ...p, fouls: p.fouls + 1 }));
+      else if (key === hotkeys.stop) setF(p => ({ ...p, successful_stops: p.successful_stops + 1 }));
+      else if (key === hotkeys.leave) setF(p => ({ ...p, auto_leave: !p.auto_leave }));
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener("keydown", handle);
+    return () => window.removeEventListener("keydown", handle);
+  }, [started, editingKeys, busy, hotkeys, f.no_show]);
+  const set = <K extends keyof ScoutEntry>(k: K, v: ScoutEntry[K]) => {
+    if (!["event_key", "match_number", "comp_level", "team_number", "alliance", "station"].includes(k)) { setStarted(true); setEditingKeys(false); }
+    setF((p) => ({ ...p, [k]: v }));
+  };
 
   // Restore remembered alliance/station, then refine from the server.
   useEffect(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(STATION_KEY) || "null");
-      if (saved) setF((p) => ({ ...p, alliance: saved.alliance, station: saved.station }));
+      if (saved && !localStorage.getItem(draftKey())) setF((p) => ({ ...p, alliance: saved.alliance, station: saved.station }));
     } catch {}
     api<{ alliance: "red" | "blue"; station: number }>("/api/scout/last-assignment")
-      .then((a) => setF((p) => ({ ...p, alliance: a.alliance, station: a.station })))
+      .then((a) => { if (!currentDraft.current.started) setF((p) => ({ ...p, alliance: a.alliance, station: a.station })); })
       .catch(() => {});
-    api<{ matches: MatchRec[] }>("/api/matches?include_teams=true").then((r) => setMatches(r.matches)).catch(() => {});
+    api<{ event: string; matches: MatchRec[] }>("/api/matches?include_teams=true").then((r) => { setMatches(r.matches); setF(p => ({ ...p, event_key: p.event_key || r.event })); }).catch(() => {});
   }, []);
 
   const scheduledTeam = useMemo(() => {
@@ -106,7 +158,7 @@ export default function ScoutPage() {
   // Auto-fill the team from the schedule whenever the slot changes and the
   // scouter hasn't typed their own number.
   useEffect(() => {
-    if (scheduledTeam) setF((p) => (p.team_number === 0 || p.team_number !== scheduledTeam ? { ...p, team_number: scheduledTeam } : p));
+    if (scheduledTeam && !currentDraft.current.started) setF((p) => (p.team_number === 0 || p.team_number !== scheduledTeam ? { ...p, team_number: scheduledTeam } : p));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scheduledTeam]);
 
@@ -115,28 +167,35 @@ export default function ScoutPage() {
   }
 
   async function submit() {
+    if (submitLock.current) return;
     if (!f.team_number) return toast("Enter the team number first", "err");
+    if (!f.event_key) return toast("Load an event online before scouting offline", "err");
+    submitLock.current = true;
     setBusy(true);
-    const entry: ScoutEntry = { ...f, client_uuid: uuid() };
-    rememberStation(f.alliance, f.station);
+    const entry: ScoutEntry = { ...f, client_uuid: f.client_uuid || uuid() };
+    setF(entry);
     try {
-      const res = await api<{ entry: ScoutEntry }>("/api/scout", { method: "POST", body: entry });
-      toast(f.no_show ? `No-show recorded for ${f.team_number}` : `Saved team ${f.team_number} · ${res.entry.points} pts`, "ok");
-      resetForNext();
-    } catch (err: any) {
-      // Offline or server error → keep it locally and sync later.
+      rememberStation(f.alliance, f.station);
+      // Persist before sending: a closed tab or lost acknowledgement cannot lose a report.
       await queueScout({ ...entry, client_uuid: entry.client_uuid!, queued_at: Date.now() });
-      toast("Saved offline — will sync when connected", "info");
+      await flushQueue();
+      const pending = await db().pendingScouts.get(entry.client_uuid!);
+      if (pending?.last_error) { toast(pending.last_error, "err"); return; }
+      toast(pending ? "Saved on this device — waiting to sync" : `Saved team ${f.team_number}`, pending ? "info" : "ok");
       resetForNext();
-      flushQueue();
+    } catch {
+      toast("Could not save locally. Keep this form open and retry.", "err");
     } finally {
+      submitLock.current = false;
       setBusy(false);
     }
   }
 
   function resetForNext() {
+    setStarted(false);
     setF((p) => ({
       ...blank(),
+      event_key: p.event_key,
       alliance: p.alliance,
       station: p.station,
       comp_level: p.comp_level,
@@ -149,9 +208,23 @@ export default function ScoutPage() {
     <div className="scout-flow">
       <div className="page-title"><h1>Scout a Match</h1></div>
       <p className="page-sub">Top to bottom, done in a minute.</p>
+      <div className="btn-row" style={{ marginBottom: 16 }}>
+        <button className="btn ghost" disabled={started || busy} onClick={() => setEditingKeys(true)}>Change hotkeys</button>
+        {!started ? <button className="btn primary" disabled={editingKeys} onClick={() => setStarted(true)}>Start scouting</button> : <span className="badge haze">Match in progress · hotkeys locked</span>}
+      </div>
+      {editingKeys && <HotkeySettings keys={hotkeys} onClose={() => setEditingKeys(false)} onSave={keys => {
+        if (started) return;
+        try { localStorage.setItem(hotkeyKey(), JSON.stringify(keys)); setHotkeys(keys); setEditingKeys(false); }
+        catch { toast("Could not save hotkeys on this device", "err"); }
+      }} />}
+      {rejected.map(row => <div className="card" key={row.client_uuid} style={{ marginBottom: 12 }}>
+        <b>Team {row.team_number} / match {row.match_number} needs correction</b><p>{row.last_error}</p>
+        <button className="btn ghost" disabled={started} onClick={() => { const { owner_id, queued_at, last_error, ...entry } = row; setF(entry); setStarted(true); }}>Edit saved report</button>
+      </div>)}
 
       {/* 1 — who are you watching */}
       <Step n={1} title="Your robot" hint="The team number fills in from the schedule.">
+        <label className="field"><span>Event</span><input value={f.event_key || ""} onChange={e => set("event_key", e.target.value.trim().toLowerCase())} placeholder="e.g. 2026txaus" /></label>
         <div className="slot-grid">
           <label className="field" style={{ margin: 0 }}>
             <span>Match #</span>
@@ -224,7 +297,7 @@ export default function ScoutPage() {
         <>
           {/* 2 — score the match */}
           <Step n={2} title="Score the match" hint="Tap the field where each attempt happened. Switch Auto/Teleop and Made/Missed as you go.">
-            <FieldInput points={f.heatmap} onChange={(pts: HeatPoint[]) => set("heatmap", pts)} />
+            <FieldInput hotkeys={hotkeys} active={started && !editingKeys && !busy} points={f.heatmap} onChange={(pts: HeatPoint[]) => set("heatmap", pts)} />
             <div className="row" style={{ gap: 10, marginTop: 14 }}>
               <label className={"pill-check" + (f.auto_leave ? " on" : "")}>
                 <input type="checkbox" checked={f.auto_leave} onChange={(e) => set("auto_leave", e.target.checked)} /> Left start zone in Auto
@@ -328,7 +401,7 @@ export default function ScoutPage() {
           <b>{matchLabel(f.comp_level, f.match_number)}</b>
           <span>{f.team_number ? `Team ${f.team_number}` : "No team yet"}{f.no_show ? " · NO SHOW" : ""}</span>
         </div>
-        <button className="btn ghost" type="button" onClick={() => setF((p) => ({ ...blank(), alliance: p.alliance, station: p.station, match_number: p.match_number }))}>
+        <button className="btn ghost" type="button" disabled={busy} onClick={() => setF((p) => ({ ...blank(), event_key: p.event_key, alliance: p.alliance, station: p.station, match_number: p.match_number }))}>
           Clear
         </button>
         <button className="btn primary submit-cta" type="button" onClick={submit} disabled={busy}>

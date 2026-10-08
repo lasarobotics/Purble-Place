@@ -89,8 +89,9 @@ def get_team_scouting(
     names = scouter_names(db, (e.scout_id for e in entries))
     reports = [entry_report(e, names.get(e.scout_id, e.scout_id)) for e in entries]
     return {
-        "summary": team_summary(db, event_key, team_number),
-        "heatmap": team_heatmap(db, event_key, team_number),
+        "summary": team_summary(db, event_key, team_number, entries),
+        "heatmap": team_heatmap(db, event_key, team_number, entries=entries),
+        "heatmaps": {phase: team_heatmap(db, event_key, team_number, None if phase == "all" else phase, entries) for phase in ("all", "auto", "teleop")},
         "reports": reports,
     }
 

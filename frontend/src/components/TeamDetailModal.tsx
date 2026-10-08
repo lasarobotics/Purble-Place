@@ -1,5 +1,7 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
+import { useLiveRefetch } from "@/lib/bus";
+import { MetricLabel } from "./MetricLabel";
 import { api } from "@/lib/api";
 import { matchLabel, num, pct, timeAgo } from "@/lib/format";
 import type { HeatPoint, Team, TeamSummary } from "@/lib/types";
@@ -40,19 +42,21 @@ interface TeamDetail {
   summary: TeamSummary;
   heatmap: { points: HeatPoint[]; total: number; made: number; accuracy: number };
   reports: TeamReport[];
+  heatmaps?: Record<string, { points: HeatPoint[]; total: number; made: number; accuracy: number }>;
 }
 
 export function TeamDetailModal({ teamNumber, onClose }: { teamNumber: number; onClose: () => void }) {
   const [data, setData] = useState<TeamDetail | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     setLoading(true);
     api<TeamDetail>(`/api/teams/${teamNumber}/scouting`)
       .then(setData)
       .catch(() => setData(null))
       .finally(() => setLoading(false));
   }, [teamNumber]);
+  useLiveRefetch(load);
 
   return (
     <Modal onClose={onClose}>
@@ -93,7 +97,9 @@ export function ClickableTeam({
 }
 
 function TeamDetailBody({ data }: { data: TeamDetail }) {
-  const { summary, heatmap, reports } = data;
+  const { summary, reports } = data;
+  const [phase, setPhase] = useState("all");
+  const heatmap = data.heatmaps?.[phase] || data.heatmap;
   return (
     <div className="team-detail">
       <div className="card tight">
@@ -113,18 +119,13 @@ function TeamDetailBody({ data }: { data: TeamDetail }) {
       <div className="grid cols-2">
         <div className="card tight">
           <div className="card-h"><h3>Performance Trend</h3></div>
-          <LineChart data={summary.match_points.map((m) => ({ x: `Q${m.match}`, y: m.points }))} height={150} label="Points per match" />
+          <LineChart data={summary.match_points.map((m) => ({ x: `${m.comp_level && m.comp_level !== "qm" ? m.comp_level.toUpperCase() : "Q"}${m.match}`, y: m.points }))} height={150} label="Points per match" />
         </div>
         <div className="card tight">
-          <div className="card-h"><h3>Scoring Heatmap</h3></div>
+          <div className="card-h"><h3>Scoring Heatmap</h3><div className="seg" aria-label="Scoring phase">{["all", "auto", "teleop"].map(p => <button key={p} className={phase === p ? "on" : ""} onClick={() => setPhase(p)}>{p === "all" ? "Both" : p === "auto" ? "Auto" : "Teleop"}</button>)}</div></div>
           {heatmap.points.length ? (
             <>
-              <FieldHeatmap points={heatmap.points} />
-              <div className="row" style={{ justifyContent: "space-between", marginTop: 10 }}>
-                <span className="badge muted">{heatmap.total} attempts</span>
-                <span className="badge green">{heatmap.made} made</span>
-                <span className="badge haze">{pct(heatmap.accuracy)} accuracy</span>
-              </div>
+              <FieldHeatmap points={heatmap.points} stats={heatmap} />
             </>
           ) : <Empty title="No mapped scoring" />}
         </div>

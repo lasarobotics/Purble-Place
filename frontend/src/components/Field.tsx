@@ -1,6 +1,8 @@
 "use client";
-import React, { useRef, useState } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 import type { HeatPoint } from "@/lib/types";
+import { Hotkeys, ignoreHotkey } from "@/lib/hotkeys";
+import { MetricLabel } from "./MetricLabel";
 
 const FIELD_SRC = "/field.png";
 
@@ -13,13 +15,34 @@ function colorFor(p: HeatPoint): string {
 export function FieldInput({
   points,
   onChange,
+  hotkeys,
+  active,
 }: {
   points: HeatPoint[];
   onChange: (pts: HeatPoint[]) => void;
+  hotkeys?: Hotkeys;
+  active?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [phase, setPhase] = useState<"auto" | "teleop">("teleop");
   const [result, setResult] = useState<"made" | "missed">("made");
+
+  useEffect(() => {
+    if (!hotkeys || !active) return;
+    const handle = (e: KeyboardEvent) => {
+      if (ignoreHotkey(e)) return;
+      const key = e.key.toLowerCase();
+      if (key === hotkeys.auto) setPhase("auto");
+      else if (key === hotkeys.teleop) setPhase("teleop");
+      else if (key === hotkeys.made) setResult("made");
+      else if (key === hotkeys.missed) setResult("missed");
+      else if (key === hotkeys.undo) onChange(points.slice(0, -1));
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener("keydown", handle);
+    return () => window.removeEventListener("keydown", handle);
+  }, [hotkeys, active, points, onChange]);
 
   function add(e: React.MouseEvent) {
     const el = ref.current;
@@ -100,34 +123,66 @@ export function FieldInput({
 export function FieldHeatmap({
   points,
   height = 300,
+  stats,
 }: {
   points: HeatPoint[];
   height?: number;
+  stats?: { total: number; made: number; accuracy: number | null };
 }) {
-  return (
-    <div className="field-wrap" style={{ maxHeight: height }}>
+  const [showShots, setShowShots] = useState(true);
+  const [expanded, setExpanded] = useState(false);
+  const dialog = useRef<HTMLDialogElement>(null);
+  const id = useId().replace(/:/g, "");
+  useEffect(() => {
+    if (expanded && dialog.current && !dialog.current.open) dialog.current.showModal();
+  }, [expanded]);
+  const map = (large = false) => (
+    <div className="field-wrap analysis-field" style={{ maxWidth: large ? "100%" : height * 2, margin: "0 auto" }}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img className="field-bg" src={FIELD_SRC} alt="field" style={{ opacity: 0.55 }} />
-      <svg className="field-svg" viewBox="0 0 100 50" preserveAspectRatio="none">
+      <img className="field-bg" src={FIELD_SRC} alt="Scoring positions on the field" style={{ opacity: 0.52 }} />
+      <svg className="field-svg" viewBox="0 0 1000 500" aria-label="Shot locations and density">
         <defs>
-          <filter id="blur"><feGaussianBlur stdDeviation="1.1" /></filter>
+          <filter id={`${id}-${large}-blur`} x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="14" /></filter>
         </defs>
-        <g filter="url(#blur)">
+        <g filter={`url(#${id}-${large}-blur)`}>
           {points.map((p, i) => (
             <circle
               key={i}
-              cx={p.x * 100}
-              cy={p.y * 50}
-              r={p.result === "made" ? 2.6 : 2.0}
-              fill={p.result === "made" ? "#a855f7" : "#f59e0b"}
-              opacity={0.32}
+              cx={p.x * 1000}
+              cy={p.y * 500}
+              r={30}
+              fill="#b56dff"
+              opacity={0.24}
             />
           ))}
         </g>
-        {points.map((p, i) => (
-          <circle key={"c" + i} cx={p.x * 100} cy={p.y * 50} r={0.6} fill={colorFor(p)} opacity={0.9} />
+        {showShots && points.map((p, i) => (
+          <g key={i} className="shot-dot">
+            <circle cx={p.x * 1000} cy={p.y * 500} r={12} fill={colorFor(p)} opacity=".15" />
+            <circle cx={p.x * 1000} cy={p.y * 500} r={5} fill={p.result === "made" ? colorFor(p) : "#21132f"} stroke={p.result === "made" ? "#f7efff" : "#fbbf24"} strokeWidth="1.6" />
+            <title>{p.phase === "auto" ? "Auto" : "Teleop"} · {p.result}{p.match ? ` · match ${p.match}` : ""}</title>
+          </g>
         ))}
       </svg>
     </div>
   );
+  return <div className="heatmap-panel">
+    <div className="heatmap-tools">
+      <label className="shot-toggle"><input type="checkbox" checked={showShots} onChange={e => setShowShots(e.target.checked)} /> Show each shot</label>
+      <button className="btn sm ghost" onClick={() => setExpanded(true)} aria-label="Open scoring heatmap full size">Open full size <span aria-hidden>↗</span></button>
+    </div>
+    {map()}
+    {stats && <div className="heatmap-stats">
+      <div><strong>{stats.total}</strong><span><MetricLabel metric="attempts">attempts</MetricLabel></span></div>
+      <div><strong className="made-text">{stats.made}</strong><span><MetricLabel metric="made">made</MetricLabel></span></div>
+      <div><strong className="haze-text">{stats.accuracy == null ? "—" : `${Math.round(stats.accuracy * 100)}%`}</strong><span><MetricLabel metric="accuracy">accuracy</MetricLabel></span></div>
+    </div>}
+    <div className="heatmap-legend"><span>Shots from here</span><span>a few</span><i className="density-ramp" /><span>a lot</span></div>
+    {showShots && <div className="shot-key"><span><i className="auto-dot" />Auto made</span><span><i className="tele-dot" />Teleop made</span><span><i className="miss-dot" />Missed</span></div>}
+    {expanded && <dialog ref={dialog} className="heatmap-dialog" onCancel={() => setExpanded(false)} onClick={e => { if (e.target === e.currentTarget) setExpanded(false); }}>
+      <div className="card-h"><div><h3>Scoring Heatmap</h3><p className="muted">Every recorded location, in detail.</p></div><button className="btn ghost" onClick={() => setExpanded(false)}>Close</button></div>
+      {map(true)}
+      <div className="heatmap-legend"><span>Shots from here</span><span>a few</span><i className="density-ramp" /><span>a lot</span></div>
+    </dialog>}
+  </div>;
 }

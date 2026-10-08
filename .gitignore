@@ -10,6 +10,8 @@ backend/data/*.db-journal
 frontend/node_modules/
 frontend/.next/
 frontend/out/
+frontend/test-results/
+frontend/playwright-report/
 frontend/.env.local
 
 # Misc

@@ -8,18 +8,48 @@ The math is identical to the original SQL implementation; only the data access
 from __future__ import annotations
 
 import statistics
+from datetime import UTC, datetime
+from contextvars import ContextVar
+from functools import wraps
 from typing import Any, Optional
 
 from pymongo.database import Database
 
-from .scoring import phase_counts
-from .views import EntryView, get_team_cache, list_entries, list_matches
+from .scoring import phase_counts, attempt_value, AUTO_LEAVE, AUTO_CLIMB_BONUS, CLIMB_POINTS
+from .views import EntryView, get_team_cache, get_teams_cache, list_entries, list_matches
+
+# One consistent input set per analytics request; no per-team database queries,
+# stale process caches, or summary writes. Each subsequent request sees new data.
+_snapshot: ContextVar = ContextVar("analytics_snapshot", default=None)
+
+def event_snapshot(fn):
+    @wraps(fn)
+    def wrapped(db, event_key, *args, **kwargs):
+        if _snapshot.get() is not None:
+            return fn(db, event_key, *args, **kwargs)
+        entries = list_entries(db, event_key)
+        matches = list_matches(db, event_key)
+        teams = {e.team_number for e in entries}
+        for m in matches:
+            teams.update(m.red + m.blue)
+        grouped = {t: [] for t in teams}
+        for e in entries:
+            grouped[e.team_number].append(e)
+        token = _snapshot.set(dict(entries=grouped, matches=matches,
+                                   teams=sorted(teams), profiles=get_teams_cache(db, teams), summaries={}))
+        try:
+            return fn(db, event_key, *args, **kwargs)
+        finally:
+            _snapshot.reset(token)
+    return wrapped
 
 
 # --------------------------------------------------------------------------- #
 # Per-team aggregation                                                         #
 # --------------------------------------------------------------------------- #
 def team_entries(db: Database, event_key: str, team: int) -> list[EntryView]:
+    if _snapshot.get() is not None:
+        return _snapshot.get()["entries"].get(team, [])
     return list_entries(db, event_key, team=team)
 
 
@@ -33,20 +63,24 @@ def _coeff_var(values: list[float]) -> float:
     return statistics.pstdev(values) / mean
 
 
-def team_summary(db: Database, event_key: str, team: int) -> dict[str, Any]:
-    all_entries = team_entries(db, event_key, team)
+def team_summary(db: Database, event_key: str, team: int, all_entries: list[EntryView] | None = None) -> dict[str, Any]:
+    snapshot = _snapshot.get()
+    if snapshot is not None and team in snapshot["summaries"]:
+        return snapshot["summaries"][team]
+    if all_entries is None:
+        all_entries = team_entries(db, event_key, team)
     # No-shows are a reliability signal, not a performance sample.
     entries = [e for e in all_entries if not e.no_show]
     no_shows = len(all_entries) - len(entries)
     pts = [e.points for e in entries]
     n = len(entries)
 
-    per_match: dict[int, list[float]] = {}
+    per_match: dict[tuple[str, int], list[float]] = {}
     for e in entries:
-        per_match.setdefault(e.match_number, []).append(e.points)
+        per_match.setdefault((e.comp_level, e.match_number), []).append(e.points)
     match_points = [
-        {"match": m, "points": round(statistics.fmean(v), 2)}
-        for m, v in sorted(per_match.items())
+        {"comp_level": level, "match": m, "points": round(statistics.fmean(v), 2)}
+        for (level, m), v in sorted(per_match.items(), key=lambda item: ({"qm": 0, "ef": 1, "qf": 2, "sf": 3, "f": 4}.get(item[0][0], 9), item[0][1]))
     ]
 
     counts = {"auto_made": 0, "auto_missed": 0, "teleop_made": 0, "teleop_missed": 0}
@@ -65,8 +99,41 @@ def team_summary(db: Database, event_key: str, team: int) -> dict[str, Any]:
             tag_counts[t] = tag_counts.get(t, 0) + 1
     top_tags = sorted(tag_counts.items(), key=lambda kv: -kv[1])
 
-    tc = get_team_cache(db, team)
-    return {
+    tc = _snapshot.get()["profiles"].get(team) if _snapshot.get() is not None else get_team_cache(db, team)
+    def ratio(a, b):
+        return round(a / b, 3) if b else None
+    auto_attempts = counts["auto_made"] + counts["auto_missed"]
+    tele_attempts = counts["teleop_made"] + counts["teleop_missed"]
+    auto_points = [sum(attempt_value(a) for a in e.heatmap if a.get("phase") == "auto")
+                   + AUTO_LEAVE * e.auto_leave + AUTO_CLIMB_BONUS * e.auto_climb for e in entries]
+    tele_points = [sum(attempt_value(a) for a in e.heatmap if a.get("phase") != "auto") for e in entries]
+    # Use chronological, per-match means so duplicate observers do not weight trend.
+    grouped_points = {}
+    for e in sorted(entries, key=lambda e: (e.created_at, e.comp_level, e.match_number)):
+        grouped_points.setdefault((e.comp_level, e.match_number), []).append(e.points)
+    series = [statistics.fmean(v) for v in grouped_points.values()]
+    k = len(series)
+    xbar = (k - 1) / 2
+    denom = sum((i - xbar) ** 2 for i in range(k))
+    trend = sum((i - xbar) * (p - statistics.fmean(series)) for i, p in enumerate(series)) / denom if denom else None
+    extra = {
+        "accuracy": ratio(counts["auto_made"] + counts["teleop_made"], auto_attempts + tele_attempts),
+        "auto_accuracy": ratio(counts["auto_made"], auto_attempts),
+        "teleop_accuracy": ratio(counts["teleop_made"], tele_attempts),
+        "avg_auto_points": round(statistics.fmean(auto_points), 2) if n else None,
+        "avg_teleop_points": round(statistics.fmean(tele_points), 2) if n else None,
+        "avg_endgame_points": round(statistics.fmean(CLIMB_POINTS.get(e.climb, 0) for e in entries), 2) if n else None,
+        "median_points": statistics.median(pts) if n else None,
+        "recent_points": round(statistics.fmean(series[-3:]), 2) if series else None,
+        "trend": round(trend, 2) if trend is not None else None,
+        "attendance_rate": ratio(n, len(all_entries)),
+        "operational_rate": ratio(sum(not e.failure for e in entries), len(all_entries)),
+        "auto_leave_rate": ratio(sum(e.auto_leave for e in entries), n),
+        "avg_fouls": ratio(sum(e.fouls for e in entries), n),
+        "avg_stops": ratio(sum(e.successful_stops for e in entries), n),
+    }
+    summary = {
+        **extra,
         "team": team,
         "nickname": tc.nickname if tc else "",
         "avatar": tc.avatar if tc else "",
@@ -89,11 +156,16 @@ def team_summary(db: Database, event_key: str, team: int) -> dict[str, Any]:
         "match_points": match_points,
         "tags": [{"tag": t, "count": c} for t, c in top_tags],
     }
+    if snapshot is not None:
+        snapshot["summaries"][team] = summary
+    return summary
 
 
 def event_teams(db: Database, event_key: str) -> list[int]:
     """All team numbers at this event — the match schedule plus anything
     scouted (covers offline/pit teams the schedule doesn't know yet)."""
+    if _snapshot.get() is not None:
+        return _snapshot.get()["teams"]
     teams: set[int] = set(
         int(t)
         for t in db.match_scouting.distinct("team_num", {"event_key": event_key})
@@ -108,6 +180,23 @@ def event_teams(db: Database, event_key: str) -> list[int]:
 # Ranking                                                                      #
 # --------------------------------------------------------------------------- #
 RANK_METRICS = {
+    "accuracy": "Scoring accuracy",
+    "auto_accuracy": "Auto accuracy",
+    "teleop_accuracy": "Teleop accuracy",
+    "avg_auto_points": "Avg auto points",
+    "avg_teleop_points": "Avg teleop points",
+    "avg_endgame_points": "Avg endgame points",
+    "median_points": "Median points",
+    "recent_points": "Recent form",
+    "trend": "Scoring trend",
+    "attendance_rate": "Attendance rate",
+    "operational_rate": "Operational reliability",
+    "auto_leave_rate": "Auto leave rate",
+    "avg_fouls": "Fouls per report",
+    "avg_stops": "Stops per report",
+    "failure_rate": "Failure rate",
+    "std_points": "Scoring deviation",
+    "total_fouls": "Total fouls",
     "avg_points": "Avg points",
     "max_points": "Peak points",
     "consistency": "Consistency",
@@ -120,11 +209,14 @@ RANK_METRICS = {
 }
 
 
+LOWER_BETTER = {"failure_rate", "avg_fouls", "std_points", "total_fouls"}
+
+@event_snapshot
 def rank_teams(db: Database, event_key: str, metric: str = "avg_points") -> list[dict[str, Any]]:
     metric = metric if metric in RANK_METRICS else "avg_points"
-    rows = [team_summary(db, event_key, t) for t in event_teams(db, event_key)]
+    rows = [dict(team_summary(db, event_key, t)) for t in event_teams(db, event_key)]
     rows = [r for r in rows if r["matches"] > 0 or metric == "epa"]
-    rows.sort(key=lambda r: (r.get(metric) or 0), reverse=True)
+    rows.sort(key=lambda r: (r.get(metric) is None, (r.get(metric) or 0) * (1 if metric in LOWER_BETTER else -1), r["team"]))
     for i, r in enumerate(rows, 1):
         r["rank"] = i
     return rows
@@ -134,10 +226,12 @@ def rank_teams(db: Database, event_key: str, metric: str = "avg_points") -> list
 # Heatmap aggregation                                                          #
 # --------------------------------------------------------------------------- #
 def team_heatmap(
-    db: Database, event_key: str, team: int, phase: Optional[str] = None
+    db: Database, event_key: str, team: int, phase: Optional[str] = None, entries: list[EntryView] | None = None
 ) -> dict[str, Any]:
     points: list[dict[str, Any]] = []
-    for e in team_entries(db, event_key, team):
+    for e in (entries if entries is not None else team_entries(db, event_key, team)):
+        if e.no_show:
+            continue
         for a in e.heatmap or []:
             if phase and a.get("phase") != phase:
                 continue
@@ -156,7 +250,7 @@ def team_heatmap(
         "points": points,
         "total": len(points),
         "made": made,
-        "accuracy": round(made / len(points), 3) if points else 0.0,
+        "accuracy": round(made / len(points), 3) if points else None,
     }
 
 
@@ -166,12 +260,13 @@ def team_heatmap(
 def _event_epa_map(db: Database, event_key: str) -> dict[int, float]:
     out: dict[int, float] = {}
     for t in event_teams(db, event_key):
-        tc = get_team_cache(db, t)
+        tc = _snapshot.get()["profiles"].get(t) if _snapshot.get() is not None else get_team_cache(db, t)
         if tc and tc.epa is not None:
             out[t] = float(tc.epa)
     return out
 
 
+@event_snapshot
 def data_picklist(db: Database, event_key: str) -> dict[str, Any]:
     """Auto-rank robots by *true* strength.
 
@@ -190,7 +285,7 @@ def data_picklist(db: Database, event_key: str) -> dict[str, Any]:
     """
     teams = event_teams(db, event_key)
     epa_map = _event_epa_map(db, event_key)
-    matches = list_matches(db, event_key)
+    matches = _snapshot.get()["matches"]
     event_avg_epa = (sum(epa_map.values()) / len(epa_map)) if epa_map else 0.0
 
     # Gather opponents/partners faced per team from the schedule.
@@ -234,7 +329,7 @@ def data_picklist(db: Database, event_key: str) -> dict[str, Any]:
     SOS_WEIGHT = (base_sd or 1.0) * 0.5  # schedule worth up to ~half a "spread"
 
     for r in rows:
-        sos_z = (r["sos"] / sos_sd) if sos_sd else 0.0
+        sos_z = ((r["sos"] - statistics.fmean(sos_vals)) / sos_sd) if sos_sd else 0.0
         adj = SOS_WEIGHT * sos_z
         r["sos_adjust"] = round(adj, 2)
         r["true_score"] = round(
@@ -270,6 +365,7 @@ POSITIVE_TAGS = {
 }
 
 
+@event_snapshot
 def scout_disagreements(db: Database, event_key: str) -> dict[str, Any]:
     """Flag teams where the scouting record doesn't agree with itself.
 
@@ -315,11 +411,11 @@ def scout_disagreements(db: Database, event_key: str) -> dict[str, Any]:
         entries = team_entries(db, event_key, t)
 
         # Signal 1: same match, multiple scouts.
-        by_match: dict[int, list[Any]] = {}
+        by_match: dict[tuple[str, int], list[Any]] = {}
         for e in entries:
-            by_match.setdefault(e.match_number, []).append(e)
+            by_match.setdefault((e.comp_level, e.match_number), []).append(e)
         conflicts = []
-        for mn, group in sorted(by_match.items()):
+        for (level, mn), group in sorted(by_match.items()):
             if len(group) < 2:
                 continue
             pts = [e.points for e in group]
@@ -327,6 +423,7 @@ def scout_disagreements(db: Database, event_key: str) -> dict[str, Any]:
             conflicts.append(
                 {
                     "match": mn,
+                    "comp_level": level,
                     "spread": round(spread, 1),
                     "reports": [
                         {"scout_id": e.scout_id, "points": e.points} for e in group
@@ -385,6 +482,7 @@ def scout_disagreements(db: Database, event_key: str) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # Compare                                                                      #
 # --------------------------------------------------------------------------- #
+@event_snapshot
 def compare_teams(db: Database, event_key: str, teams: list[int]) -> dict[str, Any]:
     summaries = [team_summary(db, event_key, t) for t in teams]
     metrics = [
@@ -399,19 +497,57 @@ def compare_teams(db: Database, event_key: str, teams: list[int]) -> dict[str, A
         ("total_fouls", "Total fouls", "low"),
         ("epa", "EPA", "high"),
     ]
+    existing = {key for key, _, _ in metrics}
+    metrics += [(key, label, "low" if key in LOWER_BETTER else "high")
+                for key, label in RANK_METRICS.items() if key not in existing]
     rows = []
     for key, label, better in metrics:
-        vals = [s.get(key) or 0 for s in summaries]
-        best = max(vals) if better == "high" else min(vals)
+        vals = [s[key] for s in summaries if s.get(key) is not None]
+        best = (max(vals) if better == "high" else min(vals)) if vals else None
         rows.append(
             {
                 "key": key,
                 "label": label,
                 "better": better,
                 "values": [
-                    {"team": s["team"], "value": s.get(key) or 0, "best": (s.get(key) or 0) == best}
+                    {"team": s["team"], "value": s.get(key), "best": best is not None and s.get(key) == best}
                     for s in summaries
                 ],
             }
         )
     return {"teams": summaries, "metrics": rows}
+
+
+@event_snapshot
+def analysis_bundle(db: Database, event_key: str) -> dict[str, Any]:
+    """One cloud calculation/read pass for all analysis screens and offline use.
+
+    Rankings are shipped as team-number orders instead of duplicating full
+    summaries for every metric. No analytics are computed by the offline client.
+    """
+    from .views import scouter_names
+    from .routers.teams import entry_report, _team_dict
+
+    teams = event_teams(db, event_key)
+    summaries = [team_summary(db, event_key, t) for t in teams]
+    names = scouter_names(db, (e.scout_id for group in _snapshot.get()["entries"].values() for e in group))
+    scouting = {}
+    for team in teams:
+        entries = team_entries(db, event_key, team)
+        scouting[str(team)] = {
+            "summary": team_summary(db, event_key, team),
+            "heatmap": team_heatmap(db, event_key, team),
+            "heatmaps": {phase: team_heatmap(db, event_key, team, None if phase == "all" else phase) for phase in ("all", "auto", "teleop")},
+            "reports": [entry_report(e, names.get(e.scout_id, e.scout_id)) for e in entries],
+        }
+    return {
+        "event": event_key,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "teams": summaries,
+        "profiles": [_team_dict(_snapshot.get()["profiles"].get(t), t) for t in teams],
+        "metrics": [{"key": k, "label": v, "better": "low" if k in LOWER_BETTER else "high"} for k, v in RANK_METRICS.items()],
+        "orders": {key: [r["team"] for r in rank_teams(db, event_key, key)] for key in RANK_METRICS},
+        "picklist": data_picklist(db, event_key),
+        "consensus": scout_disagreements(db, event_key),
+        "scouting": scouting,
+    }

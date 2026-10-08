@@ -1,4 +1,6 @@
 "use client";
+import { MetricLabel } from "@/components/MetricLabel";
+import { METRICS } from "@/lib/metrics";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useLiveRefetch } from "@/lib/bus";
@@ -9,7 +11,7 @@ import { FieldHeatmap } from "@/components/Field";
 
 interface CompareData {
   teams: TeamSummary[];
-  metrics: { key: string; label: string; better: string; values: { team: number; value: number; best: boolean }[] }[];
+  metrics: { key: string; label: string; better: string; values: { team: number; value: number | null; best: boolean }[] }[];
 }
 
 const SLOTS = 6;
@@ -43,17 +45,19 @@ export default function ComparePage() {
     setSlots((cur) => cur.map((v, k) => (k === i ? n : v)));
   }
 
-  useEffect(() => {
+  const selectedKey = selected.join(",");
+  const loadComparison = useCallback(() => {
     if (selected.length < 2) { setData(null); return; }
     setLoading(true);
     api<CompareData>(`/api/admin/compare?teams=${selected.join(",")}`).then(setData).catch(() => {}).finally(() => setLoading(false));
     selected.forEach((n) => {
-      if (!heats[n]) api<any>(`/api/admin/team/${n}/heatmap`).then((h) => setHeats((x) => ({ ...x, [n]: h }))).catch(() => {});
+      api<any>(`/api/admin/team/${n}/heatmap`).then((h) => setHeats((x) => ({ ...x, [n]: h }))).catch(() => {});
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected.join(",")]);
+  }, [selectedKey]);
+  useLiveRefetch(loadComparison);
 
-  const fmt = (key: string, v: number) => key.includes("rate") || key === "consistency" ? `${(v * 100).toFixed(0)}%` : num(v, key === "epa" || key.includes("foul") ? 0 : 1);
+  const fmt = (key: string, v: number | null) => v == null ? "\u2014" : METRICS[key]?.percent ? `${(v * 100).toFixed(0)}%` : num(v, key === "epa" || key.includes("foul") ? 0 : 1);
   const label = (t: number) => `${t}${teamProfiles[t]?.nickname ? ` — ${teamProfiles[t].nickname}` : ""}`;
 
   return (
@@ -107,7 +111,7 @@ export default function ComparePage() {
                   <tr><td className="muted">Matches</td>{data.teams.map((t) => <td key={t.team} className="num mono">{t.matches}</td>)}</tr>
                   {data.metrics.map((row) => (
                     <tr key={row.key}>
-                      <td className="muted">{row.label}</td>
+                      <td className="muted"><MetricLabel metric={row.key}>{row.label}</MetricLabel></td>
                       {row.values.map((v) => (
                         <td key={v.team} className="num mono" style={v.best ? { color: "var(--haze-glow)", fontWeight: 800, background: "rgba(102,51,153,0.18)" } : {}}>
                           {fmt(row.key, v.value)}{v.best ? " ★" : ""}

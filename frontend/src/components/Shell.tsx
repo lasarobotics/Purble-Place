@@ -4,11 +4,12 @@ import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth";
 import { useLiveEvents } from "@/lib/ws";
-import { emitBus } from "@/lib/bus";
+import { emitBus, onBus, DATA_EVENTS } from "@/lib/bus";
 import { flushQueue } from "@/lib/sync";
 import { pendingCount } from "@/lib/db";
 import { Loading } from "./ui";
 import { Icon } from "./icons";
+import { api } from "@/lib/api";
 
 const MAIN_NAV = [
   { href: "/home", label: "Home", icon: "home" },
@@ -44,6 +45,53 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [online, setOnline] = useState(true);
   const [pending, setPending] = useState(0);
+  const [snapshot, setSnapshot] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!session) return;
+    // One shared event analysis bundle prepares every ranking and team view.
+    api("/api/matches?include_teams=true").catch(() => {});
+    if (session.is_admin) api("/api/admin/rank?metric=avg_points").catch(() => {});
+    let timer: ReturnType<typeof setTimeout>;
+    const warm = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        api("/api/matches?include_teams=true").catch(() => {});
+        if (session.is_admin) api("/api/admin/rank?metric=avg_points").catch(() => {});
+      }, 250);
+    };
+    const unsubscribe = onBus(event => {
+      if (DATA_EVENTS.includes(event)) {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          if (session.is_admin) api("/api/admin/rank?metric=avg_points").catch(() => {});
+          if (event === "settings_changed") api("/api/matches?include_teams=true").catch(() => {});
+        }, 250);
+      }
+    });
+    window.addEventListener("online", warm);
+    return () => { unsubscribe(); clearTimeout(timer); window.removeEventListener("online", warm); };
+  }, [session?.scout_id]);
+
+  useEffect(() => {
+    const onSnapshot = (e: Event) => setSnapshot((e as CustomEvent<number>).detail);
+    window.addEventListener("offline-snapshot", onSnapshot);
+    return () => window.removeEventListener("offline-snapshot", onSnapshot);
+  }, []);
+
+  useEffect(() => {
+    if (!session || !("serviceWorker" in navigator) || process.env.NODE_ENV !== "production") return;
+    const prepare = async () => {
+      try {
+        await navigator.serviceWorker.register("/sw.js");
+        const registration = await navigator.serviceWorker.ready;
+        registration.active?.postMessage({ type: "WARM_ROUTES", routes: ["/login", ...MAIN_NAV.map(n => n.href), ...(session.is_admin ? ADMIN_NAV.map(n => n.href) : [])] });
+      } catch { /* Online app remains usable if offline storage is unavailable. */ }
+    };
+    prepare();
+    window.addEventListener("online", prepare);
+    return () => window.removeEventListener("online", prepare);
+  }, [session?.scout_id]);
 
   useEffect(() => {
     if (!loading && !session) router.replace("/login");
@@ -52,7 +100,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   useLiveEvents((event, payload) => emitBus(event, payload));
 
   useEffect(() => {
-    const upd = () => setOnline(navigator.onLine);
+    const upd = () => { setOnline(navigator.onLine); if (navigator.onLine) setSnapshot(null); };
     upd();
     window.addEventListener("online", upd);
     window.addEventListener("offline", upd);
@@ -74,11 +122,14 @@ export function Shell({ children }: { children: React.ReactNode }) {
     };
     tick();
     const id = setInterval(tick, 8000);
+    const updateCount = () => { pendingCount().then(setPending); };
+    window.addEventListener("scout-queue-changed", updateCount);
     window.addEventListener("online", tick);
     return () => {
       alive = false;
       clearInterval(id);
       window.removeEventListener("online", tick);
+      window.removeEventListener("scout-queue-changed", updateCount);
     };
   }, [online]);
 
@@ -132,6 +183,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
       </aside>
 
       <div className="main">
+        {(!online || snapshot) && <div className="badge amber" role="status" style={{ margin: 12 }}>
+          {!online ? "Offline · " : "Cached data used · "}showing saved cloud analysis{snapshot ? ` from ${new Date(snapshot).toLocaleString()}` : ""}. New scouting syncs when connected.
+        </div>}
         <header className="topbar">
           <div className="brand topbar-brand" style={{ fontSize: "1rem" }}>
             <span className="logo" style={{ width: 26, height: 26 }} />

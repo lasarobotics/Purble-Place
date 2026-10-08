@@ -1,4 +1,6 @@
 "use client";
+import { MetricLabel } from "@/components/MetricLabel";
+import { METRICS } from "@/lib/metrics";
 import { useCallback, useState } from "react";
 import { api } from "@/lib/api";
 import { useLiveRefetch } from "@/lib/bus";
@@ -30,13 +32,13 @@ export default function DataPicklistPage() {
             <thead>
               <tr>
                 <th>#</th><th>Team</th>
-                <th className="num">True Score</th>
-                <th className="num">Base</th>
-                <th className="num">Reliab.</th>
-                <th className="num">Opp EPA</th>
-                <th className="num">Partner EPA</th>
-                <th className="num">SOS</th>
-                <th className="num">Sched. Adj</th>
+                <th className="num"><MetricLabel>True Score</MetricLabel></th>
+                <th className="num"><MetricLabel>Base</MetricLabel></th>
+                <th className="num"><MetricLabel>Reliab.</MetricLabel></th>
+                <th className="num"><MetricLabel>Opp EPA</MetricLabel></th>
+                <th className="num"><MetricLabel>Partner EPA</MetricLabel></th>
+                <th className="num"><MetricLabel>SOS</MetricLabel></th>
+                <th className="num"><MetricLabel>Sched. Adj</MetricLabel></th>
               </tr>
             </thead>
             <tbody>

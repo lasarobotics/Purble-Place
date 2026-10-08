@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { api } from "@/lib/api";
 import type { Team } from "@/lib/types";
 import { Icon } from "./icons";
+import { MetricLabel } from "./MetricLabel";
 
 // FRC 418 Purple Haze · FRC 436 Purple Rain — highlighted across the app.
 export const HOME_TEAMS = [418, 436];
@@ -37,7 +38,7 @@ export function Empty({ icon = "inbox", title, sub }: { icon?: string; title: st
 export function Stat({ label, value, accent }: { label: string; value: React.ReactNode; accent?: boolean }) {
   return (
     <div className="stat">
-      <div className="label">{label}</div>
+      <div className="label"><MetricLabel>{label}</MetricLabel></div>
       <div className={"value" + (accent ? " haze" : "")}>{value}</div>
     </div>
   );
@@ -56,7 +57,7 @@ function fetchTeamProfile(teamNumber: number): Promise<AvatarTeam | null> {
   if (teamProfileCache.has(teamNumber)) return Promise.resolve(teamProfileCache.get(teamNumber)!);
   const pending = pendingProfiles.get(teamNumber);
   if (pending) return pending;
-  const req = api<Team>(`/api/teams/${teamNumber}?refresh=true`)
+  const req = api<Team>(`/api/teams/${teamNumber}`)
     .then((team) => {
       const normalized = normalizeTeam(team);
       teamProfileCache.set(teamNumber, normalized);

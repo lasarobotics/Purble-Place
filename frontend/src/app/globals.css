@@ -725,3 +725,51 @@ table.data td.num { text-align: right; font-family: var(--font-num); font-varian
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Metric help follows the existing purple surfaces and typography. */
+.metric-label { cursor: help; text-decoration: underline dotted; text-underline-offset: 4px; }
+.metric-label:focus-visible { outline: 2px solid var(--haze-glow); outline-offset: 4px; border-radius: 3px; }
+.metric-tooltip { position: fixed; z-index: 10000; width: 360px; max-width: calc(100vw - 24px); padding: 16px; border: 1px solid var(--border); border-radius: 14px; background: #20162e; color: #f4eefb; box-shadow: 0 12px 40px #0008; font-size: 13px; line-height: 1.5; font-weight: 400; text-transform: none; letter-spacing: normal; pointer-events: none; }
+.metric-tooltip > span { display: block; }
+.metric-tooltip small { display: block; margin-top: 10px; color: #b9a9cc; font-size: 10px; }
+.metric-formula { margin-top: 14px; padding: 14px 6px; border-radius: 8px; background: #ffffff08; text-align: center; font-family: Cambria, Georgia, serif; font-size: 17px; overflow-wrap: anywhere; }
+.metric-fraction { display: inline-flex; flex-direction: column; align-items: stretch; text-align: center; gap: 5px; }
+.metric-fraction > span:first-child { padding: 0 4px 5px; border-bottom: 1px solid currentColor; }
+
+/* Cloud analytics: soft purple charts, clear points, and spacious field controls. */
+.trend-chart { padding: 12px 4px 0; border-radius: 14px; background: radial-gradient(ellipse at 55% 90%, #9253dc0d, transparent 70%); }
+.trend-caption { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 0 10px 7px; font-size: .73rem; color: var(--muted); }
+.trend-caption span { display: inline-flex; align-items: center; gap: 7px; }
+.trend-caption i { height: 6px; width: 6px; border-radius: 50%; box-shadow: 0 0 10px #b987ff60; }
+.trend-caption small { font-size: .65rem; color: var(--faint); }
+.trend-grid line { stroke: #b99dd918; stroke-dasharray: 3 6; }
+.trend-grid text, .trend-axis { font-size: 10px; fill: var(--faint); font-family: var(--font-num), sans-serif; }
+.trend-dot { transition: r .15s ease; }
+.trend-tip { position: absolute; transform: translateX(-50%); display: flex; flex-direction: column; gap: 2px; min-width: 85px; padding: 9px 13px; border: 1px solid #b087e752; border-radius: 10px; background: #241634f5; box-shadow: 0 7px 25px #0004; text-align: center; pointer-events: none; }
+.trend-tip > span { color: #c6b6da; font-size: .65rem; }
+.trend-tip b { color: #e2caff; font-size: 1rem; }
+.trend-tip small { color: #ac98c4; font-weight: 400; font-size: .65rem; }
+.heatmap-panel { display: grid; gap: 12px; }
+.heatmap-tools { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.shot-toggle { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: .73rem; cursor: pointer; }
+.shot-toggle input { accent-color: #ae79ed; width: 14px; height: 14px; }
+.analysis-field { border: 1px solid #a774df40; box-shadow: inset 0 0 30px #210e3440; border-radius: 13px; }
+.heatmap-stats { display: grid; grid-template-columns: repeat(3, 1fr); padding: 10px 0; background: #b083e908; border: 1px solid #b083e918; border-radius: 12px; }
+.heatmap-stats > div { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 3px; }
+.heatmap-stats > div + div { border-left: 1px solid #b083e91c; }
+.heatmap-stats strong { font-size: 1.35rem; font-variant-numeric: tabular-nums; letter-spacing: -.04em; }
+.heatmap-stats span { color: var(--muted); font-size: .67rem; }
+.made-text { color: #88ddbf; }
+.heatmap-legend { display: flex; align-items: center; justify-content: flex-end; gap: 8px; color: var(--faint); font-size: .62rem; }
+.heatmap-legend > span:first-child { margin-right: auto; }
+.density-ramp { display: inline-block; width: 80px; height: 6px; border-radius: 20px; background: linear-gradient(90deg, #b56dff10, #a965e890, #ce9cff); }
+.shot-key { display: flex; justify-content: center; gap: 18px; flex-wrap: wrap; color: var(--muted); font-size: .62rem; }
+.shot-key span { display: inline-flex; gap: 6px; align-items: center; }
+.shot-key i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; }
+.auto-dot { background: #22d3ee; box-shadow: 0 0 7px #22d3ee44; }
+.tele-dot { background: #a855f7; box-shadow: 0 0 7px #a855f744; }
+.miss-dot { border: 1px solid #fbbf24; }
+.heatmap-dialog { width: min(1120px, 94vw); max-height: 92vh; overflow: auto; margin: auto; border: 1px solid #9760ce70; border-radius: 20px; padding: 24px; color: var(--text); background: var(--panel); box-shadow: 0 24px 90px #0009; }
+.heatmap-dialog::backdrop { background: #090410d9; backdrop-filter: blur(6px); }
+.heatmap-dialog .heatmap-legend { margin-top: 14px; }
+@media (prefers-reduced-motion: reduce) { .trend-dot { transition: none; } }

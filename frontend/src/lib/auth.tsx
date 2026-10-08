@@ -1,7 +1,8 @@
 "use client";
 import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
-import { api, getToken, setToken, clearToken } from "./api";
+import { api, ApiError, getToken, setToken, clearToken } from "./api";
 import type { Session } from "./types";
+import { localOwner } from "./identity";
 
 interface AuthCtx {
   session: Session | null;
@@ -19,6 +20,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const expired = () => { clearToken(); localStorage.removeItem("hazehub.session"); setSession(null); };
+    window.addEventListener("auth-expired", expired);
+    return () => window.removeEventListener("auth-expired", expired);
+  }, []);
+
+  useEffect(() => {
     (async () => {
       if (!getToken()) {
         setLoading(false);
@@ -28,8 +35,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const me = await api<Session>("/api/auth/me");
         setToken(me.token);
         setSession(me);
-      } catch {
-        clearToken();
+        localStorage.setItem("hazehub.session", JSON.stringify(me));
+      } catch (error) {
+        if (error instanceof ApiError && [401, 403].includes(error.status)) {
+          clearToken();
+          localStorage.removeItem("hazehub.session");
+        } else {
+          try {
+            const saved = JSON.parse(localStorage.getItem("hazehub.session") || "null");
+            if (saved?.scout_id === localOwner()) setSession(saved);
+          } catch {}
+        }
       } finally {
         setLoading(false);
       }
@@ -44,11 +60,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
     setToken(s.token);
     setSession(s);
+    localStorage.setItem("hazehub.session", JSON.stringify(s));
     return s;
   }, []);
 
   const logout = useCallback(() => {
     clearToken();
+    localStorage.removeItem("hazehub.session");
     setSession(null);
   }, []);
 
