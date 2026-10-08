@@ -444,6 +444,16 @@ table.data .team-col { min-width: 165px; max-width: 210px; }
 
 .bar { height: 4px; background: var(--panel-3); border-radius: 2px; overflow: hidden; }
 .bar > span { display: block; height: 100%; background: var(--accent); }
+.heatmap-keybinds {
+  display: flex; flex-wrap: wrap; gap: 6px 10px; margin-top: 8px;
+  color: var(--faint); font-size: 0.72rem;
+}
+.heatmap-keybinds span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+kbd {
+  min-width: 18px; height: 18px; padding: 0 5px; display: inline-grid; place-items: center;
+  border-radius: 3px; background: var(--panel-3); color: var(--text);
+  font: 700 0.68rem/1 var(--font-num);
+}
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

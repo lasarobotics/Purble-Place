@@ -125,6 +125,15 @@ export function FieldInput({
         </svg>
       </div>
 
+      <div className="heatmap-keybinds" aria-label="Heatmap keyboard shortcuts">
+        <span><kbd>A</kbd> Auto</span>
+        <span><kbd>S</kbd> Teleop</span>
+        <span><kbd>Q</kbd> Made</span>
+        <span><kbd>W</kbd> Missed</span>
+        <span><kbd>Z</kbd> Undo</span>
+        <span><kbd>X</kbd> Clear</span>
+      </div>
+
       <div className="row" style={{ justifyContent: "space-between", marginTop: 10 }}>
         <div className="row" style={{ gap: 8, fontSize: "0.8rem" }}>
           <span className="badge">Auto {counts.autoMade}/{counts.autoMade + counts.autoMiss}</span>
