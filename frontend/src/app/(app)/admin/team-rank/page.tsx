@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import { useLiveRefetch } from "@/lib/bus";
 import { num, pct, rankClass } from "@/lib/format";
@@ -14,11 +14,93 @@ const FMT: Record<string, (v: number) => string> = {
   defense_rate: (v) => pct(v),
 };
 
+type DataAnalysisRow = Pick<TeamSummary, "team" | "nickname" | "avatar" | "matches"> & {
+  defense_capability: number | null;
+  l4m_defense_capability: number | null;
+  consistency: number;
+  l4m_consistency: number;
+  skew_distribution: number;
+  l4m_skew_distribution: number;
+  failure_rate: number;
+  l4m_failure_rate: number;
+  foul_match_rate: number;
+  climb_success_rate: number;
+  l4m_climb_success_rate: number;
+  ranking_point_prediction: number | null;
+};
+
+type SortDir = "asc" | "desc";
+type AnalysisKey = keyof Omit<DataAnalysisRow, "team" | "nickname" | "avatar">;
+
+const ANALYSIS_COLUMNS: { key: AnalysisKey; label: string; fmt?: (v: number) => string }[] = [
+  { key: "defense_capability", label: "Defense Capability", fmt: (v) => num(v, 2) },
+  { key: "l4m_defense_capability", label: "L4M Defense Capability", fmt: (v) => num(v, 2) },
+  { key: "consistency", label: "Consistency", fmt: pct },
+  { key: "l4m_consistency", label: "L4M Consistency", fmt: pct },
+  { key: "skew_distribution", label: "Skew Distribution", fmt: (v) => num(v, 3) },
+  { key: "l4m_skew_distribution", label: "L4M Skew Distribution", fmt: (v) => num(v, 3) },
+  { key: "failure_rate", label: "Failure Rate", fmt: pct },
+  { key: "l4m_failure_rate", label: "L4M Failure Rate", fmt: pct },
+  { key: "foul_match_rate", label: "Foul Match Rate", fmt: pct },
+  { key: "climb_success_rate", label: "Climb Success Rate", fmt: pct },
+  { key: "l4m_climb_success_rate", label: "L4M Climb Success Rate", fmt: pct },
+  { key: "ranking_point_prediction", label: "Ranking Point Prediction", fmt: (v) => num(v, 1) },
+];
+
+function SortHeader({
+  label,
+  active,
+  dir,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  dir: SortDir;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        color: "inherit",
+        background: "none",
+        border: 0,
+        padding: 0,
+        font: "inherit",
+        fontWeight: active ? 700 : undefined,
+        cursor: "pointer",
+        textAlign: "right",
+      }}
+      aria-sort={active ? (dir === "desc" ? "descending" : "ascending") : "none"}
+    >
+      {label}{active ? (dir === "desc" ? " ↓" : " ↑") : ""}
+    </button>
+  );
+}
+
+function analysisValue(row: DataAnalysisRow, key: AnalysisKey): number | null {
+  return row[key] as number | null;
+}
+
+function formatAnalysisValue(row: DataAnalysisRow, key: AnalysisKey): string {
+  const value = analysisValue(row, key);
+  if (value == null || !Number.isFinite(value)) return "-";
+  return ANALYSIS_COLUMNS.find((c) => c.key === key)?.fmt?.(value) ?? num(value, 2);
+}
+
 export default function TeamRankPage() {
+  const [tab, setTab] = useState<"rank" | "analysis">("rank");
   const [metrics, setMetrics] = useState<{ key: string; label: string }[]>([]);
   const [metric, setMetric] = useState("avg_points");
   const [rows, setRows] = useState<TeamSummary[]>([]);
+  const [analysisRows, setAnalysisRows] = useState<DataAnalysisRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [analysisLoading, setAnalysisLoading] = useState(true);
+  const [analysisSort, setAnalysisSort] = useState<{ key: AnalysisKey; dir: SortDir }>({
+    key: "skew_distribution",
+    dir: "desc",
+  });
 
   useEffect(() => {
     api<{ metrics: { key: string; label: string }[] }>("/api/admin/metrics").then((r) => setMetrics(r.metrics)).catch(() => {});
@@ -30,6 +112,29 @@ export default function TeamRankPage() {
   useEffect(() => setLoading(true), [metric]);
   useLiveRefetch(load);
 
+  const loadAnalysis = useCallback(() => {
+    api<{ teams: DataAnalysisRow[] }>("/api/admin/data-analysis")
+      .then((r) => setAnalysisRows(r.teams))
+      .catch(() => setAnalysisRows([]))
+      .finally(() => setAnalysisLoading(false));
+  }, []);
+  useLiveRefetch(loadAnalysis);
+
+  const sortedAnalysisRows = useMemo(() => {
+    const { key, dir } = analysisSort;
+    return [...analysisRows].sort((a, b) => {
+      const av = analysisValue(a, key);
+      const bv = analysisValue(b, key);
+      const an = av == null || !Number.isFinite(av) ? Number.NEGATIVE_INFINITY : av;
+      const bn = bv == null || !Number.isFinite(bv) ? Number.NEGATIVE_INFINITY : bv;
+      return dir === "desc" ? bn - an : an - bn;
+    });
+  }, [analysisRows, analysisSort]);
+
+  const setSort = (key: AnalysisKey) => {
+    setAnalysisSort((prev) => ({ key, dir: prev.key === key && prev.dir === "desc" ? "asc" : "desc" }));
+  };
+
   const fmt = FMT[metric] || ((v: number) => num(v, metric === "epa" ? 0 : 1));
   const maxVal = Math.max(...rows.map((r) => (r as any)[metric] || 0), 1);
 
@@ -37,6 +142,13 @@ export default function TeamRankPage() {
     <div>
       <div className="page-title"><h1>Team Rank</h1></div>
 
+      <div className="seg" style={{ marginBottom: 16 }}>
+        <button type="button" className={tab === "rank" ? "on" : ""} onClick={() => setTab("rank")}>Rank</button>
+        <button type="button" className={tab === "analysis" ? "on" : ""} onClick={() => setTab("analysis")}>Data Analysis</button>
+      </div>
+
+      {tab === "rank" ? (
+      <>
       <div className="card" style={{ marginBottom: 16 }}>
         <label className="field" style={{ margin: 0, maxWidth: 320 }}>
           <span>Rank by</span>
@@ -61,6 +173,40 @@ export default function TeamRankPage() {
                     <td className="num mono">{r.matches}</td>
                     <td className="num mono">{num(r.avg_points)}</td>
                     <td className="num mono">{pct(r.consistency)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      </>
+      ) : analysisLoading ? <Loading /> : sortedAnalysisRows.length === 0 ? <Empty icon="chart" title="No data yet" /> : (
+        <div className="card">
+          <div className="table-wrap">
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>Team</th>
+                  {ANALYSIS_COLUMNS.map((col) => (
+                    <th key={col.key} className="num">
+                      <SortHeader
+                        label={col.label}
+                        active={analysisSort.key === col.key}
+                        dir={analysisSort.dir}
+                        onClick={() => setSort(col.key)}
+                      />
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {sortedAnalysisRows.map((r) => (
+                  <tr key={r.team}>
+                    <td><ClickableTeam team={{ team_number: r.team, nickname: r.nickname, avatar: r.avatar }} /></td>
+                    {ANALYSIS_COLUMNS.map((col) => (
+                      <td key={col.key} className="num mono">{formatAnalysisValue(r, col.key)}</td>
+                    ))}
                   </tr>
                 ))}
               </tbody>

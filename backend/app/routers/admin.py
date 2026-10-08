@@ -10,6 +10,7 @@ from .. import repo
 from ..analytics import (
     RANK_METRICS,
     compare_teams,
+    data_analysis,
     data_picklist,
     event_teams,
     rank_teams,
@@ -244,6 +245,14 @@ async def rank(
 ) -> dict:
     event_key = repo.resolve_event(event)
     return {"metric": metric, "teams": rank_teams(event_key, metric)}
+
+
+@router.get("/data-analysis")
+async def get_data_analysis(
+    event: str | None = None,
+    _: Scouter = Depends(require_admin),
+) -> dict:
+    return {"teams": data_analysis(repo.resolve_event(event))}
 
 
 @router.get("/data-picklist")

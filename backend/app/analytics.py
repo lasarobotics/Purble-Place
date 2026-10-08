@@ -43,6 +43,26 @@ def _coeff_var(values: list[float]) -> float:
     return statistics.pstdev(values) / mean
 
 
+def _skew(values: list[float]) -> float:
+    """Adjusted sample skewness from the scouting algorithm overview."""
+    n = len(values)
+    if n < 3:
+        return 0.0
+    mean = statistics.fmean(values)
+    sigma = statistics.pstdev(values)
+    if sigma <= 0:
+        return 0.0
+    total = sum(((v - mean) / sigma) ** 3 for v in values)
+    return n / ((n - 1) * (n - 2)) * total
+
+
+def _last_four_entries(entries: list[ScoutEntry]) -> list[ScoutEntry]:
+    """Entries whose match number is in the team's four latest scouted matches."""
+    latest = sorted({e.match_number for e in entries}, reverse=True)[:4]
+    keep = set(latest)
+    return [e for e in entries if e.match_number in keep]
+
+
 def _build_team_summary(event_key: str, team: int) -> dict[str, Any]:
     all_entries = team_entries(event_key, team)
     # No-shows are a reliability signal, not a performance sample.
@@ -154,6 +174,61 @@ def rank_teams(event_key: str, metric: str = "avg_points") -> list[dict[str, Any
         return rows
 
     return repo.memoized(f"rank:{event_key}:{metric}", _DEPS, build)
+
+
+def data_analysis(event_key: str) -> list[dict[str, Any]]:
+    """Per-team analysis table used by Team Rank's Data Analysis tab.
+
+    Skew follows the adjusted sample skew equation in the scouting algorithm
+    overview. Ranking point prediction is left empty until the active game
+    definition exposes RP thresholds; the 2026 whitepaper's method depends on
+    those thresholds rather than a universal formula.
+    """
+
+    def _rate(entries: list[ScoutEntry], pred) -> float:
+        return sum(1 for e in entries if pred(e)) / len(entries) if entries else 0.0
+
+    def _consistency(entries: list[ScoutEntry]) -> float:
+        pts = [e.points for e in entries]
+        if len(pts) == 1:
+            return 1.0
+        return max(0.0, 1.0 - _coeff_var(pts)) if len(pts) >= 2 else 0.0
+
+    def build() -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        summaries = all_summaries(event_key)
+        for team in event_teams(event_key):
+            summary = summaries[team]
+            entries = [e for e in team_entries(event_key, team) if not e.no_show]
+            if not entries:
+                continue
+            l4m = _last_four_entries(entries)
+            rows.append(
+                {
+                    "team": team,
+                    "nickname": summary["nickname"],
+                    "avatar": summary["avatar"],
+                    "matches": summary["matches"],
+                    "defense_capability": None,
+                    "l4m_defense_capability": None,
+                    "consistency": summary["consistency"],
+                    "l4m_consistency": round(_consistency(l4m), 3),
+                    "skew_distribution": round(_skew([e.points for e in entries]), 3),
+                    "l4m_skew_distribution": round(_skew([e.points for e in l4m]), 3),
+                    "failure_rate": summary["failure_rate"],
+                    "l4m_failure_rate": round(_rate(l4m, lambda e: e.failure), 3),
+                    "foul_match_rate": round(_rate(entries, lambda e: e.fouls > 0), 3),
+                    "climb_success_rate": summary["climb_rate"],
+                    "l4m_climb_success_rate": round(
+                        _rate(l4m, lambda e: bool(e.climb and e.climb != "none")), 3
+                    ),
+                    "ranking_point_prediction": None,
+                }
+            )
+        rows.sort(key=lambda r: r["skew_distribution"], reverse=True)
+        return rows
+
+    return repo.memoized(f"data_analysis:{event_key}", _DEPS, build)
 
 
 # --------------------------------------------------------------------------- #
