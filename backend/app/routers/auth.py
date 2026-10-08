@@ -8,7 +8,7 @@ from ..auth import (
     create_token,
     current_scouter,
     get_account,
-    verify_team_password,
+    verify_login_password,
 )
 from .. import repo
 from ..config import settings
@@ -50,7 +50,7 @@ def login(body: LoginIn) -> LoginOut:
     scout_id = body.scout_id.strip()
     if not scout_id:
         raise HTTPException(status_code=400, detail="Scouter ID required")
-    if not verify_team_password(body.team_password):
+    if not verify_login_password(scout_id, body.team_password):
         raise HTTPException(status_code=401, detail="Incorrect team password")
     # Refuses anything that is not on the team's roster (403).
     scouter = get_account(scout_id)

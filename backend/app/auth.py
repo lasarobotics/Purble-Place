@@ -91,6 +91,14 @@ def verify_team_password(password: str) -> bool:
     return hmac.compare_digest(password or "", settings.TEAM_PASSWORD)
 
 
+def verify_login_password(scout_id: str, password: str) -> bool:
+    """Allow numbered scout accounts to use their number as the password."""
+    canonical = canonical_account_id(scout_id)
+    if canonical and canonical.isdigit() and hmac.compare_digest(password or "", canonical):
+        return True
+    return verify_team_password(password)
+
+
 def canonical_account_id(scout_id: str) -> Optional[str]:
     """Map whatever was typed onto a roster ID, or ``None`` if it is not one.
 

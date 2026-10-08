@@ -1,9 +1,11 @@
 import { FALLBACK_GAME } from "../src/lib/game";
 import { test, expect, BrowserContext } from "@playwright/test";
 
-async function fixture(context: BrowserContext) {
-  const token = Buffer.from(JSON.stringify({ sub: "test-scout", admin: true, exp: 9999999999 })).toString("base64url") + ".test";
-  const session = { token, scout_id: "test-scout", is_admin: true, role: "admin", picklist_only: false, display_name: "Test Scout", bucks: 100 };
+async function fixture(context: BrowserContext, options: { admin?: boolean; scoutId?: string } = {}) {
+  const admin = options.admin ?? true;
+  const scoutId = options.scoutId ?? "test-scout";
+  const token = Buffer.from(JSON.stringify({ sub: scoutId, admin, exp: 9999999999 })).toString("base64url") + ".test";
+  const session = { token, scout_id: scoutId, is_admin: admin, role: admin ? "admin" : "scouter", picklist_only: false, display_name: "Test Scout", bucks: 100 };
   let synced = false;
   let bundleReads = 0;
   const submissions: any[] = [];
@@ -19,6 +21,11 @@ async function fixture(context: BrowserContext) {
     const summary = { team: 418, nickname: "Purple Haze", avatar: "", epa: 40, matches: 2, avg_points: synced ? 55 : 20,
       consistency: .8, accuracy: .75, trend: 10, avg_fouls: 1, max_points: 70, min_points: 22, climb_rate: .8, failure_rate: .1, avg_driver: 4.2, total_stops: 6,
       counts: { auto_made: 10, auto_missed: 0, teleop_made: 8, teleop_missed: 11 }, match_points: [22, 40, 29, 60, 45, 70].map((points, i) => ({ match: (i + 1) * 6, points })), tags: [] };
+    const rankRow = { ...summary, team_number: 418, rank: 1 };
+    const analysisRows = [
+      { team: 418, nickname: "Purple Haze", avatar: "", matches: 2, defense_capability: null, l4m_defense_capability: null, consistency: .8, l4m_consistency: .7, skew_distribution: .21, l4m_skew_distribution: .18, failure_rate: .1, l4m_failure_rate: .2, foul_match_rate: .5, climb_success_rate: .8, l4m_climb_success_rate: .75, ranking_point_prediction: 2.4 },
+      { team: 7332, nickname: "WiredCats", avatar: "", matches: 2, defense_capability: null, l4m_defense_capability: null, consistency: .5, l4m_consistency: .4, skew_distribution: .61, l4m_skew_distribution: .58, failure_rate: .2, l4m_failure_rate: .3, foul_match_rate: .25, climb_success_rate: .6, l4m_climb_success_rate: .5, ranking_point_prediction: 1.6 },
+    ];
     const points = Array.from({ length: 29 }, (_, i) => ({ x: .22 + (i % 7) * .085, y: .26 + (i % 5) * .09, phase: i < 10 ? "auto" : "teleop", result: i < 18 ? "made" : "missed" }));
     const heatmaps = Object.fromEntries(["all", "auto", "teleop"].map(phase => {
       const selected = points.filter(p => phase === "all" || p.phase === phase);
@@ -32,12 +39,15 @@ async function fixture(context: BrowserContext) {
     else if (url.pathname === "/api/betting/mine") response = { bucks: 100, bets: [] };
     else if (url.pathname === "/api/betting/odds") { await route.fulfill({status: 503, json: {detail: "Unavailable"}}); return; }
     else if (url.pathname === "/api/auth/me") response = session;
+    else if (url.pathname === "/api/admin/metrics") response = { metrics };
+    else if (url.pathname === "/api/admin/rank") response = { teams: [{ ...rankRow, avg_points: synced ? 55 : 20 }] };
+    else if (url.pathname === "/api/admin/data-analysis") response = { teams: analysisRows };
     else if (url.pathname === "/api/admin/analysis") {
       bundleReads++;
-      response = { event: "2026test", generated_at: new Date().toISOString(), teams: [summary], metrics,
+      response = { event: "2026test", generated_at: new Date().toISOString(), teams: [rankRow], metrics,
         profiles: [{ team_number: 418, nickname: "Purple Haze", epa: 40 }],
         orders: { avg_points: [418], accuracy: [418], trend: [418] }, scouting: { "418": { summary, heatmap: heatmaps.all, heatmaps, reports: [] } },
-        analysis: [], picklist: { teams: [], event_avg_epa: 40 }, consensus: { teams: [] } };
+        analysis: analysisRows, picklist: { teams: [], event_avg_epa: 40 }, consensus: { teams: [] } };
     } else if (url.pathname === "/api/matches") response = { event: "2026test", matches: [1, 2].map(n => ({ event_key: "2026test", match_key: `2026test_qm${n}`, comp_level: "qm", match_number: n, red: [418, 2, 3], blue: [4, 5, 6], red_teams: [{ team_number: 418, nickname: "Purple Haze", epa: 40 }] })) };
     else if (url.pathname === "/api/events") response = { now: new Date().toISOString(), events: [] };
     else if (url.pathname === "/api/scout/last-assignment") response = { alliance: "red", station: 1 };
@@ -46,7 +56,10 @@ async function fixture(context: BrowserContext) {
       submissions.push(...entries);
       synced = true;
       response = { accepted: entries.map((e: any) => e.client_uuid), duplicates: [], rejected: {} };
-    } else if (url.pathname.startsWith("/api/teams/")) response = { team_number: 418, nickname: "Purple Haze", epa: 40, photos: [] };
+    } else if (url.pathname.startsWith("/api/teams/")) {
+      const team_number = Number(url.pathname.split("/").pop());
+      response = { team_number, nickname: team_number === 7332 ? "WiredCats" : "Purple Haze", epa: 40, photos: [] };
+    }
     await route.fulfill({ json: response, headers: { "Access-Control-Allow-Origin": "*" } });
   });
   return { submissions, reads: () => bundleReads };
@@ -58,10 +71,17 @@ test("cloud formulas, offline reload, draft and locked hotkeys, then exactly-onc
   await expect(page.getByRole("heading", { name: "Team Rank" })).toBeVisible();
   await expect(page.locator("body")).toHaveCSS("background-color", "rgb(34, 34, 34)");
   await expect(page.locator("tbody")).toContainText("20.0");
+  await expect(page.locator("tbody td.sticky-team").first()).toHaveCSS("position", "sticky");
   await page.locator("th .metric-label").filter({hasText: "Avg points"}).hover();
   await expect(page.getByRole("tooltip")).toContainText("Mean performance points");
   await expect(page.locator(".metric-fraction")).toBeVisible();
   await page.screenshot({ path: "test-results/metric-tooltip.png", fullPage: true });
+  await page.getByRole("button", { name: "Data Analysis" }).click();
+  await expect(page.locator("tbody td.sticky-team-first").first()).toHaveCSS("position", "sticky");
+  await expect(page.locator("tbody tr").first()).toContainText("7332");
+  await page.getByRole("button", { name: /^Skew Distribution/ }).click();
+  await expect(page.locator("tbody tr").first()).toContainText("418");
+  await page.getByRole("button", { name: "Rank", exact: true }).click();
   await page.locator("select").selectOption("accuracy");
   await expect(page.locator("tbody")).toContainText("75%");
   expect(data.reads()).toBe(1);
@@ -111,6 +131,12 @@ test("hotkey collisions are rejected and keys persist per scout", async ({ page,
   await page.reload();
   await page.getByRole("button", { name: "Change hotkeys" }).click();
   await expect(page.getByLabel("Select auto", { exact: true })).toHaveValue("v");
+});
+
+test("non-admin scouts cannot start a match from the scouting page", async ({ page, context }) => {
+  await fixture(context, { admin: false, scoutId: "1" });
+  await page.goto("/scout");
+  await expect(page.getByRole("button", { name: "Start match" })).toBeDisabled();
 });
 
 test("heatmap filters, shot toggle, expanded view and interactive trend points", async ({ page, context }) => {

@@ -26,6 +26,24 @@ const ENV_LABEL: Record<string, string> = {
 };
 interface ScouterRow { scout_id: string; display_name: string; role: string; is_admin: boolean; bucks: number; matches_scouted: number; }
 interface AdminBet extends Bet { scout_name?: string; }
+interface ArchiveSummary {
+  event_key: string;
+  name: string;
+  archived_at: string;
+  counts: Record<string, number>;
+  match_count?: number;
+  team_count?: number;
+  scouting_count?: number;
+}
+interface ArchiveDetail extends ArchiveSummary {
+  teams: Record<string, any>;
+  matches: any[];
+  scouting: any[];
+  pit_raw: any[];
+  picklists_raw: any[];
+  bets: any[];
+  analytics: Record<string, any>;
+}
 
 export default function AdminDashboard() {
   const toast = useToast();
@@ -33,6 +51,8 @@ export default function AdminDashboard() {
   const [matches, setMatches] = useState<MatchRec[]>([]);
   const [scouters, setScouters] = useState<ScouterRow[]>([]);
   const [bets, setBets] = useState<AdminBet[]>([]);
+  const [archives, setArchives] = useState<ArchiveSummary[]>([]);
+  const [openArchive, setOpenArchive] = useState<ArchiveDetail | null>(null);
   const [event, setEvent] = useState("");
   const [curMatch, setCurMatch] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -51,6 +71,7 @@ export default function AdminDashboard() {
       ]);
       setMatches(m.matches);
       setBets(allBets);
+      setArchives(await api<ArchiveSummary[]>("/api/admin/archives").catch(() => []));
     } catch {}
     setLoading(false);
   }, []);
@@ -72,6 +93,37 @@ export default function AdminDashboard() {
       if (r.bets_settled) toast(`${r.bets_settled} bets settled from TBA results`, "ok");
       await load();
     } catch (e: any) { toast(e.message || "Failed", "err"); } finally { setBusy(""); }
+  }
+  async function archiveAndReset() {
+    if (!s.current_event) return toast("Set an event before archiving", "err");
+    const fallback = s.current_event;
+    const name = prompt("Archive name", fallback);
+    if (name === null) return;
+    if (!confirm(`Archive ${fallback} and clear active competition data? This cannot be undone.`)) return;
+    setBusy("archive-reset");
+    try {
+      const r = await api<{ archive: ArchiveDetail; deleted: Record<string, number> }>("/api/admin/archive-and-reset", {
+        method: "POST",
+        body: { name: name.trim() || fallback },
+      });
+      toast(`Archived ${r.archive.name}. Active event cleared.`, "ok");
+      setOpenArchive(r.archive);
+      await load();
+    } catch (e: any) {
+      toast(e.message || "Archive failed; active data was not cleared", "err");
+    } finally {
+      setBusy("");
+    }
+  }
+  async function openArchiveDetail(eventKey: string) {
+    setBusy(`archive-${eventKey}`);
+    try {
+      setOpenArchive(await api<ArchiveDetail>(`/api/admin/archives/${eventKey}`));
+    } catch (e: any) {
+      toast(e.message || "Could not open archive", "err");
+    } finally {
+      setBusy("");
+    }
   }
   async function saveCurrent(n: number) {
     setCurMatch(n);
@@ -141,6 +193,9 @@ export default function AdminDashboard() {
             <input value={event} onChange={(e) => setEvent(e.target.value)} placeholder="e.g. 2026txende" />
           </label>
           <button className="btn primary" onClick={saveEvent} disabled={busy === "event"}>{busy === "event" ? "Loading schedule..." : "Set event & sync schedule"}</button>
+          <button className="btn danger" style={{ marginLeft: 8 }} onClick={archiveAndReset} disabled={busy === "archive-reset" || !s.current_event}>
+            {busy === "archive-reset" ? "Archiving..." : "Archive Competition & Start Fresh"}
+          </button>
 
         </div>
 
@@ -166,6 +221,34 @@ export default function AdminDashboard() {
           </button>
         </div>
       </div>
+
+      <div className="card" style={{ marginTop: 16 }}>
+        <div className="card-h"><h3>Archived Competitions</h3><span className="badge muted">{archives.length}</span></div>
+        {archives.length === 0 ? (
+          <p className="muted">No archived competitions yet.</p>
+        ) : (
+          <div className="table-wrap">
+            <table className="data">
+              <thead><tr><th>Name</th><th>Event</th><th>Date</th><th className="num">Teams</th><th className="num">Matches</th><th className="num">Reports</th><th></th></tr></thead>
+              <tbody>
+                {archives.map((a) => (
+                  <tr key={a.event_key}>
+                    <td>{a.name || a.event_key}</td>
+                    <td className="mono">{a.event_key}</td>
+                    <td>{new Date(a.archived_at).toLocaleDateString()}</td>
+                    <td className="num mono">{a.team_count ?? a.counts?.teams ?? 0}</td>
+                    <td className="num mono">{a.match_count ?? a.counts?.matches ?? 0}</td>
+                    <td className="num mono">{a.scouting_count ?? a.counts?.scouting_entries ?? 0}</td>
+                    <td><button className="btn sm" onClick={() => openArchiveDetail(a.event_key)} disabled={busy === `archive-${a.event_key}`}>Open Archive</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {openArchive && <ArchiveViewer archive={openArchive} onClose={() => setOpenArchive(null)} />}
 
       <div className="card" style={{ marginTop: 16 }}>
         <div className="card-h"><h3>Match Schedule</h3>
@@ -286,6 +369,130 @@ export default function AdminDashboard() {
           </div>
         )}
       </div>
+      </div>
+    </div>
+  );
+}
+
+function ArchiveViewer({ archive, onClose }: { archive: ArchiveDetail; onClose: () => void }) {
+  const teamRows = Object.values(archive.teams || {}).sort((a: any, b: any) => (a.team || 0) - (b.team || 0));
+  const matches = [...(archive.matches || [])].sort((a, b) => (a.match_num || 0) - (b.match_num || 0));
+  const scouting = archive.scouting || [];
+  const picklists = archive.picklists_raw || [];
+  const dataAnalysis = archive.analytics?.data_analysis || [];
+
+  return (
+    <div className="card" style={{ marginTop: 16 }}>
+      <div className="card-h">
+        <div>
+          <h3>{archive.name || archive.event_key}</h3>
+          <div className="meta">{archive.event_key} · read-only archive</div>
+        </div>
+        <button className="btn sm ghost" onClick={onClose}>Return to Live</button>
+      </div>
+
+      <div className="grid cols-4" style={{ marginBottom: 14 }}>
+        <Stat label="Teams" value={archive.counts?.teams ?? teamRows.length} />
+        <Stat label="Matches" value={archive.counts?.matches ?? matches.length} />
+        <Stat label="Reports" value={archive.counts?.scouting_entries ?? scouting.length} />
+        <Stat label="Pit Reports" value={archive.counts?.pit_reports ?? archive.pit_raw?.length ?? 0} />
+      </div>
+
+      <div className="table-wrap" style={{ maxHeight: 280, overflowY: "auto", marginBottom: 14 }}>
+        <table className="data">
+          <thead><tr><th>Team</th><th className="num">Matches</th><th className="num">Avg</th><th className="num">Consistency</th><th className="num">Climb</th><th className="num">Failure</th></tr></thead>
+          <tbody>
+            {teamRows.map((t: any) => (
+              <tr key={t.team}>
+                <td className="mono">{t.team}</td>
+                <td className="num mono">{t.matches ?? 0}</td>
+                <td className="num mono">{Number(t.avg_points ?? 0).toFixed(1)}</td>
+                <td className="num mono">{Math.round((t.consistency ?? 0) * 100)}%</td>
+                <td className="num mono">{Math.round((t.climb_rate ?? 0) * 100)}%</td>
+                <td className="num mono">{Math.round((t.failure_rate ?? 0) * 100)}%</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="grid cols-2">
+        <div>
+          <div className="card-h"><h3>Matches</h3><span className="badge muted">{matches.length}</span></div>
+          <div className="table-wrap" style={{ maxHeight: 240, overflowY: "auto" }}>
+            <table className="data">
+              <thead><tr><th>Match</th><th>Red</th><th>Blue</th><th>Result</th></tr></thead>
+              <tbody>
+                {matches.map((m) => (
+                  <tr key={m.match_key}>
+                    <td>{matchLabel(m.comp_level || "qm", m.match_num || 0)}</td>
+                    <td className="mono">{[m.red1, m.red2, m.red3].filter(Boolean).join(", ")}</td>
+                    <td className="mono">{[m.blue1, m.blue2, m.blue3].filter(Boolean).join(", ")}</td>
+                    <td>{m.winner || "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div>
+          <div className="card-h"><h3>Scouting Reports</h3><span className="badge muted">{scouting.length}</span></div>
+          <div className="table-wrap" style={{ maxHeight: 240, overflowY: "auto" }}>
+            <table className="data">
+              <thead><tr><th>Match</th><th>Team</th><th>Scout</th><th className="num">Points</th></tr></thead>
+              <tbody>
+                {scouting.slice(0, 300).map((r) => (
+                  <tr key={r.submission_uuid}>
+                    <td>{matchLabel(r.comp_level || "qm", r.match_num || 0)}</td>
+                    <td className="mono">{r.team_num}</td>
+                    <td>{r.scouter_id}</td>
+                    <td className="num mono">{Number(r.points ?? 0).toFixed(1)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid cols-2" style={{ marginTop: 14 }}>
+        <div>
+          <div className="card-h"><h3>Data Analysis Snapshot</h3><span className="badge muted">{dataAnalysis.length}</span></div>
+          <div className="table-wrap" style={{ maxHeight: 220, overflowY: "auto" }}>
+            <table className="data">
+              <thead><tr><th>Team</th><th className="num">Skew</th><th className="num">Fail</th><th className="num">RP Pred</th></tr></thead>
+              <tbody>
+                {dataAnalysis.slice(0, 80).map((r: any) => (
+                  <tr key={r.team}>
+                    <td className="mono">{r.team}</td>
+                    <td className="num mono">{Number(r.skew_distribution ?? 0).toFixed(3)}</td>
+                    <td className="num mono">{Math.round((r.failure_rate ?? 0) * 100)}%</td>
+                    <td className="num mono">{Number(r.ranking_point_prediction ?? 0).toFixed(1)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div>
+          <div className="card-h"><h3>Picklists</h3><span className="badge muted">{picklists.length}</span></div>
+          <div className="table-wrap" style={{ maxHeight: 220, overflowY: "auto" }}>
+            <table className="data">
+              <thead><tr><th>Name</th><th>Owner</th><th className="num">Teams</th></tr></thead>
+              <tbody>
+                {picklists.map((p) => (
+                  <tr key={p.picklist_id}>
+                    <td>{p.picklist_name}</td>
+                    <td>{p.owner_id}</td>
+                    <td className="num mono">{p.items?.length ?? 0}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -349,6 +349,17 @@ table.data tbody tr:hover { background: var(--panel-2); }
 table.data .num { text-align: right; font-family: var(--font-num); font-variant-numeric: tabular-nums; }
 table.data th.num { text-align: right; }
 table.data .team-col { min-width: 165px; max-width: 210px; }
+table.data .sticky-col {
+  position: sticky;
+  background: var(--bg);
+  z-index: 2;
+}
+table.data th.sticky-col { z-index: 4; }
+table.data .sticky-rank { left: 0; min-width: 54px; width: 54px; }
+table.data .sticky-team { left: 54px; min-width: 165px; max-width: 210px; }
+table.data .sticky-team-first { left: 0; min-width: 165px; max-width: 210px; }
+table.data tbody tr:nth-child(even) .sticky-col { background: #262626; }
+table.data tbody tr:hover .sticky-col { background: var(--panel-2); }
 .muted { color: var(--muted); }
 .faint { color: var(--faint); }
 .haze-text { color: var(--accent-text); }

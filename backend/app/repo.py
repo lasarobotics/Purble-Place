@@ -25,6 +25,7 @@ from .models import (
     Device,
     Event,
     EventArchive,
+    EventArchiveChunk,
     Form,
     FormRevision,
     Season,
@@ -314,6 +315,37 @@ def archive(event_key: str) -> Optional[EventArchive]:
     return store.get(schema.EVENT_ARCHIVES, (event_key or "").strip())
 
 
+def archive_detail(event_key: str) -> Optional[EventArchive]:
+    row = archive(event_key)
+    if row is None:
+        return None
+    if not row.chunk_ids:
+        return row
+
+    chunks: list[EventArchiveChunk] = []
+    for chunk_id in row.chunk_ids:
+        chunk = store.fetch(schema.EVENT_ARCHIVE_CHUNKS, chunk_id)
+        if chunk is not None:
+            chunks.append(chunk)
+    chunks.sort(key=lambda c: (c.kind, c.index))
+
+    hydrated = EventArchive.from_doc(row.doc_id, row.to_doc())
+    list_fields = {"matches", "scouting", "pit_raw", "picklists_raw", "bets", "team_cache"}
+    dict_fields = {"event", "analytics"}
+    for kind in list_fields:
+        values: list = []
+        for chunk in chunks:
+            if chunk.kind == kind and isinstance(chunk.data, list):
+                values.extend(chunk.data)
+        setattr(hydrated, kind, values)
+    for kind in dict_fields:
+        for chunk in chunks:
+            if chunk.kind == kind and isinstance(chunk.data, dict):
+                setattr(hydrated, kind, chunk.data)
+                break
+    return hydrated
+
+
 def archives() -> list[EventArchive]:
     """Every archived event, most recently archived first."""
     return sorted(
@@ -323,7 +355,9 @@ def archives() -> list[EventArchive]:
     )
 
 
-def save_archive(row: EventArchive) -> None:
+def save_archive(row: EventArchive, chunks: list[EventArchiveChunk] | None = None) -> None:
+    if chunks:
+        store.write_many(chunks)
     store.write(row)
 
 
@@ -438,6 +472,10 @@ def delete_matches_for_event(event_key: str) -> int:
     return store.delete_many(schema.MATCHES, ids)
 
 
+def delete_event(event_key: str) -> None:
+    store.delete(schema.EVENTS, (event_key or "").strip())
+
+
 # --------------------------------------------------------------------------- #
 # match_scouting                                                               #
 # --------------------------------------------------------------------------- #
@@ -547,6 +585,11 @@ def save_pit(row: PitEntry) -> None:
     store.write(row)
 
 
+def delete_pits_for_event(event_key: str) -> int:
+    ids = [p.doc_id for p in store.all(schema.PIT_SCOUTING) if p.event_key == event_key]
+    return store.delete_many(schema.PIT_SCOUTING, ids)
+
+
 # --------------------------------------------------------------------------- #
 # picklists                                                                    #
 # --------------------------------------------------------------------------- #
@@ -589,6 +632,11 @@ def save_picklist(p: Picklist) -> None:
 
 def delete_picklist(pid: int) -> None:
     store.delete(schema.PICKLISTS, str(pid))
+
+
+def delete_picklists_for_event(event_key: str) -> int:
+    ids = [p.doc_id for p in store.all(schema.PICKLISTS) if p.event_key == event_key]
+    return store.delete_many(schema.PICKLISTS, ids)
 
 
 # --------------------------------------------------------------------------- #
@@ -645,6 +693,11 @@ def delete_all_bets() -> int:
     return store.delete_many(
         schema.BETS, [b.doc_id for b in store.all(schema.BETS)]
     )
+
+
+def delete_bets_for_event(event_key: str) -> int:
+    ids = [b.doc_id for b in store.all(schema.BETS) if b.event_key == event_key]
+    return store.delete_many(schema.BETS, ids)
 
 
 # --------------------------------------------------------------------------- #

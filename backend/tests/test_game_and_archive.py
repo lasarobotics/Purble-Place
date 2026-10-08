@@ -28,6 +28,10 @@ def test_archive_round_trips_through_the_document_shape():
         teams={"418": {"team": 418, "avg_points": 51.5}},
         pit=[{"team_number": 418, "archetype": "fast cycler"}],
         picklists=[{"owner_id": "final-418", "pick_round": 1, "items": [{"team": 254}]}],
+        matches=[{"match_key": "2026haze_qm1", "red1": 418}],
+        scouting=[{"submission_uuid": "abc", "team_num": 418, "points": 12}],
+        analytics={"rankings": {"avg_points": [{"team": 418, "rank": 1}]}},
+        chunk_ids=["2026haze__scouting__0000"],
     )
     doc = row.to_doc()
     back = EventArchive.from_doc("2026haze", doc)
@@ -37,6 +41,10 @@ def test_archive_round_trips_through_the_document_shape():
     assert back.counts["scouting_entries"] == 40
     assert back.pit[0]["archetype"] == "fast cycler"
     assert back.picklists[0]["items"] == [{"team": 254}]
+    assert back.matches[0]["match_key"] == "2026haze_qm1"
+    assert back.scouting[0]["submission_uuid"] == "abc"
+    assert back.analytics["rankings"]["avg_points"][0]["rank"] == 1
+    assert back.chunk_ids == ["2026haze__scouting__0000"]
 
 
 def test_archive_skips_an_event_with_no_scouting(monkeypatch):
@@ -84,13 +92,140 @@ def test_archive_drops_the_bulky_fields(monkeypatch):
     monkeypatch.setattr(archive_mod.repo, "matches_for_event", lambda _k: [])
     monkeypatch.setattr(archive_mod.repo, "pits_for_event", lambda _k: [])
     monkeypatch.setattr(archive_mod.repo, "picklists", lambda _k: [])
+    monkeypatch.setattr(archive_mod.repo, "bets", lambda _k: [])
     monkeypatch.setattr(archive_mod.repo, "event", lambda _k: None)
+    monkeypatch.setattr(archive_mod.repo, "team", lambda _t: None)
 
     built = archive_mod.build_archive("2026haze")
     summary = built.teams["418"]
     assert "avatar" not in summary
     assert "match_points" not in summary
     assert summary["avg_points"] == 50.0
+
+
+def test_archive_includes_raw_event_snapshots(monkeypatch):
+    from app import archive as archive_mod
+
+    class _Row:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+        def to_doc(self):
+            return dict(self.__dict__)
+
+    scout = _Row(
+        submission_id="sub1",
+        season_id="",
+        event_key="2026haze",
+        team_number=418,
+        no_show=False,
+        to_doc=lambda: {"submission_uuid": "sub1", "team_num": 418},
+    )
+    monkeypatch.setattr(archive_mod, "event_teams", lambda _k: [418])
+    monkeypatch.setattr(archive_mod, "team_summary", lambda _k, _t: {"team": 418, "avg_points": 10})
+    monkeypatch.setattr(archive_mod.repo, "scouting_for_event", lambda _k: [scout])
+    monkeypatch.setattr(archive_mod.repo, "matches_for_event", lambda _k: [_Row(match_key="m1", winner="red")])
+    monkeypatch.setattr(archive_mod.repo, "pits_for_event", lambda _k: [])
+    monkeypatch.setattr(archive_mod.repo, "picklists", lambda _k: [])
+    monkeypatch.setattr(archive_mod.repo, "bets", lambda _k: [])
+    monkeypatch.setattr(archive_mod.repo, "event", lambda _k: None)
+    monkeypatch.setattr(archive_mod.repo, "team", lambda _t: None)
+    monkeypatch.setattr(archive_mod, "_analytics_snapshot", lambda _k: {"ok": True})
+
+    built = archive_mod.build_archive("2026haze", "Custom Name")
+    assert built.name == "Custom Name"
+    assert built.scouting == [{"submission_uuid": "sub1", "team_num": 418}]
+    assert built.matches[0]["match_key"] == "m1"
+    assert built.analytics == {"ok": True}
+
+
+def test_archive_details_are_split_into_chunks():
+    from app import archive as archive_mod
+
+    built = EventArchive(
+        event_key="2026haze",
+        name="Haze Regional",
+        counts={"matches": 2, "scouting_entries": 2},
+        teams={"418": {"team": 418}},
+        matches=[{"match_key": "m1"}, {"match_key": "m2"}],
+        scouting=[{"submission_uuid": "a"}, {"submission_uuid": "b"}],
+        analytics={"data_analysis": [{"team": 418}]},
+    )
+
+    summary, chunks = archive_mod._split_for_storage(built)
+    assert summary.matches == []
+    assert summary.scouting == []
+    assert summary.analytics == {}
+    assert summary.chunk_ids == [chunk.archive_id for chunk in chunks]
+    assert {chunk.kind for chunk in chunks} == {"matches", "scouting", "analytics"}
+
+
+def test_archive_detail_rehydrates_chunked_history(monkeypatch):
+    from app import repo as repo_mod
+    from app import schema
+    from app.models import EventArchiveChunk
+
+    summary = EventArchive(
+        event_key="2026haze",
+        name="Haze Regional",
+        counts={"matches": 1, "scouting_entries": 1},
+        chunk_ids=["2026haze__matches__0000", "2026haze__scouting__0000"],
+    )
+    chunks = {
+        "2026haze__matches__0000": EventArchiveChunk(
+            archive_id="2026haze__matches__0000",
+            event_key="2026haze",
+            kind="matches",
+            data=[{"match_key": "m1"}],
+        ),
+        "2026haze__scouting__0000": EventArchiveChunk(
+            archive_id="2026haze__scouting__0000",
+            event_key="2026haze",
+            kind="scouting",
+            data=[{"submission_uuid": "s1"}],
+        ),
+    }
+
+    class _Store:
+        def get(self, collection, doc_id):
+            return summary if collection == schema.EVENT_ARCHIVES and doc_id == "2026haze" else None
+
+        def fetch(self, collection, doc_id):
+            assert collection == schema.EVENT_ARCHIVE_CHUNKS
+            return chunks.get(doc_id)
+
+    monkeypatch.setattr(repo_mod, "store", _Store())
+    detail = repo_mod.archive_detail("2026haze")
+    assert detail is not None
+    assert detail.matches == [{"match_key": "m1"}]
+    assert detail.scouting == [{"submission_uuid": "s1"}]
+
+
+def test_event_deletes_are_scoped_to_one_competition(monkeypatch):
+    from app import repo as repo_mod
+    from app import schema
+
+    class _Row:
+        def __init__(self, doc_id, event_key):
+            self.doc_id = doc_id
+            self.submission_id = doc_id
+            self.event_key = event_key
+
+    class _Store:
+        def __init__(self):
+            self.deleted = []
+
+        def all(self, collection):
+            return [_Row("keep", "2026other"), _Row("delete", "2026haze")]
+
+        def delete_many(self, collection, ids):
+            self.deleted.append((collection, ids))
+            return len(ids)
+
+    store = _Store()
+    monkeypatch.setattr(repo_mod, "store", store)
+    assert repo_mod.delete_scouting_for_event("2026haze") == 1
+    assert store.deleted == [(schema.MATCH_SCOUTING, ["delete"])]
 
 
 def test_archiving_requires_an_event_key():

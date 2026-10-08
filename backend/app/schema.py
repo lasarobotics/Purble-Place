@@ -69,6 +69,9 @@ NETWORK_STATUS = "network_status"
 DEVICES = "devices"
 #: One rolled-up document per finished event (see app/archive.py).
 EVENT_ARCHIVES = "event_archives"
+#: Detail documents for large event archives. The archive summary stores only
+#: chunk IDs so old events do not make the admin dashboard expensive to list.
+EVENT_ARCHIVE_CHUNKS = "event_archive_chunks"
 #: Form definitions and their append-only history (see app/forms.py).
 FORMS = "forms"
 FORM_REVISIONS = "form_revisions"
@@ -92,6 +95,7 @@ ALL_COLLECTIONS = (
     NETWORK_STATUS,
     DEVICES,
     EVENT_ARCHIVES,
+    EVENT_ARCHIVE_CHUNKS,
     FORMS,
     FORM_REVISIONS,
     SEASONS,
@@ -113,7 +117,7 @@ GLOBAL_CACHED = (
 EVENT_SCOPED_CACHED = (MATCHES, MATCH_SCOUTING, PICKLISTS, BETS, PIT_SCOUTING)
 
 #: Written but never listened to: nothing in the UI reads them hot.
-WRITE_ONLY = (SYNC_OUTBOX, NETWORK_STATUS, FORM_REVISIONS, SEASON_REVISIONS)
+WRITE_ONLY = (SYNC_OUTBOX, NETWORK_STATUS, FORM_REVISIONS, SEASON_REVISIONS, EVENT_ARCHIVE_CHUNKS)
 
 
 # --------------------------------------------------------------------------- #
@@ -203,6 +207,7 @@ INDEX_EXEMPT_FIELDS: dict[str, tuple[str, ...]] = {
     PICKLISTS: ("items",),
     TEAM_CACHE: ("avatar", "photos", "record"),
     PIT_SCOUTING: ("robot_photo", "capabilities", "notes"),
+    EVENT_ARCHIVE_CHUNKS: ("data",),
     NETWORK_STATUS: ("packet_loss",),
 }
 

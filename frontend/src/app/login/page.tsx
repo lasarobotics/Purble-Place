@@ -56,12 +56,12 @@ export default function LoginPage() {
               />
           </label>
           <label className="field">
-            <span>Team Password</span>
+            <span>Password</span>
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="Team password"
+              placeholder="Password"
               autoComplete="current-password"
             />
           </label>

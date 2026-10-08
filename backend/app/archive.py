@@ -18,15 +18,22 @@ event can be archived mid-competition for a checkpoint and again at the end.
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
 
 from . import repo
-from .analytics import event_teams, team_summary
+from .analytics import data_analysis, data_picklist, event_teams, rank_teams, team_summary
+from .cache import doc_bytes
+from . import schema
 from . import seasons
-from .models import EventArchive
+from .models import EventArchive, EventArchiveChunk
 
 log = logging.getLogger("hazehub.archive")
+
+DETAIL_FIELDS = ("event", "matches", "scouting", "pit_raw", "picklists_raw", "bets", "team_cache", "analytics")
+LIST_DETAIL_FIELDS = {"matches", "scouting", "pit_raw", "picklists_raw", "bets", "team_cache"}
+CHUNK_TARGET_BYTES = schema.MAX_DOC_BYTES - 40_000
 
 
 def _final_picklists(event_key: str) -> list[dict[str, Any]]:
@@ -46,7 +53,24 @@ def _final_picklists(event_key: str) -> list[dict[str, Any]]:
     return out
 
 
-def build_archive(event_key: str) -> EventArchive:
+def _analytics_snapshot(event_key: str) -> dict[str, Any]:
+    try:
+        return {
+            "rankings": {
+                "avg_points": rank_teams(event_key, "avg_points"),
+                "consistency": rank_teams(event_key, "consistency"),
+                "climb_rate": rank_teams(event_key, "climb_rate"),
+                "defense_rate": rank_teams(event_key, "defense_rate"),
+            },
+            "data_analysis": data_analysis(event_key),
+            "data_picklist": data_picklist(event_key),
+        }
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not include analytics snapshot for %s: %s", event_key, exc)
+        return {}
+
+
+def build_archive(event_key: str, name: str | None = None) -> EventArchive:
     """Roll an event up. Reads only what is already in memory."""
     event_key = (event_key or "").strip()
     if not event_key:
@@ -55,6 +79,8 @@ def build_archive(event_key: str) -> EventArchive:
     entries = repo.scouting_for_event(event_key)
     matches = repo.matches_for_event(event_key)
     pits = repo.pits_for_event(event_key)
+    picklists = repo.picklists(event_key)
+    bets = repo.bets(event_key)
     event = repo.event(event_key)
 
     # Per-team aggregates are the point of the archive: they are what somebody
@@ -73,6 +99,16 @@ def build_archive(event_key: str) -> EventArchive:
         summary.pop("match_points", None)
         summary.pop("avatar", None)
         teams[str(team)] = summary
+
+    team_cache = []
+    for team in event_teams(event_key):
+        cached = repo.team(team)
+        if cached:
+            row = cached.to_doc()
+            # Avatars can be tens of KiB and are not needed for historical stats.
+            row.pop("avatar", None)
+            row.pop("photos", None)
+            team_cache.append(row)
 
     pit_rows = [
         {
@@ -94,7 +130,7 @@ def build_archive(event_key: str) -> EventArchive:
 
     return EventArchive(
         event_key=event_key,
-        name=(event.name if event else "") or event_key,
+        name=(name or (event.name if event else "") or event_key).strip() or event_key,
         season=game.year,
         game_name=game.name,
         archived_at=datetime.now(timezone.utc),
@@ -104,17 +140,80 @@ def build_archive(event_key: str) -> EventArchive:
             "scouting_entries": len(entries),
             "pit_reports": len(pits),
             "teams": len(teams),
+            "picklists": len(picklists),
+            "bets": len(bets),
         },
         teams=teams,
         pit=pit_rows,
         picklists=_final_picklists(event_key),
+        event=event.to_doc() if event else {"event_key": event_key},
+        matches=[m.to_doc() for m in matches],
+        scouting=[e.to_doc() for e in entries],
+        pit_raw=[p.to_doc() for p in pits],
+        picklists_raw=[p.to_doc() for p in picklists],
+        bets=[b.to_doc() for b in bets],
+        team_cache=team_cache,
+        analytics=_analytics_snapshot(event_key),
     )
 
 
-def archive_event(event_key: str) -> EventArchive:
+def _chunk_doc_id(event_key: str, kind: str, index: int) -> str:
+    return f"{event_key}__{kind}__{index:04d}"
+
+
+def _make_chunk(event_key: str, kind: str, index: int, data: Any) -> EventArchiveChunk:
+    return EventArchiveChunk(
+        archive_id=_chunk_doc_id(event_key, kind, index),
+        event_key=event_key,
+        kind=kind,
+        index=index,
+        data=data,
+    )
+
+
+def _chunk_list(event_key: str, kind: str, rows: list[dict[str, Any]]) -> list[EventArchiveChunk]:
+    chunks: list[EventArchiveChunk] = []
+    current: list[dict[str, Any]] = []
+    index = 0
+    for row in rows:
+        candidate = [*current, row]
+        chunk = _make_chunk(event_key, kind, index, candidate)
+        if current and doc_bytes(chunk.to_doc()) > CHUNK_TARGET_BYTES:
+            chunks.append(_make_chunk(event_key, kind, index, current))
+            index += 1
+            current = [row]
+        else:
+            current = candidate
+    if current:
+        chunks.append(_make_chunk(event_key, kind, index, current))
+    return chunks
+
+
+def _split_for_storage(archive: EventArchive) -> tuple[EventArchive, list[EventArchiveChunk]]:
+    """Keep the archive list document small and put full detail in chunks."""
+    summary = replace(archive)
+    chunks: list[EventArchiveChunk] = []
+    for kind in DETAIL_FIELDS:
+        value = getattr(archive, kind)
+        if not value:
+            continue
+        if kind in LIST_DETAIL_FIELDS:
+            chunks.extend(_chunk_list(archive.event_key, kind, list(value or [])))
+            setattr(summary, kind, [])
+        else:
+            chunk = _make_chunk(archive.event_key, kind, 0, value)
+            chunks.append(chunk)
+            setattr(summary, kind, {})
+    summary.chunk_ids = [chunk.archive_id for chunk in chunks]
+    return summary, chunks
+
+
+def archive_event(event_key: str, name: str | None = None) -> EventArchive:
     """Build and store the archive for one event."""
-    archive = build_archive(event_key)
-    repo.save_archive(archive)
+    archive = build_archive(event_key, name)
+    summary, chunks = _split_for_storage(archive)
+    repo.save_archive(summary, chunks)
+    archive.chunk_ids = summary.chunk_ids
     log.info(
         "archived %s: %d teams, %d entries",
         event_key, archive.counts.get("teams", 0), archive.counts.get("scouting_entries", 0),

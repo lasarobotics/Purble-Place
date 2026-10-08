@@ -1102,9 +1102,8 @@ class OutboxRecord:
 class EventArchive:
     """``event_archives``: one finished event rolled up, document ID is the key.
 
-    Written when an event ends (see app/archive.py). Deliberately a summary
-    and not a copy: the submissions stay where they are, and this is the part
-    that has to stay cheap to read forever.
+    Written when an event ends (see app/archive.py). It keeps the cheap summary
+    fields first, plus raw snapshots needed for read-only historical review.
     """
 
     event_key: str
@@ -1117,6 +1116,15 @@ class EventArchive:
     teams: dict[str, Any] = field(default_factory=dict)
     pit: list[dict[str, Any]] = field(default_factory=list)
     picklists: list[dict[str, Any]] = field(default_factory=list)
+    event: dict[str, Any] = field(default_factory=dict)
+    matches: list[dict[str, Any]] = field(default_factory=list)
+    scouting: list[dict[str, Any]] = field(default_factory=list)
+    pit_raw: list[dict[str, Any]] = field(default_factory=list)
+    picklists_raw: list[dict[str, Any]] = field(default_factory=list)
+    bets: list[dict[str, Any]] = field(default_factory=list)
+    team_cache: list[dict[str, Any]] = field(default_factory=list)
+    analytics: dict[str, Any] = field(default_factory=dict)
+    chunk_ids: list[str] = field(default_factory=list)
 
     COLLECTION = schema.EVENT_ARCHIVES
 
@@ -1135,6 +1143,15 @@ class EventArchive:
             "teams": dict(self.teams or {}),
             "pit": list(self.pit or []),
             "picklists": list(self.picklists or []),
+            "event": dict(self.event or {}),
+            "matches": list(self.matches or []),
+            "scouting": list(self.scouting or []),
+            "pit_raw": list(self.pit_raw or []),
+            "picklists_raw": list(self.picklists_raw or []),
+            "bets": list(self.bets or []),
+            "team_cache": list(self.team_cache or []),
+            "analytics": dict(self.analytics or {}),
+            "chunk_ids": list(self.chunk_ids or []),
         }
 
     @classmethod
@@ -1149,6 +1166,51 @@ class EventArchive:
             teams=dict(d.get("teams") or {}),
             pit=list(d.get("pit") or []),
             picklists=list(d.get("picklists") or []),
+            event=dict(d.get("event") or {}),
+            matches=list(d.get("matches") or []),
+            scouting=list(d.get("scouting") or []),
+            pit_raw=list(d.get("pit_raw") or []),
+            picklists_raw=list(d.get("picklists_raw") or []),
+            bets=list(d.get("bets") or []),
+            team_cache=list(d.get("team_cache") or []),
+            analytics=dict(d.get("analytics") or {}),
+            chunk_ids=list(d.get("chunk_ids") or []),
+        )
+
+
+@dataclass
+class EventArchiveChunk:
+    """``event_archive_chunks``: large read-only payloads for one archive."""
+
+    archive_id: str
+    event_key: str
+    kind: str
+    index: int = 0
+    data: Any = field(default_factory=dict)
+
+    COLLECTION = schema.EVENT_ARCHIVE_CHUNKS
+
+    @property
+    def doc_id(self) -> str:
+        return self.archive_id
+
+    def to_doc(self) -> dict[str, Any]:
+        return {
+            "archive_id": self.archive_id,
+            "event_key": self.event_key,
+            "kind": self.kind,
+            "index": _int(self.index),
+            "data": self.data,
+        }
+
+    @classmethod
+    def from_doc(cls, doc_id: str, d: dict[str, Any]) -> "EventArchiveChunk":
+        return cls(
+            archive_id=d.get("archive_id") or doc_id,
+            event_key=d.get("event_key") or "",
+            kind=d.get("kind") or "",
+            index=_int(d.get("index")),
+            data=d.get("data"),
         )
 
 
@@ -1440,6 +1502,7 @@ MODEL_FOR_COLLECTION = {
     schema.NETWORK_STATUS: NetworkStatus,
     schema.SYNC_OUTBOX: OutboxRecord,
     schema.EVENT_ARCHIVES: EventArchive,
+    schema.EVENT_ARCHIVE_CHUNKS: EventArchiveChunk,
     schema.FORMS: Form,
     schema.FORM_REVISIONS: FormRevision,
     schema.SEASONS: Season,

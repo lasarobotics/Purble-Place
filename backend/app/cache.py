@@ -105,6 +105,13 @@ class FirestoreBackend:
         fs.count("read", max(1, len(out)))  # an empty result still bills 1 read
         return out
 
+    def get(self, collection: str, doc_id: str) -> Optional[dict]:
+        snap = fs.document(collection, doc_id).get()
+        fs.count("read")
+        if not snap.exists:
+            return None
+        return snap.to_dict() or {}
+
     def watch(
         self,
         collection: str,
@@ -224,6 +231,12 @@ class LocalBackend:
         if event_key:
             docs = {k: v for k, v in docs.items() if v.get("event_key") == event_key}
         return docs
+
+    def get(self, collection: str, doc_id: str) -> Optional[dict]:
+        with self._lock:
+            self._reread()
+            doc = self._data.get(collection, {}).get(doc_id)
+        return dict(doc) if isinstance(doc, dict) else None
 
     def watch(self, collection, event_key, on_change):  # noqa: ANN001, ARG002
         return None  # single process: the cache is already the source of truth
@@ -436,6 +449,29 @@ class Store:
     def get(self, collection: str, doc_id: str) -> Any:
         with self._lock:
             return self._docs.get(collection, {}).get(doc_id)
+
+    def fetch(self, collection: str, doc_id: str) -> Any:
+        """Read one document, using cache first and Firestore only on a miss."""
+        cached = self.get(collection, doc_id)
+        if cached is not None:
+            return cached
+        if self.backend is None:
+            return None
+        try:
+            data = self.backend.get(collection, doc_id)
+        except Exception as exc:  # noqa: BLE001
+            log.error("fetch %s/%s failed: %s", collection, doc_id, exc)
+            return None
+        if data is None:
+            return None
+        model = MODEL_FOR_COLLECTION.get(collection)
+        obj = model.from_doc(doc_id, data) if model else data
+        with self._lock:
+            self._docs.setdefault(collection, {})[doc_id] = obj
+            if hasattr(obj, "to_doc"):
+                self._written[(collection, doc_id)] = _canon(obj.to_doc())
+            self._revision[collection] += 1
+        return obj
 
     def all(self, collection: str) -> list[Any]:
         with self._lock:

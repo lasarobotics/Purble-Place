@@ -171,12 +171,12 @@ export default function TeamRankPage() {
         <div className="card">
           <div className="table-wrap">
             <table className="data">
-              <thead><tr><th>#</th><th>Team</th><th className="num"><MetricLabel metric={metric}>{metrics.find((m) => m.key === metric)?.label}</MetricLabel></th><th style={{ width: "30%" }}></th><th className="num"><MetricLabel metric="matches">Matches</MetricLabel></th><th className="num"><MetricLabel metric="avg_points">Avg</MetricLabel></th><th className="num"><MetricLabel metric="consistency">Consist.</MetricLabel></th></tr></thead>
+              <thead><tr><th className="sticky-col sticky-rank">#</th><th className="sticky-col sticky-team">Team</th><th className="num"><MetricLabel metric={metric}>{metrics.find((m) => m.key === metric)?.label}</MetricLabel></th><th style={{ width: "30%" }}></th><th className="num"><MetricLabel metric="matches">Matches</MetricLabel></th><th className="num"><MetricLabel metric="avg_points">Avg</MetricLabel></th><th className="num"><MetricLabel metric="consistency">Consist.</MetricLabel></th></tr></thead>
               <tbody>
                 {rows.map((r) => (
                   <tr key={r.team}>
-                    <td><span className={rankClass(r.rank || 0)}>{r.rank}</span></td>
-                    <td><ClickableTeam team={r} /></td>
+                    <td className="sticky-col sticky-rank"><span className={rankClass(r.rank || 0)}>{r.rank}</span></td>
+                    <td className="sticky-col sticky-team"><ClickableTeam team={r} /></td>
                     <td className="num mono"><b>{(r as any)[metric] == null ? "—" : fmt((r as any)[metric])}</b></td>
                     <td><Bar value={(r as any)[metric] || 0} max={maxVal} /></td>
                     <td className="num mono">{r.matches}</td>
@@ -196,7 +196,7 @@ export default function TeamRankPage() {
             <table className="data">
               <thead>
                 <tr>
-                  <th className="team-col">Team</th>
+                  <th className="team-col sticky-col sticky-team-first">Team</th>
                   {ANALYSIS_COLUMNS.map((col) => (
                     <th key={col.key} className="num">
                       <SortHeader
@@ -212,7 +212,7 @@ export default function TeamRankPage() {
               <tbody>
                 {sortedAnalysisRows.map((r) => (
                   <tr key={r.team}>
-                    <td className="team-col"><ClickableTeam team={{ team_number: r.team, nickname: r.nickname, avatar: r.avatar }} /></td>
+                    <td className="team-col sticky-col sticky-team-first"><ClickableTeam team={{ team_number: r.team, nickname: r.nickname, avatar: r.avatar }} /></td>
                     {ANALYSIS_COLUMNS.map((col) => (
                       <td key={col.key} className="num mono">{formatAnalysisValue(r, col.key)}</td>
                     ))}

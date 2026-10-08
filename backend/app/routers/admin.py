@@ -120,6 +120,10 @@ class ToggleIn(BaseModel):
     enabled: bool
 
 
+class ArchiveResetIn(BaseModel):
+    name: str = ""
+
+
 def _set_post_comp_unlock_cookie(response: Response) -> None:
     response.set_cookie(
         "post_comp_unlocked",
@@ -469,6 +473,29 @@ def reload_cache(_: Scouter = Depends(require_admin)) -> dict:
 # --------------------------------------------------------------------------- #
 # Event archives                                                               #
 # --------------------------------------------------------------------------- #
+def _archive_dict(row) -> dict:
+    return {
+        "event_key": row.event_key,
+        "name": row.name,
+        "season": row.season,
+        "game_name": row.game_name,
+        "archived_at": row.archived_at.isoformat(),
+        "counts": row.counts,
+        "teams": row.teams,
+        "pit": row.pit,
+        "picklists": row.picklists,
+        "event": row.event,
+        "matches": row.matches,
+        "scouting": row.scouting,
+        "pit_raw": row.pit_raw,
+        "picklists_raw": row.picklists_raw,
+        "bets": row.bets,
+        "team_cache": row.team_cache,
+        "analytics": row.analytics,
+        "chunk_ids": row.chunk_ids,
+    }
+
+
 @router.get("/archives")
 def list_archives(_: Scouter = Depends(require_admin)) -> list[dict]:
     """Every event this installation has finished, newest first.
@@ -485,6 +512,9 @@ def list_archives(_: Scouter = Depends(require_admin)) -> list[dict]:
             "game_name": a.game_name,
             "archived_at": a.archived_at.isoformat(),
             "counts": a.counts,
+            "match_count": a.counts.get("matches", 0),
+            "team_count": a.counts.get("teams", 0),
+            "scouting_count": a.counts.get("scouting_entries", 0),
         }
         for a in repo.archives()
     ]
@@ -492,20 +522,10 @@ def list_archives(_: Scouter = Depends(require_admin)) -> list[dict]:
 
 @router.get("/archives/{event_key}")
 def get_archive(event_key: str, _: Scouter = Depends(require_admin)) -> dict:
-    row = repo.archive(event_key)
+    row = repo.archive_detail(event_key)
     if row is None:
         raise HTTPException(status_code=404, detail=f"No archive for {event_key}")
-    return {
-        "event_key": row.event_key,
-        "name": row.name,
-        "season": row.season,
-        "game_name": row.game_name,
-        "archived_at": row.archived_at.isoformat(),
-        "counts": row.counts,
-        "teams": row.teams,
-        "pit": row.pit,
-        "picklists": row.picklists,
-    }
+    return _archive_dict(row)
 
 
 @router.post("/archives/{event_key}")
@@ -522,3 +542,37 @@ def create_archive(event_key: str, _: Scouter = Depends(require_admin)) -> dict:
     row = archive_event(event_key)
     emit("event_archived", {"event": row.event_key})
     return {"ok": True, "event": row.event_key, "counts": row.counts}
+
+
+@router.post("/archive-and-reset")
+def archive_and_reset(
+    body: ArchiveResetIn,
+    _: Scouter = Depends(require_admin),
+) -> dict:
+    event_key = repo.current_event()
+    if not event_key:
+        raise HTTPException(status_code=400, detail="No current event is set.")
+
+    row = archive_event(event_key, body.name.strip() or None)
+    verified = repo.archive_detail(event_key)
+    if (
+        verified is None
+        or verified.counts != row.counts
+        or len(verified.scouting) != row.counts.get("scouting_entries", 0)
+        or len(verified.matches) != row.counts.get("matches", 0)
+    ):
+        raise HTTPException(status_code=500, detail="Archive verification failed; active data was not cleared.")
+
+    deleted = {
+        "scouting": repo.delete_scouting_for_event(event_key),
+        "matches": repo.delete_matches_for_event(event_key),
+        "pit": repo.delete_pits_for_event(event_key),
+        "picklists": repo.delete_picklists_for_event(event_key),
+        "bets": repo.delete_bets_for_event(event_key),
+    }
+    repo.delete_event(event_key)
+    repo.set_setting("current_event", "")
+    repo.set_setting("current_match", "0")
+    emit("settings_changed", {"current_event": "", "current_match": 0})
+    emit("event_archived", {"event": event_key})
+    return {"ok": True, "archive": _archive_dict(row), "deleted": deleted}

@@ -67,6 +67,11 @@
       "indexes": []
     },
     {
+      "collectionGroup": "event_archive_chunks",
+      "fieldPath": "data",
+      "indexes": []
+    },
+    {
       "collectionGroup": "network_status",
       "fieldPath": "packet_loss",
       "indexes": []

@@ -10,6 +10,7 @@ import { useToast } from "@/lib/toast";
 import { markAcknowledged, markStatus, queueScout, uuid } from "@/lib/db";
 import { flushQueue, payloadHash } from "@/lib/sync";
 import type { HeatPoint, MatchRec, ScoutEntry } from "@/lib/types";
+import { useAuth } from "@/lib/auth";
 import { FieldInput } from "@/components/Field";
 import { Confirm, Segmented, Stepper, Rating, TeamIdentity } from "@/components/ui";
 import { BettingPanel } from "@/components/BettingPanel";
@@ -58,6 +59,7 @@ function Step({ title, children }: { title: string; children: React.ReactNode })
 
 export default function ScoutPage() {
   const toast = useToast();
+  const { session } = useAuth();
   // Endgame levels come from backend/app/game.py, so a new
   // season changes the form without a frontend change.
   const game = useGame();
@@ -202,6 +204,7 @@ export default function ScoutPage() {
   }
 
   const stationLabel = `${f.alliance === "red" ? "Red" : "Blue"} ${f.station}`;
+  const canStartMatch = !!session?.is_admin;
 
   return (
     <div className="scout-flow">
@@ -214,7 +217,7 @@ export default function ScoutPage() {
 
       <div className="btn-row" style={{marginBottom: 16}}>
         <button className="btn" disabled={started || busy} onClick={() => setEditingKeys(true)}>Change hotkeys</button>
-        <button className="btn primary" disabled={started || busy} onClick={() => { setStarted(true); setF(p => ({...p, season_id: p.season_id || game.season_id, game_version: p.game_version || game.game_version})); }}>{started ? "Match in progress" : "Start match"}</button>
+        <button className="btn primary" disabled={!canStartMatch || started || busy} onClick={() => { setStarted(true); setF(p => ({...p, season_id: p.season_id || game.season_id, game_version: p.game_version || game.game_version})); }}>{started ? "Match in progress" : "Start match"}</button>
         {started && <span className="faint">Hotkeys lock until this report is saved.</span>}
       </div>
       {editingKeys && <HotkeySettings keys={hotkeys} onClose={() => setEditingKeys(false)} onSave={keys => {

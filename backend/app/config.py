@@ -75,7 +75,7 @@ def _ids(env_var: str, default: str) -> list[str]:
 #:
 #: The mapping is ``canonical ID -> role``. Matching is case-insensitive and
 #: the canonical spelling here is what gets written to Firestore.
-DEFAULT_ACCOUNTS = "Admin:admin,Strategy:strategy,PicklistMeeting:picklist,1,2,3,Demo"
+DEFAULT_ACCOUNTS = "Admin:admin,Strategy:strategy,PicklistMeeting:picklist,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,Demo"
 
 #: IDs from earlier builds that should land on one of the accounts above
 #: rather than being rejected, so an existing device does not get locked out.
