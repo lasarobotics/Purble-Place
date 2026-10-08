@@ -14,7 +14,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import repo
@@ -88,6 +88,74 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+POST_COMP_COOKIE = "post_comp_unlocked"
+POST_COMP_404 = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>404: This page could not be found</title>
+  <style>
+    html,body{height:100%;margin:0;background:#1f1f1f;color:#ededed;font:16px/1.5 Arial,Helvetica,sans-serif}
+    body{display:grid;place-items:center}
+    main{display:flex;align-items:center;gap:22px}
+    h1{font-size:24px;line-height:1;margin:0;padding-right:22px;border-right:1px solid #555}
+    p{margin:0;font-size:14px;color:#cfcfcf}
+  </style>
+</head>
+<body>
+  <main aria-label="404 error">
+    <h1>404</h1>
+    <p>This page could not be found.</p>
+  </main>
+  <script>
+    (function () {
+      var want = ["ArrowLeft","ArrowLeft","ArrowRight","ArrowRight","4","1","8","Control","Control"];
+      var at = 0;
+      function keyName(event) {
+        if (event.key === "Control" || event.code === "ControlLeft" || event.code === "ControlRight") return "Control";
+        if (event.key === "ArrowLeft" || event.key === "ArrowRight") return event.key;
+        if (event.key === "4" || event.code === "Digit4" || event.code === "Numpad4") return "4";
+        if (event.key === "1" || event.code === "Digit1" || event.code === "Numpad1") return "1";
+        if (event.key === "8" || event.code === "Digit8" || event.code === "Numpad8") return "8";
+        return event.key;
+      }
+      window.addEventListener("keydown", function (event) {
+        var key = keyName(event);
+        if (key === want[at]) at += 1;
+        else at = key === want[0] ? 1 : 0;
+        if (at === want.length) {
+          document.cookie = "post_comp_unlocked=1; Max-Age=86400; Path=/; SameSite=Lax";
+          try { window.localStorage.setItem("hazehub.post_comp_unlocked", "1"); } catch (e) {}
+          window.location.href = "/login";
+        }
+      });
+    }());
+  </script>
+</body>
+</html>
+"""
+
+
+def _post_comp_locked(request: Request) -> bool:
+    if repo.setting("post_comp_mode") != "1":
+        return False
+    return request.cookies.get(POST_COMP_COOKIE) != "1"
+
+
+@app.middleware("http")
+async def post_comp_gate(request: Request, call_next):
+    if _post_comp_locked(request):
+        path = request.url.path
+        if path == "/api/health":
+            return await call_next(request)
+        if path.startswith("/api/"):
+            return JSONResponse(status_code=404, content={"detail": "Not found"})
+        return HTMLResponse(POST_COMP_404, status_code=404)
+    return await call_next(request)
 
 for r in (
     auth.router,

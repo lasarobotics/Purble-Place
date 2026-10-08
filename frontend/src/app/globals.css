@@ -348,6 +348,7 @@ table.data td { padding: 5px 10px; }
 table.data tbody tr:hover { background: var(--panel-2); }
 table.data .num { text-align: right; font-family: var(--font-num); font-variant-numeric: tabular-nums; }
 table.data th.num { text-align: right; }
+table.data .team-col { min-width: 165px; max-width: 210px; }
 .muted { color: var(--muted); }
 .faint { color: var(--faint); }
 .haze-text { color: var(--accent-text); }
@@ -415,7 +416,7 @@ table.data th.num { text-align: right; }
 .avatar.sm { width: 20px; height: 20px; }
 .avatar.lg { width: 38px; height: 38px; }
 
-.team-id { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
+.team-id { display: inline-flex; align-items: center; gap: 7px; min-width: 0; max-width: 100%; }
 .team-id-text { display: grid; min-width: 0; line-height: 1.25; }
 .team-id-text b { font-family: var(--font-num); font-size: 0.84rem; font-weight: 600; }
 .team-id-text span {
@@ -423,7 +424,7 @@ table.data th.num { text-align: right; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .team-click {
-  background: none; padding: 0; text-align: left; cursor: pointer;
+  background: none; padding: 0; text-align: left; cursor: pointer; max-width: 100%;
   color: inherit; font: inherit; border-radius: var(--radius-sm);
 }
 .team-click:hover .team-id-text b { color: var(--accent-text); }

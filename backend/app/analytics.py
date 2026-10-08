@@ -18,7 +18,7 @@ from typing import Any, Optional
 from . import repo, schema
 from . import seasons
 from .models import ScoutEntry
-from .scoring import phase_counts
+from .scoring import attempt_value, phase_counts
 
 #: Revision keys for the memoiser: any change to scouting or team data
 #: invalidates every derived aggregate below.
@@ -61,6 +61,152 @@ def _last_four_entries(entries: list[ScoutEntry]) -> list[ScoutEntry]:
     latest = sorted({e.match_number for e in entries}, reverse=True)[:4]
     keep = set(latest)
     return [e for e in entries if e.match_number in keep]
+
+
+def _percentile(values: list[float], q: float) -> float:
+    if not values:
+        return 0.0
+    vals = sorted(values)
+    if len(vals) == 1:
+        return vals[0]
+    pos = (len(vals) - 1) * q
+    lo = int(pos)
+    hi = min(lo + 1, len(vals) - 1)
+    frac = pos - lo
+    return vals[lo] * (1 - frac) + vals[hi] * frac
+
+
+def _mode(items: list[str]) -> str:
+    counts: dict[str, int] = {}
+    for item in items:
+        counts[item] = counts.get(item, 0) + 1
+    return max(counts.items(), key=lambda kv: (kv[1], kv[0]))[0] if counts else ""
+
+
+def _entry_scoring_points(entry: ScoutEntry) -> float:
+    """Points from scored game pieces only, the whitepaper's "fuel" bucket."""
+    game = seasons.definition_at(
+        entry.season_id or seasons.current_season_id(),
+        int(entry.game_version or 0),
+    )
+    total = 0.0
+    records = list(entry.actions or []) + list(entry.heatmap or [])
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        if record.get("result") and record.get("result") != "made":
+            continue
+        attempt = {
+            "action": record.get("action") or "score",
+            "phase": record.get("phase") or "teleop",
+            "result": record.get("result") or "made",
+            "object": record.get("object"),
+            "location": record.get("location"),
+            "quantity": record.get("quantity", 1),
+            "value": record.get("value"),
+        }
+        total += max(0.0, attempt_value(attempt, game))
+    return total
+
+
+def _rp_thresholds(fuel_totals: list[float], climb_totals: list[float]) -> tuple[float, float]:
+    """RP thresholds for the whitepaper's 90% check.
+
+    Prefer explicit season configuration. Older/local seasons do not store
+    those thresholds, so use the event's upper-quartile alliance projection as
+    a stable fallback rather than inventing constants in code.
+    """
+    extras = seasons.definition().extras or {}
+    raw = (
+        extras.get("ranking_point_thresholds")
+        or extras.get("rp_thresholds")
+        or extras.get("ranking_points")
+        or {}
+    )
+    fuel = float(raw.get("fuel") or raw.get("scoring") or 0)
+    climb = float(raw.get("climb") or raw.get("endgame") or 0)
+    if fuel <= 0:
+        fuel = _percentile([v for v in fuel_totals if v > 0], 0.75)
+    if climb <= 0:
+        climb = _percentile([v for v in climb_totals if v > 0], 0.75)
+    return fuel, climb
+
+
+def _ranking_point_predictions(event_key: str) -> dict[int, float]:
+    """Predicted team RPs using the 2026 whitepaper's Predicted AIM flow."""
+    matches = repo.matches_for_event(event_key)
+    if not matches:
+        return {}
+
+    game = seasons.definition()
+    profiles: dict[int, dict[str, float]] = {}
+    for team in event_teams(event_key):
+        entries = [e for e in team_entries(event_key, team) if not e.no_show]
+        if not entries:
+            profiles[team] = {"fuel": 0.0, "climb": 0.0}
+            continue
+        fuels = [_entry_scoring_points(e) for e in entries]
+        climbs = [e.climb for e in entries if e.climb and e.climb != "none"]
+        common_climb = _mode(climbs)
+        climb_points = game.endgame_points(common_climb) if common_climb else 0.0
+        profiles[team] = {
+            "fuel": statistics.fmean(fuels) if fuels else 0.0,
+            "climb": (len(climbs) / len(entries)) * climb_points if entries else 0.0,
+        }
+
+    alliance_rows: list[dict[str, Any]] = []
+    for match in matches:
+        for alliance, teams in (("red", match.red), ("blue", match.blue)):
+            fuel = sum(profiles.get(t, {}).get("fuel", 0.0) for t in teams)
+            climb = sum(profiles.get(t, {}).get("climb", 0.0) for t in teams)
+            alliance_rows.append(
+                {
+                    "match": match,
+                    "alliance": alliance,
+                    "teams": teams,
+                    "fuel": fuel,
+                    "climb": climb,
+                    "score": fuel + climb,
+                }
+            )
+
+    fuel_threshold, climb_threshold = _rp_thresholds(
+        [r["fuel"] for r in alliance_rows],
+        [r["climb"] for r in alliance_rows],
+    )
+    fuel_cutoff = fuel_threshold * 0.9 if fuel_threshold > 0 else float("inf")
+    climb_cutoff = climb_threshold * 0.9 if climb_threshold > 0 else float("inf")
+
+    totals = {team: 0.0 for team in profiles}
+    by_match = {(r["match"].match_key, r["alliance"]): r for r in alliance_rows}
+    for match in matches:
+        red = by_match.get((match.match_key, "red"))
+        blue = by_match.get((match.match_key, "blue"))
+        if not red or not blue:
+            continue
+
+        win_rp = {"red": 0.0, "blue": 0.0}
+        if match.winner in ("red", "blue"):
+            win_rp[match.winner] = 2.0
+        elif match.winner == "tie":
+            win_rp["red"] = win_rp["blue"] = 1.0
+        elif red["score"] > blue["score"]:
+            win_rp["red"] = 2.0
+        elif blue["score"] > red["score"]:
+            win_rp["blue"] = 2.0
+        else:
+            win_rp["red"] = win_rp["blue"] = 1.0
+
+        for row in (red, blue):
+            rp = win_rp[row["alliance"]]
+            if row["fuel"] >= fuel_cutoff:
+                rp += 1.0
+            if row["climb"] >= climb_cutoff:
+                rp += 1.0
+            for team in row["teams"]:
+                totals[team] = totals.get(team, 0.0) + rp
+
+    return {team: round(value, 2) for team, value in totals.items()}
 
 
 def _build_team_summary(event_key: str, team: int) -> dict[str, Any]:
@@ -180,9 +326,9 @@ def data_analysis(event_key: str) -> list[dict[str, Any]]:
     """Per-team analysis table used by Team Rank's Data Analysis tab.
 
     Skew follows the adjusted sample skew equation in the scouting algorithm
-    overview. Ranking point prediction is left empty until the active game
-    definition exposes RP thresholds; the 2026 whitepaper's method depends on
-    those thresholds rather than a universal formula.
+    overview. Ranking point prediction follows the 2026 whitepaper: project
+    alliance scoring/climb totals, award bonus RPs at 90% of threshold, then
+    aggregate those match predictions back to teams.
     """
 
     def _rate(entries: list[ScoutEntry], pred) -> float:
@@ -197,6 +343,7 @@ def data_analysis(event_key: str) -> list[dict[str, Any]]:
     def build() -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         summaries = all_summaries(event_key)
+        rp_predictions = _ranking_point_predictions(event_key)
         for team in event_teams(event_key):
             summary = summaries[team]
             entries = [e for e in team_entries(event_key, team) if not e.no_show]
@@ -222,7 +369,7 @@ def data_analysis(event_key: str) -> list[dict[str, Any]]:
                     "l4m_climb_success_rate": round(
                         _rate(l4m, lambda e: bool(e.climb and e.climb != "none")), 3
                     ),
-                    "ranking_point_prediction": None,
+                    "ranking_point_prediction": rp_predictions.get(team, 0.0),
                 }
             )
         rows.sort(key=lambda r: r["skew_distribution"], reverse=True)

@@ -187,7 +187,7 @@ export default function TeamRankPage() {
             <table className="data">
               <thead>
                 <tr>
-                  <th>Team</th>
+                  <th className="team-col">Team</th>
                   {ANALYSIS_COLUMNS.map((col) => (
                     <th key={col.key} className="num">
                       <SortHeader
@@ -203,7 +203,7 @@ export default function TeamRankPage() {
               <tbody>
                 {sortedAnalysisRows.map((r) => (
                   <tr key={r.team}>
-                    <td><ClickableTeam team={{ team_number: r.team, nickname: r.nickname, avatar: r.avatar }} /></td>
+                    <td className="team-col"><ClickableTeam team={{ team_number: r.team, nickname: r.nickname, avatar: r.avatar }} /></td>
                     {ANALYSIS_COLUMNS.map((col) => (
                       <td key={col.key} className="num mono">{formatAnalysisValue(r, col.key)}</td>
                     ))}

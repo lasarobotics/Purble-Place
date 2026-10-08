@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 
 from .. import repo
@@ -55,6 +55,7 @@ def get_settings(_: Scouter = Depends(require_admin)) -> dict:
         "current_event": s.get("current_event", ""),
         "current_match": int(s.get("current_match", "0") or 0),
         "betting_enabled": s.get("betting_enabled", "1") == "1",
+        "post_comp_mode": s.get("post_comp_mode", "0") == "1",
         "season": settings.SEASON,
         "environment": settings.ENVIRONMENT,
     }
@@ -118,6 +119,17 @@ class ToggleIn(BaseModel):
     enabled: bool
 
 
+def _set_post_comp_unlock_cookie(response: Response) -> None:
+    response.set_cookie(
+        "post_comp_unlocked",
+        "1",
+        max_age=60 * 60 * 24,
+        httponly=False,
+        samesite="lax",
+        path="/",
+    )
+
+
 @router.post("/betting/toggle")
 def toggle_betting(
     body: ToggleIn,
@@ -126,6 +138,21 @@ def toggle_betting(
     repo.set_setting("betting_enabled", "1" if body.enabled else "0")
     emit("settings_changed", {"betting_enabled": body.enabled})
     return {"ok": True, "betting_enabled": body.enabled}
+
+
+@router.post("/post-comp/toggle")
+def toggle_post_comp(
+    body: ToggleIn,
+    response: Response,
+    _: Scouter = Depends(require_admin),
+) -> dict:
+    repo.set_setting("post_comp_mode", "1" if body.enabled else "0")
+    if body.enabled:
+        _set_post_comp_unlock_cookie(response)
+    else:
+        response.delete_cookie("post_comp_unlocked", path="/")
+    emit("settings_changed", {"post_comp_mode": body.enabled})
+    return {"ok": True, "post_comp_mode": body.enabled}
 
 
 @router.post("/betting/reset")

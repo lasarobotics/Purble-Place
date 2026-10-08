@@ -86,6 +86,7 @@ SETTING_DEFAULTS = {
     "current_event": "",
     "current_match": "0",
     "betting_enabled": "1",
+    "post_comp_mode": "0",
 }
 
 

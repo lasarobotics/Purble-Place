@@ -9,7 +9,14 @@ import { ROLE_LABEL } from "@/lib/types";
 import { Loading, Stat, Stepper, TeamIdentity } from "@/components/ui";
 
 // environment: "cloud-run" | "firebase" | "emulator" | "local"
-interface AdminSettings { current_event: string; current_match: number; betting_enabled: boolean; season: number; environment: string; }
+interface AdminSettings {
+  current_event: string;
+  current_match: number;
+  betting_enabled: boolean;
+  post_comp_mode: boolean;
+  season: number;
+  environment: string;
+}
 
 const ENV_LABEL: Record<string, string> = {
   "cloud-run": "Firebase",
@@ -88,6 +95,19 @@ export default function AdminDashboard() {
       await load();
     } catch (e: any) { toast(e.message || "Failed", "err"); } finally { setBusy(""); }
   }
+  async function togglePostComp(enabled: boolean) {
+    const msg = enabled
+      ? "Turn on Post-Comp Mode? Visitors will see a 404 until the unlock code is entered."
+      : "Turn off Post-Comp Mode and make the site public again?";
+    if (!confirm(msg)) return;
+    setBusy("post-comp-toggle");
+    try {
+      const r = await api<{ post_comp_mode: boolean }>("/api/admin/post-comp/toggle", { method: "POST", body: { enabled } });
+      setS((cur) => cur ? { ...cur, post_comp_mode: r.post_comp_mode } : cur);
+      toast(`Post-Comp Mode ${r.post_comp_mode ? "enabled" : "disabled"}`, "ok");
+      await load();
+    } catch (e: any) { toast(e.message || "Failed", "err"); } finally { setBusy(""); }
+  }
   async function deleteBet(bet: AdminBet) {
     if (!confirm(`Delete bet #${bet.id} from ${bet.scout_name || bet.scout_id}?`)) return;
     await api(`/api/admin/bets/${bet.id}`, { method: "DELETE" });
@@ -123,6 +143,29 @@ export default function AdminDashboard() {
           <button className="btn primary" onClick={saveEvent} disabled={busy === "event"}>{busy === "event" ? "Loading schedule..." : "Set event & sync schedule"}</button>
 
         </div>
+
+      <div className="card" style={{ marginTop: 16 }}>
+        <div className="card-h"><h3>Site Access</h3><span className={`badge ${s.post_comp_mode ? "amber" : "green"}`}>{s.post_comp_mode ? "Post-comp" : "Open"}</span></div>
+        <p className="muted" style={{ marginTop: 0 }}>
+          Post-Comp Mode shows visitors a 404 and keeps the app from making API calls until the unlock code is entered.
+        </p>
+        <div className="seg">
+          <button
+            className={!s.post_comp_mode ? "on" : ""}
+            onClick={() => togglePostComp(false)}
+            disabled={busy === "post-comp-toggle" || !s.post_comp_mode}
+          >
+            Open
+          </button>
+          <button
+            className={s.post_comp_mode ? "on red" : ""}
+            onClick={() => togglePostComp(true)}
+            disabled={busy === "post-comp-toggle" || s.post_comp_mode}
+          >
+            Post-Comp Mode
+          </button>
+        </div>
+      </div>
 
       <div className="card" style={{ marginTop: 16 }}>
         <div className="card-h"><h3>Match Schedule</h3>

@@ -114,11 +114,13 @@ export function TeamAvatar({ team, size = "" }: { team: TeamLike; size?: "sm" | 
         display: "grid",
         placeItems: "center",
         fontWeight: 800,
-        fontSize: size === "lg" ? "1rem" : "0.7rem",
+        fontSize: size === "lg" ? "0.9rem" : "0.68rem",
         background: "var(--panel-2)",
+        overflow: "hidden",
       }}
+      aria-label={`Team ${normalized.team_number}`}
     >
-      {normalized.team_number}
+      {String(normalized.team_number).slice(-2)}
     </div>
   );
 }
