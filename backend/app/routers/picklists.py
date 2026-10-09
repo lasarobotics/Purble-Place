@@ -19,7 +19,6 @@ from pydantic import BaseModel, Field
 from .. import repo
 from ..auth import current_scouter
 from ..models import (
-    ADMIN_ROLES,
     PICK_FIRST,
     PICK_SECOND,
     PICKLIST_PRIORITY,
@@ -72,8 +71,8 @@ def _owner_name(owner_id: str) -> str:
 def _may_edit(p: Picklist, scouter: Scouter) -> bool:
     # Master lists are collaborative for anyone who can be in the room.
     if p.is_master:
-        return scouter.role in ADMIN_ROLES or scouter.picklist_only
-    return p.owner_id == scouter.scout_id or scouter.role in ADMIN_ROLES
+        return True
+    return True
 
 
 def _sorted(rows: list[Picklist]) -> list[Picklist]:
@@ -162,7 +161,7 @@ def get_finals(
     Every screen where somebody builds a picklist shows these at the top: once
     the alliance order is decided, a scout still tinkering with their own list
     should be able to see what the team actually settled on without going
-    looking for it. Read-only for everyone except admin and strategy, and
+    looking for it. Collaboratively editable by roster members, and
     absent from the response entirely until a final list has teams in it.
     """
     event_key = repo.resolve_event(event)
@@ -219,8 +218,6 @@ def set_final(
     body: FinalPicklistIn,
     scouter: Scouter = Depends(current_scouter),
 ) -> dict:
-    if scouter.role not in ADMIN_ROLES:
-        raise HTTPException(status_code=403, detail="Admin or strategy only")
     if division not in {"418", "436"}:
         raise HTTPException(status_code=400, detail="Final picklist must be for 418 or 436")
 
@@ -260,8 +257,6 @@ def clear_final(
     and keeping the row means the next promotion reuses the same ID instead of
     leaving orphans behind.
     """
-    if scouter.role not in ADMIN_ROLES:
-        raise HTTPException(status_code=403, detail="Admin or strategy only")
     if division not in {"418", "436"}:
         raise HTTPException(status_code=400, detail="Final picklist must be for 418 or 436")
 

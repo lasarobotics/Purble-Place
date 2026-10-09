@@ -25,48 +25,25 @@ from app.models import ROLE_ADMIN, ROLE_PICKLIST, ROLE_SCOUTER, ROLE_STRATEGY
 # --------------------------------------------------------------------------- #
 # Roster                                                                       #
 # --------------------------------------------------------------------------- #
-def test_roster_has_admin_roles_and_numbered_scouts():
-    assert list(settings.ACCOUNTS) == [
-        "Admin", "Strategy", "PicklistMeeting",
-        "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15",
-        "Demo",
-    ]
+def test_roster_has_one_admin_and_65_spreadsheet_accounts():
+    assert len(settings.ACCOUNTS) == 66
+    assert [key for key, role in settings.ACCOUNTS.items() if role == ROLE_ADMIN] == ["Admin"]
+    assert all(key.isdigit() and len(key) == 8 for key in settings.ACCOUNTS if key != "Admin")
 
 
-@pytest.mark.parametrize(
-    "typed,expected",
-    [
-        ("Admin", "Admin"),
-        ("admin", "Admin"),          # phones capitalise inconsistently
-        ("ADMIN", "Admin"),
-        ("  strategy  ", "Strategy"),
-        ("PicklistMeeting", "PicklistMeeting"),
-        ("picklist", "PicklistMeeting"),  # the ID older builds used
-        ("1", "1"),
-        ("15", "15"),
-        ("Demo", "Demo"),
-    ],
-)
+@pytest.mark.parametrize("typed,expected", [("Admin", "Admin"), ("admin", "Admin"), ("ADMIN", "Admin"), (" 10217860 ", "10217860")])
 def test_known_ids_resolve_to_one_canonical_account(typed, expected):
     assert canonical_account_id(typed) == expected
 
 
-@pytest.mark.parametrize("typed", ["arjun", "", "   ", "admin2", "16", "Adminn", "scout1"])
+@pytest.mark.parametrize("typed", ["", "admin2", "Strategy", "PicklistMeeting", "picklist", "1", "15", "Demo"])
 def test_unknown_ids_are_refused(typed):
     assert canonical_account_id(typed) is None
 
 
 def test_roles_come_from_the_roster():
     assert role_for_new_account("admin") == ROLE_ADMIN
-    assert role_for_new_account("Strategy") == ROLE_STRATEGY
-    assert role_for_new_account("picklist") == ROLE_PICKLIST
-    assert role_for_new_account("Demo") == ROLE_SCOUTER
-
-
-def test_numbered_scout_accounts_can_use_matching_password():
-    assert verify_login_password("1", "1") is True
-    assert verify_login_password("15", "15") is True
-    assert verify_login_password("15", "14") is False
+    assert role_for_new_account("10217860") == ROLE_SCOUTER
 
 
 def test_rejection_message_does_not_list_the_valid_ids():

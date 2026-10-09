@@ -21,7 +21,7 @@ from ..analytics import (
     team_summary,
 )
 from ..archive import archive_event, archive_if_worthwhile
-from ..auth import require_admin, require_full_admin
+from ..auth import current_scouter, require_admin, require_full_admin
 from ..config import settings
 from ..external import sync_event_matches
 from ..firestore_db import guard
@@ -231,7 +231,7 @@ class FilmIn(BaseModel):
 @router.post("/match/youtube")
 def set_film(
     body: FilmIn,
-    _: Scouter = Depends(require_admin),
+    _: Scouter = Depends(current_scouter),
 ) -> dict:
     """Save the film for a match: video link, written takeaway, and the
     timestamped key-events play-by-play."""
@@ -257,14 +257,14 @@ def set_result(_: Scouter = Depends(require_admin)) -> dict:
 # Analytics                                                                    #
 # --------------------------------------------------------------------------- #
 @router.get("/metrics")
-def metrics(_: Scouter = Depends(require_admin)) -> dict:
+def metrics(_: Scouter = Depends(current_scouter)) -> dict:
     return {"metrics": [{"key": k, "label": v} for k, v in RANK_METRICS.items()]}
 
 
 @router.get("/analysis")
 def get_analysis(
     event: str | None = None,
-    _: Scouter = Depends(require_admin),
+    _: Scouter = Depends(current_scouter),
 ) -> dict:
     return analysis_bundle(repo.resolve_event(event))
 
@@ -272,7 +272,7 @@ def get_analysis(
 @router.get("/event-teams")
 def list_event_teams(
     event: str | None = None,
-    _: Scouter = Depends(require_admin),
+    _: Scouter = Depends(current_scouter),
 ) -> list[int]:
     return event_teams(repo.resolve_event(event))
 
@@ -281,7 +281,7 @@ def list_event_teams(
 async def rank(
     metric: str = "avg_points",
     event: str | None = None,
-    _: Scouter = Depends(require_admin),
+    _: Scouter = Depends(current_scouter),
 ) -> dict:
     event_key = repo.resolve_event(event)
     return {"metric": metric, "teams": rank_teams(event_key, metric)}
@@ -290,7 +290,7 @@ async def rank(
 @router.get("/data-analysis")
 async def get_data_analysis(
     event: str | None = None,
-    _: Scouter = Depends(require_admin),
+    _: Scouter = Depends(current_scouter),
 ) -> dict:
     return {"teams": data_analysis(repo.resolve_event(event))}
 
@@ -298,7 +298,7 @@ async def get_data_analysis(
 @router.get("/data-picklist")
 async def get_data_picklist(
     event: str | None = None,
-    _: Scouter = Depends(require_admin),
+    _: Scouter = Depends(current_scouter),
 ) -> dict:
     return data_picklist(repo.resolve_event(event))
 
@@ -306,7 +306,7 @@ async def get_data_picklist(
 @router.get("/disagreements")
 def get_disagreements(
     event: str | None = None,
-    _: Scouter = Depends(require_admin),
+    _: Scouter = Depends(current_scouter),
 ) -> dict:
     """Consensus radar: teams where scouts disagree with each other, or the
     numbers disagree with the qualitative reads."""
@@ -317,7 +317,7 @@ def get_disagreements(
 async def compare(
     teams: str,
     event: str | None = None,
-    _: Scouter = Depends(require_admin),
+    _: Scouter = Depends(current_scouter),
 ) -> dict:
     event_key = repo.resolve_event(event)
     nums = []
@@ -333,7 +333,7 @@ async def compare(
 async def get_team_summary(
     team: int,
     event: str | None = None,
-    _: Scouter = Depends(require_admin),
+    _: Scouter = Depends(current_scouter),
 ) -> dict:
     return team_summary(repo.resolve_event(event), team)
 
@@ -343,7 +343,7 @@ def get_team_heatmap(
     team: int,
     phase: str | None = None,
     event: str | None = None,
-    _: Scouter = Depends(require_admin),
+    _: Scouter = Depends(current_scouter),
 ) -> dict:
     return team_heatmap(repo.resolve_event(event), team, phase)
 
@@ -352,7 +352,7 @@ def get_team_heatmap(
 def get_team_reports(
     team: int,
     event: str | None = None,
-    _: Scouter = Depends(require_admin),
+    _: Scouter = Depends(current_scouter),
 ) -> list[dict]:
     event_key = repo.resolve_event(event)
     return [
@@ -392,28 +392,8 @@ def set_role(
     body: RoleIn,
     admin: Scouter = Depends(require_full_admin),
 ) -> dict:
-    """Change an account's role.
-
-    Admin only, not strategy: letting strategy accounts promote each other
-    would make the distinction meaningless.
-    """
-    role = (body.role or "").strip().lower()
-    if role not in ROLES:
-        raise HTTPException(
-            status_code=400, detail=f"Role must be one of {', '.join(ROLES)}"
-        )
-    target = repo.scouter(scout_id)
-    if target is None:
-        raise HTTPException(status_code=404, detail="Scouter not found")
-    if target.scout_id == admin.scout_id and role != ROLE_ADMIN:
-        # Otherwise the last admin can lock everyone out of event control.
-        raise HTTPException(
-            status_code=400, detail="You cannot remove your own admin role"
-        )
-    target.role = role
-    repo.save_scouter(target)
-    emit("roles_changed", {"scout_id": target.scout_id, "role": role})
-    return {"ok": True, "scout_id": target.scout_id, "role": role}
+    """Roles are fixed; retain the route to reject older clients clearly."""
+    raise HTTPException(status_code=400, detail="Roles are fixed by the roster. Admin is the only administrator.")
 
 
 @router.get("/roles")

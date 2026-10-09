@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from .. import repo, seasons
-from ..auth import current_scouter, require_admin
+from ..auth import current_scouter
 from ..gamedef import FIELD_MAP_MODES, GameDefinition, validate
 from ..models import Scouter
 from ..realtime import emit
@@ -55,7 +55,7 @@ def list_seasons(_: Scouter = Depends(current_scouter)) -> dict:
 
 
 @router.get("/meta")
-def meta(_: Scouter = Depends(require_admin)) -> dict:
+def meta(_: Scouter = Depends(current_scouter)) -> dict:
     """The vocabulary the season editor renders its own controls from."""
     return {
         "field_map_modes": list(FIELD_MAP_MODES),
@@ -84,7 +84,7 @@ def get_season(season_id: str, _: Scouter = Depends(current_scouter)) -> dict:
 
 
 @router.get("/{season_id}/checklist")
-def get_checklist(season_id: str, _: Scouter = Depends(require_admin)) -> list[dict]:
+def get_checklist(season_id: str, _: Scouter = Depends(current_scouter)) -> list[dict]:
     """What is left before this season can run a competition."""
     try:
         return seasons.checklist(season_id)
@@ -96,7 +96,7 @@ def get_checklist(season_id: str, _: Scouter = Depends(require_admin)) -> list[d
 def get_history(
     season_id: str,
     limit: int = 100,
-    _: Scouter = Depends(require_admin),
+    _: Scouter = Depends(current_scouter),
 ) -> list[dict]:
     try:
         return seasons.history(season_id, limit)
@@ -108,7 +108,7 @@ def get_history(
 def get_revision(
     season_id: str,
     version: int,
-    _: Scouter = Depends(require_admin),
+    _: Scouter = Depends(current_scouter),
 ) -> dict:
     try:
         row = seasons.revision(season_id, version)
@@ -132,7 +132,7 @@ def get_diff(
     season_id: str,
     from_version: int = 0,
     to_version: int = 0,
-    _: Scouter = Depends(require_admin),
+    _: Scouter = Depends(current_scouter),
 ) -> dict:
     try:
         season = seasons.get(season_id)
@@ -175,7 +175,7 @@ class RevertIn(BaseModel):
 @router.post("/validate")
 def validate_definition(
     body: DefinitionIn,
-    _: Scouter = Depends(require_admin),
+    _: Scouter = Depends(current_scouter),
 ) -> dict:
     """Check a game definition without saving it.
 
@@ -186,7 +186,7 @@ def validate_definition(
 
 
 @router.post("")
-def create(body: CreateSeasonIn, scouter: Scouter = Depends(require_admin)) -> dict:
+def create(body: CreateSeasonIn, scouter: Scouter = Depends(current_scouter)) -> dict:
     try:
         row = seasons.create(
             body.season_id,
@@ -208,7 +208,7 @@ def create(body: CreateSeasonIn, scouter: Scouter = Depends(require_admin)) -> d
 def save_definition(
     season_id: str,
     body: DefinitionIn,
-    scouter: Scouter = Depends(require_admin),
+    scouter: Scouter = Depends(current_scouter),
 ) -> dict:
     try:
         row = seasons.save_definition(
@@ -230,7 +230,7 @@ def save_definition(
 def revert(
     season_id: str,
     body: RevertIn,
-    scouter: Scouter = Depends(require_admin),
+    scouter: Scouter = Depends(current_scouter),
 ) -> dict:
     """Go back to an older game definition, by writing a new one that copies it."""
     try:
@@ -247,7 +247,7 @@ def revert(
 def set_status(
     season_id: str,
     body: StatusIn,
-    scouter: Scouter = Depends(require_admin),
+    scouter: Scouter = Depends(current_scouter),
 ) -> dict:
     try:
         row = seasons.set_status(season_id, body.status, scouter)
@@ -260,7 +260,7 @@ def set_status(
 
 
 @router.post("/{season_id}/seed-forms")
-def seed_forms(season_id: str, _: Scouter = Depends(require_admin)) -> dict:
+def seed_forms(season_id: str, _: Scouter = Depends(current_scouter)) -> dict:
     """Generate this season's starting match and pit forms from its game.
 
     Only creates what is missing, so it is safe to press twice and it can

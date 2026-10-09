@@ -161,6 +161,7 @@ class Scouter:
     """``scouters``: document ID is ``scouter_id``."""
 
     scout_id: str
+    password_hash: str = ""
     s_number: Optional[int] = None
     display_name: str = ""
     role: str = ROLE_SCOUTER
@@ -178,7 +179,7 @@ class Scouter:
     @property
     def is_admin(self) -> bool:
         """Kept as a property so existing checks and the API shape still work."""
-        return self.role in ADMIN_ROLES
+        return self.role == ROLE_ADMIN
 
     @property
     def can_open_picklists(self) -> bool:
@@ -191,6 +192,7 @@ class Scouter:
     def to_doc(self) -> dict[str, Any]:
         return {
             "scouter_id": self.scout_id,
+            "password_hash": self.password_hash,
             "s_number": self.s_number,
             "display_name": self.display_name,
             "role": self.role,
@@ -207,6 +209,7 @@ class Scouter:
     def from_doc(cls, doc_id: str, d: dict[str, Any]) -> "Scouter":
         return cls(
             scout_id=d.get("scouter_id") or doc_id,
+            password_hash=d.get("password_hash") or "",
             s_number=d.get("s_number"),
             display_name=d.get("display_name") or "",
             role=normalize_role(d.get("role"), is_admin=bool(d.get("is_admin"))),

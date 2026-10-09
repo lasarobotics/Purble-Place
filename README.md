@@ -21,8 +21,9 @@ Firestore's free daily allowance. **Setup walkthrough: [instructions.txt](instru
 ## ✨ Features
 
 ### For everyone
-- **Sign in** with a Scouter ID + shared team password (`HazeRain!`). New IDs are created
-  on first sign-in. Demo accounts: **`1`, `2`, `3`** (scouts) and **`admin`**.
+- **Sign in** with one of the 65 IDs imported from `Untitled spreadsheet (1).xlsx`.
+  On first use, enter the ID, then create and confirm a unique password in the popup.
+  Later sign-ins use that personal password. Unknown IDs cannot create accounts.
 - **Home** — live Top-Bettors leaderboard, the match on the field, and your open bets.
 - **Match Scouting** — tap-the-field heatmap for every scoring attempt (auto/teleop,
   made/missed), endgame climb, defense, driver/speed ratings, fouls, failures, and notes.
@@ -37,8 +38,8 @@ Firestore's free daily allowance. **Setup walkthrough: [instructions.txt](instru
   match starts** and can't be changed. Everyone starts with **100 PB**.
 - **Picklists** — build your own, or collaborate on the shared **master picklist**.
 
-### Admin (everything above, plus)
-- **Dashboard** — set the event (syncs the TBA schedule), advance the current match
+### Shared analysis tools and Admin controls
+- **Dashboard (Admin only)** — set the event (syncs the TBA schedule), advance the current match
   (auto-settles bets), turn betting **on/off**, **reset everyone to 100 PB**, lock
   individual matches, and set match results.
 - **Team Search** — every match for a team + a **field heatmap overlay** of all their
@@ -76,7 +77,7 @@ the tablets should use, e.g. **http://192.168.1.47:8000**. Sign in:
 | ID | Password | Role |
 |----|----------|------|
 | `admin` | `HazeRain!` | Administrator |
-| `1`, `2`, `3` | `HazeRain!` | Scouts |
+| Spreadsheet IDs | Personal password created on first use | Members |
 
 Setup seeds a full demo event (`2026haze`: 12 teams, 18 matches, scouting data, bets
 and picklists) so every screen has data immediately. Until you point it at Firebase,
@@ -215,8 +216,22 @@ Cloud Run, so the app is single-origin with no CORS.
 ### Security model
 Firestore is reached only by this API, through the Firebase Admin SDK.
 `firestore.rules` therefore denies every client read and write — no browser
-ever holds a Firestore credential. Scouters sign in with a shared team
-password and get an HMAC token; the API enforces the admin-only routes.
+ever holds a Firestore credential. Roster members create personal passwords, stored as salted scrypt hashes, and receive
+HMAC-signed tokens. Only `Admin` can access the Event dashboard, System Health,
+and their control APIs. Other tools are available to every roster member.
+
+On backend startup, the account migration keeps `Admin` (including a legacy lowercase
+`admin`), removes accounts outside `backend/app/account_roster.json`, and creates the
+65 roster accounts awaiting password setup. Historical scouting records are retained.
+The migration is repeatable and preserves passwords on later restarts. Previous
+sessions are invalidated. Legacy `HAZEHUB_ACCOUNTS` and role-ID overrides no longer
+change the roster. Admin retains its configured `HAZEHUB_TEAM_PASSWORD` credential
+unless it already has a personal password hash.
+
+First-time setup claims an unused roster ID without an email verification step.
+Users should claim only their own ID. The popup includes the requested password
+reuse warning and explains that administrators manage account data while passwords
+are stored as hashes.
 
 ---
 

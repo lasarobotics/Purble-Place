@@ -7,7 +7,7 @@ import { localOwner } from "./identity";
 interface AuthCtx {
   session: Session | null;
   loading: boolean;
-  login: (scout_id: string, team_password: string) => Promise<Session>;
+  login: (scout_id: string, team_password: string, confirmation?: string) => Promise<Session>;
   logout: () => void;
   refresh: () => Promise<void>;
   setBucks: (b: number) => void;
@@ -52,11 +52,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     })();
   }, []);
 
-  const login = useCallback(async (scout_id: string, team_password: string) => {
-    const s = await api<Session>("/api/auth/login", {
+  const login = useCallback(async (scout_id: string, team_password: string, confirmation?: string) => {
+    const s = await api<Session>(confirmation === undefined ? "/api/auth/login" : "/api/auth/setup", {
       method: "POST",
       auth: false,
-      body: { scout_id, team_password },
+      body: confirmation === undefined ? { scout_id, team_password } : { scout_id, password: team_password, password_confirmation: confirmation },
     });
     setToken(s.token);
     setSession(s);

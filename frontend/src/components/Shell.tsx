@@ -46,6 +46,13 @@ const ADMIN_GROUPS: { title: string; items: NavItem[] }[] = [
     ],
   },
   {
+    title: "Tools",
+    items: [
+      { href: "/admin/forms", label: "Form Builder", icon: "clipboard" },
+      { href: "/admin/seasons", label: "Seasons", icon: "sliders" },
+    ],
+  },
+  {
     title: "Analysis",
     items: [
       { href: "/admin/team-search", label: "Team Search", icon: "search" },
@@ -95,17 +102,22 @@ export function Shell({ children }: { children: React.ReactNode }) {
     if (!allowed.some((prefix) => pathname.startsWith(prefix))) router.replace("/meeting");
   }, [session, pathname, router]);
 
+  const restrictedPage = pathname.replace(/\/$/, "") === "/admin" || pathname.startsWith("/admin/system");
+  useEffect(() => {
+    if (session && !session.is_admin && restrictedPage) router.replace("/home");
+  }, [session, restrictedPage, router]);
+
   useLiveEvents((event, payload) => emitBus(event, payload));
   useEffect(() => {
     if (!session) return;
     const warm = () => {
       if (!navigator.onLine) return;
       void loadSchedule().catch(() => {});
-      if (session.is_admin) void api("/api/admin/event-teams").catch(() => {});
+      void api("/api/admin/event-teams").catch(() => {});
     };
     warm();
     navigator.serviceWorker?.ready.then(reg => reg.active?.postMessage({type: "WARM_ROUTES", routes:
-      [...MAIN_NAV.map(n => n.href), "/login", ...(session.is_admin ? ADMIN_GROUPS.flatMap(g => g.items.map(n => n.href)) : [])]}));
+      [...MAIN_NAV.map(n => n.href), "/login", ...ADMIN_GROUPS.filter(g => session.is_admin || g.title !== "Event").flatMap(g => g.items.map(n => n.href))]}));
     let timer: ReturnType<typeof setTimeout>;
     const off = onBus(event => { if (DATA_EVENTS.includes(event)) { clearTimeout(timer); timer = setTimeout(warm, 250); } });
     window.addEventListener("online", warm);
@@ -155,6 +167,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
   if (loading) return <Loading label="Connecting to HazeHub..." />;
   if (!session) return <Loading label="Redirecting..." />;
 
+  if (!session.is_admin && restrictedPage) return <Loading label="Redirecting..." />;
+  const visibleGroups = ADMIN_GROUPS.filter(g => session.is_admin || g.title !== "Event");
+
   const isActive = (href: string) =>
     href === "/admin" ? pathname === "/admin" : pathname.startsWith(href);
   const picklistOnly = session.picklist_only;
@@ -163,9 +178,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   // from the same lists the sidebar uses rather than a second hand-kept copy.
   const sheetGroups = picklistOnly
     ? [{ title: "Picklist Meeting", items: PICKLIST_NAV }]
-    : session.is_admin
-      ? [{ title: "Scouting", items: MAIN_NAV }, ...ADMIN_GROUPS]
-      : [{ title: "Scouting", items: MAIN_NAV }];
+    : [{ title: "Scouting", items: MAIN_NAV }, ...visibleGroups];
   const mobileNav = picklistOnly
     ? PICKLIST_NAV
     : session.is_admin
@@ -184,8 +197,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <span className="ico"><Icon name={n.icon} /></span> {n.label}
           </Link>
         ))}
-        {session.is_admin &&
-          ADMIN_GROUPS.map((group) => (
+        {visibleGroups.map((group) => (
             <div key={group.title}>
               <div className="nav-section">{group.title}</div>
               {group.items.map((n) => (

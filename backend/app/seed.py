@@ -68,6 +68,7 @@ def _migrate_legacy_ids() -> None:
             continue
         moved = Scouter(
             scout_id=canonical,
+            password_hash=old.password_hash,
             s_number=old.s_number,
             display_name=_label(canonical, old.role),
             role=old.role,
@@ -81,6 +82,15 @@ def _migrate_legacy_ids() -> None:
 
 def seed() -> None:
     _migrate_legacy_ids()
+
+    # Remove legacy identities, keeping their historical scouting records.
+    # Roles always come from the roster, including on subsequent boots.
+    for existing in repo.scouters():
+        if existing.scout_id not in settings.ACCOUNTS:
+            store.delete(schema.SCOUTERS, existing.scout_id)
+        else:
+            existing.role = settings.ACCOUNTS[existing.scout_id]
+            repo.save_scouter(existing)
 
     new: list[Scouter] = []
     next_number = repo.next_s_number()

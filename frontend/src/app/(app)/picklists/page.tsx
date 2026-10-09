@@ -116,7 +116,7 @@ export default function PicklistsPage() {
           list={active}
           teams={teams}
           pool={pool}
-          canEdit={active.owner_id === session?.scout_id || !!session?.is_admin}
+          canEdit={active.owner_id === session?.scout_id || !!session}
           onChange={(items) => save(active, items)}
         />
       )}

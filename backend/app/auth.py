@@ -1,28 +1,11 @@
-"""Authentication: sign-in with Scouter ID + shared team password.
-
-The team password is the same for everyone (HazeRain!).  The Scouter ID
-identifies the user and decides what the account can do.  The roster is
-closed: ``settings.ACCOUNTS`` lists every ID that exists, those documents are
-written to Firestore at startup, and an ID that is not on the list is refused
-rather than provisioned.
-
-Tokens are stateless HMAC-signed blobs: no extra dependency required, and no
-datastore round trip to validate one.
-
-Note on Firebase Auth: HazeHub deliberately does **not** use it. Sixty people
-share one team password and sign in as "1".."60" on borrowed Chromebooks;
-Firebase Auth would mean 60 real accounts to provision and reset, and its
-tokens would still have to be mapped onto scouter IDs. Firestore is reached
-only by this service through the Admin SDK, so the security rules deny all
-client access outright (see ``firestore.rules``) and this token is the only
-credential in play.
-"""
+"""Closed-roster authentication with personal password hashes and signed sessions."""
 from __future__ import annotations
 
 import base64
 import hashlib
 import hmac
 import json
+import secrets
 import time
 from datetime import datetime, timezone
 from typing import Optional
@@ -31,7 +14,7 @@ from fastapi import Depends, Header, HTTPException, Request, status
 
 from . import repo, schema
 from .config import settings
-from .models import ADMIN_ROLES, ROLE_ADMIN, ROLE_PICKLIST, ROLE_SCOUTER, ROLE_STRATEGY, Scouter
+from .models import ROLE_ADMIN, ROLE_SCOUTER, Scouter
 
 
 def next_s_number() -> int:
@@ -48,6 +31,7 @@ def create_token(scout_id: str, is_admin: bool) -> str:
     body = {
         "sub": scout_id,
         "admin": is_admin,
+        "auth_version": 2,
         "exp": int(time.time()) + settings.TOKEN_TTL_HOURS * 3600,
     }
     raw = base64.urlsafe_b64encode(json.dumps(body).encode()).decode().rstrip("=")
@@ -69,7 +53,7 @@ def decode_token(token: str) -> Optional[dict]:
         body = json.loads(_b64decode(raw))
     except Exception:  # noqa: BLE001
         return None
-    if body.get("exp", 0) < time.time():
+    if body.get("auth_version") != 2 or body.get("exp", 0) < time.time():
         return None
     return body
 
@@ -88,15 +72,35 @@ def normalize_id(scout_id: str) -> str:
 
 
 def verify_team_password(password: str) -> bool:
-    return hmac.compare_digest(password or "", settings.TEAM_PASSWORD)
+    return hmac.compare_digest((password or "").encode(), settings.TEAM_PASSWORD.encode())
 
 
 def verify_login_password(scout_id: str, password: str) -> bool:
-    """Allow numbered scout accounts to use their number as the password."""
     canonical = canonical_account_id(scout_id)
-    if canonical and canonical.isdigit() and hmac.compare_digest(password or "", canonical):
-        return True
-    return verify_team_password(password)
+    account = repo.scouter(canonical) if canonical else None
+    if not account:
+        return False
+    if account.password_hash:
+        return verify_password(password, account.password_hash)
+    # Preserve the existing admin credential; roster members must enroll.
+    return canonical == "Admin" and verify_team_password(password)
+
+
+def hash_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    digest = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt), n=16384, r=8, p=1).hex()
+    return f"scrypt${salt}${digest}"
+
+
+def verify_password(password: str, encoded: str) -> bool:
+    try:
+        algorithm, salt, expected = encoded.split("$")
+        if algorithm != "scrypt" or len(password) > 128:
+            return False
+        digest = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt), n=16384, r=8, p=1).hex()
+        return hmac.compare_digest(digest, expected)
+    except (ValueError, TypeError):
+        return False
 
 
 def canonical_account_id(scout_id: str) -> Optional[str]:
@@ -123,19 +127,7 @@ def canonical_account_id(scout_id: str) -> Optional[str]:
 def role_for_new_account(scout_id: str) -> str:
     """The role an account on the roster gets."""
     canonical = canonical_account_id(scout_id) or scout_id
-    role = settings.ACCOUNTS.get(canonical, "")
-    if role in (ROLE_ADMIN, ROLE_STRATEGY, ROLE_PICKLIST, ROLE_SCOUTER):
-        return role
-    # Fall back to the older per-role ID lists so a custom deployment that
-    # still sets HAZEHUB_ADMIN_IDS keeps working.
-    key = canonical.lower()
-    if key in settings.ADMIN_IDS:
-        return ROLE_ADMIN
-    if key in settings.STRATEGY_IDS:
-        return ROLE_STRATEGY
-    if key in settings.PICKLIST_IDS:
-        return ROLE_PICKLIST
-    return ROLE_SCOUTER
+    return settings.ACCOUNTS.get(canonical, ROLE_SCOUTER)
 
 
 #: Shown when someone types an ID that is not on the roster. It deliberately
@@ -227,8 +219,11 @@ def current_scouter(
             detail="Not signed in",
         )
     scouter = repo.scouter(body["sub"])
-    if scouter is None:
+    if scouter is None or canonical_account_id(scouter.scout_id) != scouter.scout_id:
         raise HTTPException(status_code=401, detail="Unknown scouter")
+    if scouter.scout_id != "Admin" and not scouter.password_hash:
+        raise HTTPException(status_code=401, detail="Password setup required")
+    scouter.role = settings.ACCOUNTS[scouter.scout_id]
     if scouter.picklist_only and not _picklist_account_may_reach(
         request.url.path, request.method
     ):
@@ -244,16 +239,15 @@ def current_scouter(
 
 
 def require_admin(scouter: Scouter = Depends(current_scouter)) -> Scouter:
-    """Admin and strategy accounts. They have identical permissions; the two
-    names exist so picklist priority can tell them apart."""
-    if scouter.role not in ADMIN_ROLES:
-        raise HTTPException(status_code=403, detail="Admin or strategy only")
+    """Only the designated Admin can use event and system controls."""
+    if scouter.scout_id != "Admin" or scouter.role != ROLE_ADMIN:
+        raise HTTPException(status_code=403, detail="Admin only")
     return scouter
 
 
 def require_full_admin(scouter: Scouter = Depends(current_scouter)) -> Scouter:
     """Admin only. Used for the few actions strategy should not perform,
     such as changing someone else's role."""
-    if scouter.role != ROLE_ADMIN:
+    if scouter.scout_id != "Admin" or scouter.role != ROLE_ADMIN:
         raise HTTPException(status_code=403, detail="Admin only")
     return scouter
