@@ -1,0 +1,32 @@
+name: Sync upstream main
+
+on:
+  schedule:
+    - cron: '3-58/5 * * * *'
+  workflow_dispatch:
+  repository_dispatch:
+    types: [upstream-main-pushed]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream-main
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
+      - name: Configure merge author
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+      - name: Pull upstream and retain sync automation
+        run: python3 scripts/sync_upstream.py --push
