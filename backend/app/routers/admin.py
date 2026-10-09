@@ -21,7 +21,7 @@ from ..analytics import (
     team_summary,
 )
 from ..archive import archive_event, archive_if_worthwhile
-from ..auth import current_scouter, require_admin, require_full_admin
+from ..auth import canonical_account_id, current_scouter, require_admin, require_full_admin
 from ..config import settings
 from ..external import sync_event_matches
 from ..firestore_db import guard
@@ -384,6 +384,37 @@ def scouters(_: Scouter = Depends(require_admin)) -> list[dict]:
 
 class RoleIn(BaseModel):
     role: str
+
+
+class PasswordResetIn(BaseModel):
+    scout_id: str
+
+
+@router.post("/scouters/password-reset")
+def reset_scouter_password(
+    body: PasswordResetIn,
+    _: Scouter = Depends(require_full_admin),
+) -> dict:
+    """Return a roster member to first-use password setup.
+
+    Clearing the hash also invalidates their active requests because
+    ``current_scouter`` refuses member accounts until setup is complete.
+    """
+    canonical = canonical_account_id(body.scout_id)
+    if canonical is None:
+        raise HTTPException(status_code=404, detail="Scouter ID is not on the roster")
+    if canonical == "Admin":
+        raise HTTPException(
+            status_code=400,
+            detail="The Admin password is managed through HAZEHUB_TEAM_PASSWORD",
+        )
+    target = repo.scouter(canonical)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Scouter account was not found")
+    target.password_hash = ""
+    repo.save_scouter(target)
+    emit("password_reset", {"scout_id": target.scout_id})
+    return {"ok": True, "scout_id": target.scout_id}
 
 
 @router.post("/scouters/{scout_id}/role")

@@ -59,3 +59,36 @@ test("members can see other tools but cannot open event control pages", async ({
   await page.goto("/admin");
   await expect(page).toHaveURL(/\/home\/?$/);
 });
+
+test("admin can reset a member password from the Accounts popup", async ({ page }) => {
+  const token = Buffer.from(JSON.stringify({ sub: "Admin", admin: true, auth_version: 2, exp: 9999999999 })).toString("base64url") + ".test";
+  const session = { token, scout_id: "Admin", role: "admin", is_admin: true, picklist_only: false, display_name: "Administrator", bucks: 100 };
+  let submitted: any;
+  await page.addInitScript(session => {
+    localStorage.setItem("hazehub.token", session.token);
+    localStorage.setItem("hazehub.session", JSON.stringify(session));
+  }, session);
+  await page.route("**/api/**", route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/auth/me") return route.fulfill({ json: session });
+    if (path === "/api/admin/settings") return route.fulfill({ json: { current_event: "", current_match: 0, betting_enabled: true, post_comp_mode: false, season: 2026, environment: "firebase" } });
+    if (path === "/api/admin/scouters") return route.fulfill({ json: [{ scout_id: "10217860", display_name: "Scout 10217860", role: "scouter", is_admin: false, bucks: 100, matches_scouted: 0 }] });
+    if (path === "/api/matches") return route.fulfill({ json: { matches: [] } });
+    if (path === "/api/admin/bets" || path === "/api/admin/archives") return route.fulfill({ json: [] });
+    if (path === "/api/admin/event-teams") return route.fulfill({ json: [] });
+    if (path === "/api/admin/scouters/password-reset") {
+      submitted = route.request().postDataJSON();
+      return route.fulfill({ json: { ok: true, scout_id: submitted.scout_id } });
+    }
+    return route.fulfill({ status: 503, json: { detail: "Not needed in this test" } });
+  });
+
+  await page.goto("/admin");
+  await page.getByRole("button", { name: "Reset user password", exact: true }).click();
+  const popup = page.getByRole("dialog");
+  await expect(popup).toContainText("usual create-and-retype-password popup");
+  await popup.getByLabel("User ID", { exact: true }).fill("10217860");
+  await popup.getByRole("button", { name: "Reset password", exact: true }).click();
+  await expect(popup).toHaveCount(0);
+  expect(submitted).toEqual({ scout_id: "10217860" });
+});

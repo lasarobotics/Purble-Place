@@ -6,7 +6,7 @@ import { onBus } from "@/lib/bus";
 import { matchLabel } from "@/lib/format";
 import type { Bet, MatchRec, Role } from "@/lib/types";
 import { ROLE_LABEL } from "@/lib/types";
-import { Loading, Stat, Stepper, TeamIdentity } from "@/components/ui";
+import { Loading, Modal, Stat, Stepper, TeamIdentity } from "@/components/ui";
 
 // environment: "cloud-run" | "firebase" | "emulator" | "local"
 interface AdminSettings {
@@ -57,6 +57,9 @@ export default function AdminDashboard() {
   const [curMatch, setCurMatch] = useState(0);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
+  const [passwordResetOpen, setPasswordResetOpen] = useState(false);
+  const [passwordResetId, setPasswordResetId] = useState("");
+  const [passwordResetError, setPasswordResetError] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -167,6 +170,30 @@ export default function AdminDashboard() {
     load();
   }
 
+  async function resetUserPassword(e: React.FormEvent) {
+    e.preventDefault();
+    const scoutId = passwordResetId.trim();
+    if (!scoutId) {
+      setPasswordResetError("Enter a user ID.");
+      return;
+    }
+    setBusy("password-reset");
+    setPasswordResetError("");
+    try {
+      const result = await api<{ scout_id: string }>("/api/admin/scouters/password-reset", {
+        method: "POST",
+        body: { scout_id: scoutId },
+      });
+      setPasswordResetOpen(false);
+      setPasswordResetId("");
+      toast(`Password reset for ${result.scout_id}. They will create a new password next time they sign in.`, "ok");
+    } catch (e: any) {
+      setPasswordResetError(e.message || "Could not reset password");
+    } finally {
+      setBusy("");
+    }
+  }
+
   if (loading || !s) return <Loading />;
 
   const qm = matches.filter((m) => m.comp_level === "qm");
@@ -250,6 +277,35 @@ export default function AdminDashboard() {
 
       {openArchive && <ArchiveViewer archive={openArchive} onClose={() => setOpenArchive(null)} />}
 
+      {passwordResetOpen && (
+        <Modal onClose={() => { if (busy !== "password-reset") setPasswordResetOpen(false); }}>
+          <form onSubmit={resetUserPassword} role="dialog" aria-modal="true" aria-labelledby="password-reset-title">
+            <h2 id="password-reset-title">Reset user password</h2>
+            <p className="muted">
+              Enter the user ID. Their current password will stop working, and the usual create-and-retype-password popup will appear the next time they sign in.
+            </p>
+            <label className="field">
+              <span>User ID</span>
+              <input
+                autoFocus
+                value={passwordResetId}
+                onChange={(e) => { setPasswordResetId(e.target.value); setPasswordResetError(""); }}
+                autoCapitalize="none"
+                autoComplete="off"
+                required
+              />
+            </label>
+            {passwordResetError && <p role="alert">{passwordResetError}</p>}
+            <div className="row">
+              <button className="btn ghost" type="button" disabled={busy === "password-reset"} onClick={() => setPasswordResetOpen(false)}>Cancel</button>
+              <button className="btn danger" type="submit" disabled={busy === "password-reset"}>
+                {busy === "password-reset" ? "Resetting..." : "Reset password"}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
       <div className="card" style={{ marginTop: 16 }}>
         <div className="card-h"><h3>Match Schedule</h3>
           <div className="row" style={{ gap: 10 }}>
@@ -293,7 +349,15 @@ export default function AdminDashboard() {
       </div>
 
       <div className="card" style={{ marginTop: 16 }}>
-        <div className="card-h"><h3>Accounts</h3><span className="badge muted">{scouters.length}</span></div>
+        <div className="card-h">
+          <h3>Accounts</h3>
+          <div className="row">
+            <span className="badge muted">{scouters.length}</span>
+            <button className="btn sm" onClick={() => { setPasswordResetId(""); setPasswordResetError(""); setPasswordResetOpen(true); }}>
+              Reset user password
+            </button>
+          </div>
+        </div>
         <div className="table-wrap">
           <table className="data">
             <thead><tr><th>Account</th><th>Role</th><th className="num">Matches</th><th className="num">Bucks</th></tr></thead>
