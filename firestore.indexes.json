@@ -75,6 +75,51 @@
       "collectionGroup": "network_status",
       "fieldPath": "packet_loss",
       "indexes": []
+    },
+    {
+      "collectionGroup": "picklist_records",
+      "fieldPath": "items",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "picklist_workspaces",
+      "fieldPath": "boards",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "picklist_workspaces",
+      "fieldPath": "notes",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "picklist_workspaces",
+      "fieldPath": "team_statuses",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "picklist_workspaces",
+      "fieldPath": "undo",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "picklist_workspaces",
+      "fieldPath": "redo",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "picklist_workspaces",
+      "fieldPath": "published",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "picklist_history",
+      "fieldPath": "snapshot",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "picklist_history",
+      "fieldPath": "published",
+      "indexes": []
     }
   ]
 }

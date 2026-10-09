@@ -1,326 +1,110 @@
-"""Picklists.
-
-Every account keeps two lists per event: a first-pick list and a second-pick
-list. Each entry carries the team, its rank (its position in the list) and a
-justification the scout typed for that specific pick.
-
-There is no picklist password. Access is decided by account role instead:
-anyone can build their own lists, and the picklist meeting screen shows all of
-them ranked by whose they are, master first, then strategy and admin, then
-scouters.
-"""
-from __future__ import annotations
-
-from typing import Any, Optional
-
+"""Picklist API. Authentication is reused unchanged; privileges are enforced here."""
+from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-
-from .. import repo
-from ..auth import current_scouter
-from ..models import (
-    PICK_FIRST,
-    PICK_SECOND,
-    PICKLIST_PRIORITY,
-    ROLE_SCOUTER,
-    Picklist,
-    Scouter,
-)
-from ..realtime import emit
+from ..auth import current_scouter, require_admin
+from ..models import Scouter
+from .. import picklist_service as svc
 
 router = APIRouter(prefix="/api/picklists", tags=["picklists"])
 
-MASTER_OWNERS = {"team", "final-418", "final-436"}
-
-
-def _owner_role(owner_id: str) -> str:
-    if owner_id in MASTER_OWNERS:
-        return "master"
-    owner = repo.scouter(owner_id)
-    return owner.role if owner else ROLE_SCOUTER
-
-
-def _dict(p: Picklist, owner_name: str = "") -> dict:
-    role = _owner_role(p.owner_id)
-    return {
-        "id": p.id,
-        "event_key": p.event_key,
-        "owner_id": p.owner_id,
-        "owner_name": owner_name or _owner_name(p.owner_id),
-        "owner_role": role,
-        # Lower sorts first. The meeting screen uses this to decide which
-        # lists get top billing and which are footnotes.
-        "priority": PICKLIST_PRIORITY.get(role, 2),
-        "name": p.name,
-        "is_master": p.is_master,
-        "pick_round": p.pick_round,
-        "items": p.items,
-        "updated_at": p.updated_at.isoformat(),
-    }
-
-
-def _owner_name(owner_id: str) -> str:
-    if owner_id == "team":
-        return "Team Master"
-    if owner_id.startswith("final-"):
-        return f"Final {owner_id.removeprefix('final-')}"
-    s = repo.scouter(owner_id)
-    return (s.display_name or s.scout_id) if s else owner_id
-
-
-def _may_edit(p: Picklist, scouter: Scouter) -> bool:
-    # Master lists are collaborative for anyone who can be in the room.
-    if p.is_master:
-        return True
-    return True
-
-
-def _sorted(rows: list[Picklist]) -> list[Picklist]:
-    return sorted(
-        rows,
-        key=lambda p: (
-            PICKLIST_PRIORITY.get(_owner_role(p.owner_id), 2),
-            p.pick_round,
-            _owner_name(p.owner_id).lower(),
-        ),
-    )
-
-
 class PicklistIn(BaseModel):
-    name: Optional[str] = None
-    event_key: Optional[str] = None
-    pick_round: int = PICK_FIRST
+    event_key: str | None = None
+    name: str | None = None
+    pick_round: int = 1
     items: list[dict[str, Any]] = Field(default_factory=list)
+    version: int | None = None
+    request_id: str = ""
 
+class DraftIn(PicklistIn):
+    id: int
 
-class FinalPicklistIn(BaseModel):
-    source_id: Optional[int] = None
-    name: Optional[str] = None
-    event_key: Optional[str] = None
-    pick_round: int = PICK_FIRST
-    items: list[dict[str, Any]] = Field(default_factory=list)
+class DraftBatchIn(BaseModel):
+    event_key: str
+    drafts: list[DraftIn]
 
+class ActionIn(BaseModel):
+    event_key: str | None = None
+    version: int
+    action: str
+    data: dict[str, Any] = Field(default_factory=dict)
 
-def _ensure(event_key: str, owner_id: str, pick_round: int, *, is_master: bool,
-            owner_label: str) -> Picklist:
-    """Return the owner's list for this pick round, creating it if needed."""
-    existing = repo.find_picklist_round(event_key, owner_id, pick_round, is_master)
-    if existing is not None:
-        return existing
-    created = Picklist(
-        event_key=event_key,
-        owner_id=owner_id,
-        name=Picklist.default_name(pick_round, owner_label),
-        is_master=is_master,
-        pick_round=pick_round,
-    )
-    repo.save_picklist(created)
-    return created
+class CompareIn(BaseModel):
+    event_key: str
+    ids: list[int] = Field(default_factory=list)
+    pick_round: int
+    sort: str = "average"
 
+class DeleteIn(BaseModel):
+    ids: list[str | int] = Field(default_factory=list)
+    event_key: str | None = None
+    confirmation: str = ""
+    all_events: bool = False
+    confirm_all: bool = False
 
 @router.get("/mine")
-def get_mine(
-    event: str | None = None,
-    scouter: Scouter = Depends(current_scouter),
-) -> list[dict]:
-    """The signed-in account's own first-pick and second-pick lists.
+def mine(event: str | None = None, user: Scouter = Depends(current_scouter)):
+    return svc.mine(svc.event_key(event), user)
 
-    Both are created on first read, so the UI never has to deal with a
-    "no list yet" state.
-    """
-    event_key = repo.resolve_event(event)
-    label = scouter.display_name or scouter.scout_id
-    rows = [
-        _ensure(event_key, scouter.scout_id, r, is_master=False, owner_label=label)
-        for r in (PICK_FIRST, PICK_SECOND)
-    ]
-    return [_dict(r, label) for r in rows]
+@router.get("/submissions")
+def submissions(event: str | None = None, search: str = "", pick_round: int = 0, user: Scouter = Depends(current_scouter)):
+    return svc.submissions(svc.event_key(event), user, search, pick_round)
 
-
-@router.get("/master")
-def get_master(
-    event: str | None = None,
-    _: Scouter = Depends(current_scouter),
-) -> list[dict]:
-    """The two shared master lists, created on first read."""
-    event_key = repo.resolve_event(event)
-    rows = [
-        _ensure(event_key, "team", r, is_master=True, owner_label="Master")
-        for r in (PICK_FIRST, PICK_SECOND)
-    ]
-    return [_dict(r) for r in rows]
-
-
-@router.get("/finals")
-def get_finals(
-    event: str | None = None,
-    _: Scouter = Depends(current_scouter),
-) -> list[dict]:
-    """The locked-in final orders for 418 and 436.
-
-    Every screen where somebody builds a picklist shows these at the top: once
-    the alliance order is decided, a scout still tinkering with their own list
-    should be able to see what the team actually settled on without going
-    looking for it. Collaboratively editable by roster members, and
-    absent from the response entirely until a final list has teams in it.
-    """
-    event_key = repo.resolve_event(event)
-    out: list[dict] = []
-    for division in ("418", "436"):
-        for pick_round in (PICK_FIRST, PICK_SECOND):
-            found = repo.find_picklist_round(
-                event_key, f"final-{division}", pick_round, True
-            )
-            if found and found.items:
-                out.append({**_dict(found), "division": division})
-    return out
-
-
-@router.get("/all")
-def get_all(
-    event: str | None = None,
-    _: Scouter = Depends(current_scouter),
-) -> list[dict]:
-    """Every picklist at this event, ordered master, then strategy, then scouter."""
-    event_key = repo.resolve_event(event)
-    return [_dict(r) for r in _sorted(repo.picklists(event_key))]
-
+@router.post("/compare")
+def compare(body: CompareIn, user: Scouter = Depends(require_admin)):
+    return svc.compare(svc.event_key(body.event_key), body.ids, body.pick_round, body.sort)
 
 @router.get("/meeting")
-def get_meeting(
-    event: str | None = None,
-    _: Scouter = Depends(current_scouter),
-) -> dict:
-    """Everything the picklist meeting screen needs, in one request.
+def meeting(event: str | None = None, client: str | None = None, user: Scouter = Depends(current_scouter)):
+    return svc.public_state(svc.event_key(event), client)
 
-    Grouped rather than sorted so the screen does not have to re-derive which
-    lists deserve top billing.
-    """
-    event_key = repo.resolve_event(event)
-    for pick_round in (PICK_FIRST, PICK_SECOND):
-        _ensure(event_key, "team", pick_round, is_master=True, owner_label="Master")
+@router.post("/meeting")
+def meeting_action(body: ActionIn, user: Scouter = Depends(require_admin)):
+    return svc.action(svc.event_key(body.event_key), user, body)
 
-    groups: dict[str, list[dict]] = {"master": [], "strategy": [], "scouter": []}
-    for row in _sorted(repo.picklists(event_key)):
-        data = _dict(row)
-        if data["priority"] == 0:
-            groups["master"].append(data)
-        elif data["priority"] == 1:
-            groups["strategy"].append(data)
-        else:
-            groups["scouter"].append(data)
-    return {"event": event_key, **groups}
+@router.get("/history")
+def history(event: str | None = None, offset: int = 0, user: Scouter = Depends(require_admin)):
+    rows = svc.history(svc.event_key(event))
+    start = max(0, offset)
+    return {"entries": rows[start:start + 50], "total": len(rows)}
 
+@router.get("/finals")
+def finals(event: str | None = None, user: Scouter = Depends(current_scouter)):
+    state = svc.public_state(svc.event_key(event))
+    published = state["published"]
+    return [dict(b, published_at=published["published_at"]) for b in published["boards"]] if published else []
 
-@router.post("/finals/{division}")
-def set_final(
-    division: str,
-    body: FinalPicklistIn,
-    scouter: Scouter = Depends(current_scouter),
-) -> dict:
-    if division not in {"418", "436"}:
-        raise HTTPException(status_code=400, detail="Final picklist must be for 418 or 436")
+@router.get("/master")
+def master(event: str | None = None, user: Scouter = Depends(current_scouter)):
+    return svc.public_state(svc.event_key(event))["boards"]
 
-    event_key = repo.resolve_event(body.event_key)
-    items = body.items
-    if body.source_id is not None:
-        source = repo.picklist(body.source_id)
-        if not source:
-            raise HTTPException(status_code=404, detail="Source picklist not found")
-        if event_key and source.event_key != event_key:
-            raise HTTPException(status_code=400, detail="Source picklist is for a different event")
-        items = source.items
+@router.get("/all")
+def all_lists(event: str | None = None, all_events: bool = False, user: Scouter = Depends(require_admin)):
+    return svc.inventory(None if all_events else svc.event_key(event))
 
-    owner_id = f"final-{division}"
-    final = _ensure(
-        event_key, owner_id, body.pick_round, is_master=True,
-        owner_label=f"Final {division}",
-    )
-    final.name = body.name or final.name
-    final.items = Picklist.normalize_items(items)
-    repo.save_picklist(final)
-    emit("picklist_changed", {"id": final.id, "master": True, "final": division})
-    return _dict(final)
+@router.post("/delete")
+def delete_selected(body: DeleteIn, user: Scouter = Depends(require_admin)):
+    return svc.delete_records(body.ids, None if body.all_events else svc.event_key(body.event_key))
 
-
-@router.delete("/finals/{division}")
-def clear_final(
-    division: str,
-    pick_round: int = PICK_FIRST,
-    event: str | None = None,
-    scouter: Scouter = Depends(current_scouter),
-) -> dict:
-    """Empty a final list so it disappears from the meeting screens again.
-
-    The document itself is kept rather than deleted: ``/finals`` only returns
-    lists that have teams in them, so emptying is what "delete" means here,
-    and keeping the row means the next promotion reuses the same ID instead of
-    leaving orphans behind.
-    """
-    if division not in {"418", "436"}:
-        raise HTTPException(status_code=400, detail="Final picklist must be for 418 or 436")
-
-    event_key = repo.resolve_event(event)
-    found = repo.find_picklist_round(event_key, f"final-{division}", pick_round, True)
-    if not found:
-        raise HTTPException(status_code=404, detail=f"No final {division} list for this pick")
-    found.items = []
-    repo.save_picklist(found)
-    emit("picklist_changed", {"id": found.id, "master": True, "final": division})
-    return {"ok": True, "division": division, "pick_round": pick_round}
-
+@router.post("/reset")
+def reset(body: DeleteIn, user: Scouter = Depends(require_admin)):
+    return svc.reset_records(svc.event_key(body.event_key), body.confirmation, body.all_events, body.confirm_all)
 
 @router.post("")
-def create(
-    body: PicklistIn,
-    scouter: Scouter = Depends(current_scouter),
-) -> dict:
-    event_key = repo.resolve_event(body.event_key)
-    label = scouter.display_name or scouter.scout_id
-    p = Picklist(
-        event_key=event_key,
-        owner_id=scouter.scout_id,
-        name=body.name or Picklist.default_name(body.pick_round, label),
-        is_master=False,
-        pick_round=body.pick_round,
-        items=Picklist.normalize_items(body.items),
-    )
-    repo.save_picklist(p)
-    emit("picklist_changed", {"id": p.id})
-    return _dict(p, label)
-
+def create(body: PicklistIn, user: Scouter = Depends(current_scouter)):
+    return svc.save_draft(svc.event_key(body.event_key), user, body)
 
 @router.put("/{pid}")
-def update(
-    pid: int,
-    body: PicklistIn,
-    scouter: Scouter = Depends(current_scouter),
-) -> dict:
-    p = repo.picklist(pid)
-    if not p:
-        raise HTTPException(status_code=404, detail="Picklist not found")
-    if not _may_edit(p, scouter):
-        raise HTTPException(status_code=403, detail="Not your picklist")
-    if body.name:
-        p.name = body.name
-    p.items = Picklist.normalize_items(body.items)
-    repo.save_picklist(p)
-    emit("picklist_changed", {"id": p.id, "master": p.is_master})
-    return _dict(p)
+def update(pid: int, body: PicklistIn, user: Scouter = Depends(current_scouter)):
+    return svc.save_draft(svc.event_key(body.event_key), user, body, pid)
 
+@router.post("/drafts")
+def save_drafts(body: DraftBatchIn, user: Scouter = Depends(current_scouter)):
+    return svc.save_drafts(svc.event_key(body.event_key), user, body.drafts)
 
-@router.delete("/{pid}")
-def delete(
-    pid: int,
-    scouter: Scouter = Depends(current_scouter),
-) -> dict:
-    p = repo.picklist(pid)
-    if not p:
-        raise HTTPException(status_code=404, detail="Picklist not found")
-    if p.is_master:
-        raise HTTPException(status_code=400, detail="Cannot delete a master list")
-    if not _may_edit(p, scouter):
-        raise HTTPException(status_code=403, detail="Not your picklist")
-    repo.delete_picklist(pid)
-    emit("picklist_changed", {"deleted": pid})
-    return {"ok": True}
+@router.post("/{pid}/submit")
+def submit(pid: int, body: PicklistIn, user: Scouter = Depends(current_scouter)):
+    return svc.submit(svc.event_key(body.event_key), user, pid, body)
+
+# Old collaborative final-write/delete routes intentionally have no handler.
+# Official results are published atomically through the Admin-only meeting API.

@@ -7,6 +7,7 @@
 // things a scout actually opens this page to find out: which match is on,
 // where they stand in the betting, and how the last few matches went.
 import { useEffect, useState, useCallback } from "react";
+import { FinalPicklists } from "@/components/FinalPicklists";
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -66,6 +67,7 @@ export default function HomePage() {
 
   return (
     <div className="landing">
+      <FinalPicklists />
       {/* A header line, not a hero. It answers "what am I doing next" in one
           row and gets out of the way of the data underneath. */}
       <section className="hero">

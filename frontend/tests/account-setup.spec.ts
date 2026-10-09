@@ -49,9 +49,10 @@ test("members can see other tools but cannot open event control pages", async ({
   });
   await page.goto("/account");
   const sidebar = page.locator(".sidebar");
-  for (const path of ["team-search", "team-rank", "compare", "forms", "seasons", "picklists", "data-picklist"]) {
+  for (const path of ["team-search", "team-rank", "compare", "picklists", "data-picklist"]) {
     await expect(sidebar.locator(`a[href="/admin/${path}"]`)).toBeVisible();
   }
+  for (const path of ["forms", "seasons"]) await expect(sidebar.locator(`a[href="/admin/${path}"]`)).toHaveCount(0);
   await expect(sidebar.getByRole("link", { name: "Dashboard", exact: true })).toHaveCount(0);
   await expect(sidebar.getByRole("link", { name: "System Health", exact: true })).toHaveCount(0);
   await page.goto("/admin/system");

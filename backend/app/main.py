@@ -251,6 +251,15 @@ if STATIC_FIELD.exists():
     app.mount("/field", StaticFiles(directory=str(STATIC_FIELD)), name="field")
 
 
+# Preserve authoring implementations, but do not serve these disabled pages.
+@app.api_route("/admin/forms", methods=["GET", "HEAD"], include_in_schema=False)
+@app.api_route("/admin/seasons", methods=["GET", "HEAD"], include_in_schema=False)
+@app.api_route("/admin/forms/", methods=["GET", "HEAD"], include_in_schema=False)
+@app.api_route("/admin/seasons/", methods=["GET", "HEAD"], include_in_schema=False)
+def disabled_authoring_page():
+    raise HTTPException(status_code=404, detail="This tool is temporarily disabled")
+
+
 # --------------------------------------------------------------------------- #
 # The web app                                                                  #
 # --------------------------------------------------------------------------- #

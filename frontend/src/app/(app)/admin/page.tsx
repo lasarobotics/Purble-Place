@@ -1,4 +1,5 @@
 "use client";
+import { DeletePicklists } from "@/components/DeletePicklists";
 import { useEffect, useState, useCallback } from "react";
 import { api } from "@/lib/api";
 import { useToast } from "@/lib/toast";
@@ -200,7 +201,7 @@ export default function AdminDashboard() {
 
   return (
     <div>
-      <div className="page-title"><h1>Admin Dashboard</h1>
+      <div className="page-title"><h1>Admin Dashboard</h1><DeletePicklists />
         <span className={`badge ${s.environment === "cloud-run" || s.environment === "firebase" ? "blue" : "muted"}`}>
           {ENV_LABEL[s.environment] || s.environment} · {s.season}
         </span>

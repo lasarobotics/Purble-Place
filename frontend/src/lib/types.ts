@@ -308,3 +308,26 @@ export interface TeamSummary {
   opp_strength?: number;
   partner_help?: number;
 }
+export interface PicklistRecord extends Picklist {
+  status: "Draft" | "Submitted" | "Final" | "Archived";
+  version: number;
+  source_id?: number;
+  latest?: boolean;
+  created_at: string;
+}
+export interface PicklistMeetingState {
+  event_key: string;
+  version: number;
+  status: "not_started" | "live" | "paused" | "ended";
+  locked: boolean;
+  view: "first" | "second" | "both";
+  selected_team: number | null;
+  boards: Picklist[];
+  notes: Record<string, string>;
+  team_statuses: Record<string, string>;
+  published: { boards: Picklist[]; published_at: string; by: string } | null;
+  updated_at: string;
+  viewers: number;
+  can_undo: boolean;
+  can_redo: boolean;
+}

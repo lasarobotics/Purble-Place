@@ -24,6 +24,7 @@ const MAIN_NAV: NavItem[] = [
   { href: "/scout", label: "Scout", icon: "clipboard" },
   { href: "/pit", label: "Pit Scout", icon: "wrench" },
   { href: "/picklists", label: "Picklists", icon: "list" },
+  { href: "/meeting", label: "Picklist Meeting Mode", icon: "folder" },
   { href: "/status", label: "Devices", icon: "refresh" },
   { href: "/account", label: "Account", icon: "user" },
 ];
@@ -43,13 +44,6 @@ const ADMIN_GROUPS: { title: string; items: NavItem[] }[] = [
     items: [
       { href: "/admin", label: "Dashboard", icon: "sliders" },
       { href: "/admin/system", label: "System Health", icon: "refresh" },
-    ],
-  },
-  {
-    title: "Tools",
-    items: [
-      { href: "/admin/forms", label: "Form Builder", icon: "clipboard" },
-      { href: "/admin/seasons", label: "Seasons", icon: "sliders" },
     ],
   },
   {

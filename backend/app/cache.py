@@ -266,16 +266,24 @@ class LocalBackend:
             self._persist()
 
     def commit(self, ops: list[tuple[str, str, str, Optional[dict]]]) -> None:
+        from copy import deepcopy
         with self._lock:
             self._reread()
-            for kind, collection, doc_id, data in ops:
-                if kind == "delete":
-                    self._data.get(collection, {}).pop(doc_id, None)
-                else:
-                    self._data.setdefault(collection, {})[doc_id] = json.loads(
-                        json.dumps(data, default=str)
-                    )
-            self._persist()
+            previous = self._data
+            self._data = deepcopy(previous)
+            try:
+                for kind, collection, doc_id, data in ops:
+                    if kind == "delete":
+                        self._data.get(collection, {}).pop(doc_id, None)
+                    else:
+                        self._data.setdefault(collection, {})[doc_id] = json.loads(
+                            json.dumps(data, default=str)
+                        )
+                self._persist()
+            except Exception:
+                self._data = previous
+                raise
+
 
 
 def _chunks(

@@ -147,15 +147,22 @@ export function TeamIdentity({
   );
 }
 
-export function Modal({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
+export function Modal({ children, onClose, dialog = false }: { children: React.ReactNode; onClose: () => void; dialog?: boolean }) {
   // Portal to <body>: ancestors with backdrop-filter/transform (e.g. .card)
   // create containing blocks that would trap a position:fixed overlay.
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
+  useEffect(() => {
+    const close = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && document.querySelectorAll(".modal-back").length === 1) onClose();
+    };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [onClose]);
   if (!mounted) return null;
   return createPortal(
     <div className="modal-back" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal" role={dialog ? "dialog" : undefined} aria-modal={dialog ? true : undefined} onClick={(e) => e.stopPropagation()}>
         {children}
       </div>
     </div>,

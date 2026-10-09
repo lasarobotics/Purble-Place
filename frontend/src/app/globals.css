@@ -1331,3 +1331,6 @@ table.data tbody tr:nth-child(even) { background: #262626; } table.data tbody tr
 .trend-tip b { color: #e2caff; font-size: 1rem; }
 .trend-tip small { color: #ac98c4; font-weight: 400; font-size: .65rem; }
 @media (prefers-reduced-motion: reduce) { .trend-dot { transition: none; } }
+
+/* Picklist status filtering preserves the original ranking and item indices. */
+.pick-row[hidden] { display: none; }

@@ -20,12 +20,16 @@ export interface BoardProps {
   pool: number[];
   canEdit: boolean;
   onChange: (items: PicklistItem[]) => void;
+  onSelectTeam?: (team: number) => void;
+  selectedTeam?: number | null;
+  teamStatuses?: Record<string, string>;
+  hideUnavailable?: boolean;
 }
 
 const justificationOf = (it: PicklistItem) =>
   it.justification ?? it.note ?? it.comments ?? "";
 
-export function PicklistBoard({ list, teams, pool, canEdit, onChange }: BoardProps) {
+export function PicklistBoard({ list, teams, pool, canEdit, onChange, onSelectTeam, selectedTeam, teamStatuses = {}, hideUnavailable = false }: BoardProps) {
   const [items, setItems] = useState<PicklistItem[]>(list.items || []);
   const [openTeam, setOpenTeam] = useState<number | null>(null);
   const [search, setSearch] = useState("");
@@ -33,7 +37,7 @@ export function PicklistBoard({ list, teams, pool, canEdit, onChange }: BoardPro
   const dragFrom = useRef<{ zone: "list" | "pool"; index: number } | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
 
-  useEffect(() => { setItems(list.items || []); }, [list.id, list.updated_at]);
+  useEffect(() => { setItems(list.items || []); }, [list.id, list.updated_at, list.items]);
 
   const ranked = new Set(items.map((i) => i.team));
   const available = useMemo(() => {
@@ -48,6 +52,7 @@ export function PicklistBoard({ list, teams, pool, canEdit, onChange }: BoardPro
   }, [pool, ranked, search, teams]);
 
   function commit(next: PicklistItem[]) {
+    if (!canEdit) return;
     setItems(next);
     onChange(next);
   }
@@ -109,6 +114,8 @@ export function PicklistBoard({ list, teams, pool, canEdit, onChange }: BoardPro
             return (
               <li
                 key={it.team}
+                hidden={hideUnavailable && ["Already Selected", "Unavailable", "Do Not Pick"].includes(teamStatuses[it.team])}
+                style={selectedTeam === it.team ? { outline: "2px solid var(--haze)" } : undefined}
                 className={"pick-row" + (dropIndex === i ? " drop-target" : "")}
                 draggable={canEdit}
                 onDragStart={() => { dragFrom.current = { zone: "list", index: i }; }}
@@ -118,8 +125,9 @@ export function PicklistBoard({ list, teams, pool, canEdit, onChange }: BoardPro
               >
                 <span className="rank-chip">{i + 1}</span>
 
-                <button type="button" className="team-click grow" onClick={() => setOpenTeam(it.team)}>
+                <button type="button" className="team-click grow" onClick={() => onSelectTeam ? onSelectTeam(it.team) : setOpenTeam(it.team)}>
                   <TeamIdentity team={team} />
+                  {teamStatuses[it.team] && teamStatuses[it.team] !== "Available" && <span className="badge muted">{teamStatuses[it.team]}</span>}
                 </button>
 
                 {canEdit && (
@@ -176,6 +184,7 @@ export function PicklistBoard({ list, teams, pool, canEdit, onChange }: BoardPro
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search number or name"
+          onKeyDown={e => { if (e.key === "Enter" && available.length && canEdit) { e.preventDefault(); addTeam(available[0]); } }}
           inputMode="search"
         />
         <div
@@ -200,6 +209,7 @@ export function PicklistBoard({ list, teams, pool, canEdit, onChange }: BoardPro
               >
                 <button type="button" className="team-click grow" onClick={() => setOpenTeam(t)}>
                   <TeamIdentity team={team} />
+                  {teamStatuses[t] && teamStatuses[t] !== "Available" && <span className="badge muted">{teamStatuses[t]}</span>}
                 </button>
                 {canEdit && (
                   <button className="btn sm primary" onClick={() => addTeam(t)}>Add</button>

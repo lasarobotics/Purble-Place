@@ -60,6 +60,9 @@ EVENTS = "events"
 MATCHES = "matches"
 MATCH_SCOUTING = "match_scouting"
 PICKLISTS = "picklists"
+PICKLIST_RECORDS = "picklist_records"
+PICKLIST_WORKSPACES = "picklist_workspaces"
+PICKLIST_HISTORY = "picklist_history"
 BETS = "bets"
 PIT_SCOUTING = "pit_scouting"
 TEAM_CACHE = "team_cache"
@@ -86,7 +89,7 @@ ALL_COLLECTIONS = (
     EVENTS,
     MATCHES,
     MATCH_SCOUTING,
-    PICKLISTS,
+    PICKLISTS, PICKLIST_RECORDS, PICKLIST_WORKSPACES, PICKLIST_HISTORY,
     BETS,
     PIT_SCOUTING,
     TEAM_CACHE,
@@ -117,7 +120,7 @@ GLOBAL_CACHED = (
 EVENT_SCOPED_CACHED = (MATCHES, MATCH_SCOUTING, PICKLISTS, BETS, PIT_SCOUTING)
 
 #: Written but never listened to: nothing in the UI reads them hot.
-WRITE_ONLY = (SYNC_OUTBOX, NETWORK_STATUS, FORM_REVISIONS, SEASON_REVISIONS, EVENT_ARCHIVE_CHUNKS)
+WRITE_ONLY = (PICKLIST_RECORDS, PICKLIST_WORKSPACES, PICKLIST_HISTORY, SYNC_OUTBOX, NETWORK_STATUS, FORM_REVISIONS, SEASON_REVISIONS, EVENT_ARCHIVE_CHUNKS)
 
 
 # --------------------------------------------------------------------------- #
@@ -205,6 +208,9 @@ INDEX_EXEMPT_FIELDS: dict[str, tuple[str, ...]] = {
     MATCH_SCOUTING: ("data", "comments", "payload_hash"),
     MATCHES: ("film_events", "film_summary", "youtube_key"),
     PICKLISTS: ("items",),
+    "picklist_records": ("items",),
+    "picklist_workspaces": ("boards", "notes", "team_statuses", "undo", "redo", "published"),
+    "picklist_history": ("snapshot", "published"),
     TEAM_CACHE: ("avatar", "photos", "record"),
     PIT_SCOUTING: ("robot_photo", "capabilities", "notes"),
     EVENT_ARCHIVE_CHUNKS: ("data",),

@@ -51,7 +51,7 @@ function emptyDefinition(name: string): FormDefinition {
   };
 }
 
-export default function FormsPage() {
+function PreservedFormsPage() {
   const toast = useToast();
   const [forms, setForms] = useState<FormSummary[]>([]);
   const [meta, setMeta] = useState<BuilderMeta | null>(null);
@@ -439,3 +439,6 @@ function NewFormDialog({
     </Modal>
   );
 }
+
+// Temporarily disabled for all roles; the implementation and API remain intact.
+export default function DisabledTool() { return <section className="card"><h1>Tool unavailable</h1><p>This tool is temporarily disabled.</p></section>; }

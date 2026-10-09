@@ -34,7 +34,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
-from typing import Any, Optional
+from typing import Any, Optional, ClassVar
 
 from . import schema
 
@@ -1492,12 +1492,44 @@ class FormRevision:
         )
 
 
+@dataclass
+class PicklistDocument:
+    """Raw versioned documents; picklist_service owns their bounded read cache."""
+    id: str
+    data: dict[str, Any] = field(default_factory=dict)
+    COLLECTION: ClassVar[str] = schema.PICKLIST_RECORDS
+
+    @property
+    def doc_id(self) -> str:
+        return self.id
+
+    def to_doc(self) -> dict[str, Any]:
+        from copy import deepcopy
+        return deepcopy(self.data)
+
+    @classmethod
+    def from_doc(cls, doc_id: str, d: dict[str, Any]):
+        from copy import deepcopy
+        return cls(id=doc_id, data=deepcopy(d))
+
+
+class PicklistWorkspaceDocument(PicklistDocument):
+    COLLECTION = schema.PICKLIST_WORKSPACES
+
+
+class PicklistHistoryDocument(PicklistDocument):
+    COLLECTION = schema.PICKLIST_HISTORY
+
+
 MODEL_FOR_COLLECTION = {
     schema.SCOUTERS: Scouter,
     schema.EVENTS: Event,
     schema.MATCHES: MatchRecord,
     schema.MATCH_SCOUTING: ScoutEntry,
     schema.PICKLISTS: Picklist,
+    schema.PICKLIST_RECORDS: PicklistDocument,
+    schema.PICKLIST_WORKSPACES: PicklistWorkspaceDocument,
+    schema.PICKLIST_HISTORY: PicklistHistoryDocument,
     schema.BETS: Bet,
     schema.PIT_SCOUTING: PitEntry,
     schema.TEAM_CACHE: TeamCache,

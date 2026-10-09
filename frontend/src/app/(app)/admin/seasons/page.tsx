@@ -43,7 +43,7 @@ const STATUS_LABEL: Record<SeasonStatus, string> = {
   archived: "Archived",
 };
 
-export default function SeasonsPage() {
+function PreservedSeasonsPage() {
   const toast = useToast();
   const [seasons, setSeasons] = useState<SeasonSummary[]>([]);
   const [current, setCurrent] = useState("");
@@ -832,3 +832,6 @@ function NewSeasonDialog({
     </Modal>
   );
 }
+
+// Temporarily disabled for all roles; the implementation and API remain intact.
+export default function DisabledTool() { return <section className="card"><h1>Tool unavailable</h1><p>This tool is temporarily disabled.</p></section>; }
