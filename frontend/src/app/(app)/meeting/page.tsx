@@ -89,7 +89,7 @@ export default function MeetingPage() {
   const master = data.master.find((l) => l.pick_round === round);
   const strategy = data.strategy.filter((l) => l.pick_round === round);
   const scouters = data.scouter.filter((l) => l.pick_round === round);
-  const canEditMaster = !!session && (session.is_admin || session.picklist_only);
+  const canEditMaster = !!session;
 
   return (
     <div className="meeting">

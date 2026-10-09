@@ -38,7 +38,7 @@ export function FinalPicklists({ teams = {} }: { teams?: Record<number, Team> })
   const [editing, setEditing] = useState<FinalList | null>(null);
   const [clearing, setClearing] = useState<FinalList | null>(null);
 
-  const canManage = !!session?.is_admin;
+  const canManage = !!session;
 
   const load = useCallback(async () => {
     try {

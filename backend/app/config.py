@@ -15,6 +15,7 @@ Datastore selection (see ``cache.Store.start``):
 from __future__ import annotations
 
 import os
+import json
 from functools import lru_cache
 from pathlib import Path
 
@@ -61,46 +62,6 @@ def _firebase_project() -> str:
     return ""
 
 
-def _ids(env_var: str, default: str) -> list[str]:
-    """Parse a comma-separated list of scouter IDs, lowercased for matching."""
-    raw = os.getenv(env_var, "").strip() or default
-    return [part.strip().lower() for part in raw.split(",") if part.strip()]
-
-
-#: The complete roster. HazeHub is a closed system: these are the only IDs
-#: that can sign in, and typing anything else is an error rather than a new
-#: account. Sign-up used to be implicit -- whoever typed an ID got one -- which
-#: meant a typo silently created a parallel account whose scouting nobody ever
-#: looked at again.
-#:
-#: The mapping is ``canonical ID -> role``. Matching is case-insensitive and
-#: the canonical spelling here is what gets written to Firestore.
-DEFAULT_ACCOUNTS = "Admin:admin,Strategy:strategy,PicklistMeeting:picklist,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,Demo"
-
-#: IDs from earlier builds that should land on one of the accounts above
-#: rather than being rejected, so an existing device does not get locked out.
-LEGACY_ACCOUNT_ALIASES = {"picklist": "PicklistMeeting", "picklistmeeting": "PicklistMeeting"}
-
-
-def _accounts(env_var: str, default: str) -> dict[str, str]:
-    """Parse ``Id:role,Id:role`` into an ordered ``{canonical_id: role}`` map.
-
-    A bare entry (no colon) is a scouter, which keeps the numbered scouting
-    accounts short to write.
-    """
-    raw = os.getenv(env_var, "").strip() or default
-    out: dict[str, str] = {}
-    for part in raw.split(","):
-        part = part.strip()
-        if not part:
-            continue
-        scout_id, _, role = part.partition(":")
-        scout_id = scout_id.strip()
-        if scout_id:
-            out[scout_id] = (role.strip().lower() or "scouter")
-    return out
-
-
 def _environment() -> str:
     if os.getenv("FIRESTORE_EMULATOR_HOST", "").strip():
         return "emulator"
@@ -128,21 +89,17 @@ class Settings:
 
     # Auth
     TEAM_PASSWORD: str = os.getenv("HAZEHUB_TEAM_PASSWORD", "HazeRain!")
-    ADMIN_ID: str = os.getenv("HAZEHUB_ADMIN_ID", "admin")
     SECRET_KEY: str = os.getenv("HAZEHUB_SECRET", "purple-haze-dev-secret-change-me")
     TOKEN_TTL_HOURS: int = 24 * 14
 
-    # Which scouter IDs get which role the first time they sign in. After
-    # that, an admin can change anyone's role from the Admin dashboard, and
-    # that choice wins. Everyone not listed here is a plain scouter.
-    ADMIN_IDS: list[str] = _ids("HAZEHUB_ADMIN_IDS", os.getenv("HAZEHUB_ADMIN_ID", "admin"))
-    STRATEGY_IDS: list[str] = _ids("HAZEHUB_STRATEGY_IDS", "strategy")
-    PICKLIST_IDS: list[str] = _ids("HAZEHUB_PICKLIST_IDS", "picklist")
-
-    # The closed account roster. Set HAZEHUB_ACCOUNTS to change it, e.g.
-    # "Admin:admin,Strategy:strategy,PicklistMeeting:picklist,1,2,3,Demo".
-    ACCOUNTS: dict[str, str] = _accounts("HAZEHUB_ACCOUNTS", DEFAULT_ACCOUNTS)
-    ACCOUNT_ALIASES: dict[str, str] = LEGACY_ACCOUNT_ALIASES
+    # Spreadsheet roster is authoritative; legacy environment overrides cannot
+    # restore deleted accounts or introduce additional administrators.
+    ACCOUNTS: dict[str, str] = {"Admin": "admin", **{
+        scout_id: "scouter" for scout_id in json.loads(
+            (APP_DIR / "account_roster.json").read_text(encoding="utf-8")
+        )
+    }}
+    ACCOUNT_ALIASES: dict[str, str] = {}
 
     # Economy
     STARTING_BUCKS: int = 100

@@ -4,7 +4,7 @@ import { test, expect, BrowserContext } from "@playwright/test";
 async function fixture(context: BrowserContext, options: { admin?: boolean; scoutId?: string } = {}) {
   const admin = options.admin ?? true;
   const scoutId = options.scoutId ?? "test-scout";
-  const token = Buffer.from(JSON.stringify({ sub: scoutId, admin, exp: 9999999999 })).toString("base64url") + ".test";
+  const token = Buffer.from(JSON.stringify({ sub: scoutId, admin, auth_version: 2, exp: 9999999999 })).toString("base64url") + ".test";
   const session = { token, scout_id: scoutId, is_admin: admin, role: admin ? "admin" : "scouter", picklist_only: false, display_name: "Test Scout", bucks: 100 };
   let synced = false;
   let bundleReads = 0;

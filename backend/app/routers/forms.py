@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from .. import form_store, repo
-from ..auth import current_scouter, require_admin
+from ..auth import current_scouter
 from ..forms import (
     CORE_FIELDS,
     FormInvalid,
@@ -142,7 +142,7 @@ def get_form(form_id: str, _: Scouter = Depends(current_scouter)) -> dict:
 def get_history(
     form_id: str,
     limit: int = 100,
-    _: Scouter = Depends(require_admin),
+    _: Scouter = Depends(current_scouter),
 ) -> list[dict]:
     try:
         return form_store.history(form_id, limit)
@@ -154,7 +154,7 @@ def get_history(
 def get_revision(
     form_id: str,
     version: int,
-    _: Scouter = Depends(require_admin),
+    _: Scouter = Depends(current_scouter),
 ) -> dict:
     try:
         row = form_store.revision(form_id, version)
@@ -180,7 +180,7 @@ def get_diff(
     form_id: str,
     from_version: int = 0,
     to_version: int = 0,
-    _: Scouter = Depends(require_admin),
+    _: Scouter = Depends(current_scouter),
 ) -> dict:
     """What changed between two versions, field by field."""
     try:
@@ -225,7 +225,7 @@ class RevertIn(BaseModel):
 @router.post("/validate")
 def validate(
     body: DefinitionIn,
-    _: Scouter = Depends(require_admin),
+    _: Scouter = Depends(current_scouter),
 ) -> dict:
     """Check a definition without saving it.
 
@@ -239,7 +239,7 @@ def validate(
 
 
 @router.post("")
-def create(body: CreateFormIn, scouter: Scouter = Depends(require_admin)) -> dict:
+def create(body: CreateFormIn, scouter: Scouter = Depends(current_scouter)) -> dict:
     try:
         row = form_store.create_form(
             body.form_id, body.kind, body.definition, scouter, body.message,
@@ -257,7 +257,7 @@ def create(body: CreateFormIn, scouter: Scouter = Depends(require_admin)) -> dic
 def save(
     form_id: str,
     body: DefinitionIn,
-    scouter: Scouter = Depends(require_admin),
+    scouter: Scouter = Depends(current_scouter),
 ) -> dict:
     try:
         row = form_store.save_revision(
@@ -288,7 +288,7 @@ def save(
 def publish(
     form_id: str,
     body: PublishIn,
-    scouter: Scouter = Depends(require_admin),
+    scouter: Scouter = Depends(current_scouter),
 ) -> dict:
     try:
         form = form_store.publish(form_id, body.version, scouter)
@@ -302,7 +302,7 @@ def publish(
 def revert(
     form_id: str,
     body: RevertIn,
-    scouter: Scouter = Depends(require_admin),
+    scouter: Scouter = Depends(current_scouter),
 ) -> dict:
     """Go back to an older version, by writing a new one that copies it."""
     try:
@@ -321,7 +321,7 @@ def revert(
 
 
 @router.delete("/{form_id}")
-def archive(form_id: str, scouter: Scouter = Depends(require_admin)) -> dict:
+def archive(form_id: str, scouter: Scouter = Depends(current_scouter)) -> dict:
     """Archive a form. Its history is kept and it can be restored."""
     try:
         form = form_store.set_archived(form_id, True, scouter)
@@ -334,7 +334,7 @@ def archive(form_id: str, scouter: Scouter = Depends(require_admin)) -> dict:
 
 
 @router.post("/{form_id}/restore")
-def restore(form_id: str, scouter: Scouter = Depends(require_admin)) -> dict:
+def restore(form_id: str, scouter: Scouter = Depends(current_scouter)) -> dict:
     try:
         form = form_store.set_archived(form_id, False, scouter)
     except form_store.FormNotFound as exc:

@@ -44,7 +44,14 @@ const TOKEN_KEY = "hazehub.token";
 
 export function getToken(): string {
   if (typeof window === "undefined") return "";
-  return window.localStorage.getItem(TOKEN_KEY) || "";
+  const token = window.localStorage.getItem(TOKEN_KEY) || "";
+  try {
+    const body = JSON.parse(atob(token.split(".")[0].replace(/-/g, "+").replace(/_/g, "/")));
+    if (body.auth_version === 2 && body.exp > Date.now() / 1000) return token;
+  } catch {}
+  window.localStorage.removeItem(TOKEN_KEY);
+  window.localStorage.removeItem("hazehub.session");
+  return "";
 }
 export function setToken(t: string) {
   if (typeof window !== "undefined") window.localStorage.setItem(TOKEN_KEY, t);

@@ -23,7 +23,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from .. import repo
-from ..auth import require_admin
+from ..auth import current_scouter, require_admin
 from ..config import settings
 from ..external import cache_stats as external_cache_stats
 from ..firestore_db import guard
@@ -260,7 +260,7 @@ class DeviceIn(BaseModel):
 @router.post("/device-checkin")
 def device_checkin(
     body: DeviceIn,
-    scouter: Scouter = Depends(require_admin),
+    scouter: Scouter = Depends(current_scouter),
 ) -> dict:
     """Record a device heartbeat (battery, VLAN port, queue depth).
 
@@ -290,7 +290,7 @@ class OutboxFailureIn(BaseModel):
 @router.post("/outbox-failure")
 def report_outbox_failure(
     body: OutboxFailureIn,
-    _: Scouter = Depends(require_admin),
+    _: Scouter = Depends(current_scouter),
 ) -> dict:
     """Record a submission a device gave up on, so it can be chased later.
 

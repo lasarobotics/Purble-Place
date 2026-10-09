@@ -159,7 +159,7 @@ def test_scouter_maps_last_seen_to_last_login() -> None:
     "role,is_admin,picklist_only",
     [
         (ROLE_SCOUTER, False, False),
-        (ROLE_STRATEGY, True, False),
+        (ROLE_STRATEGY, False, False),
         (ROLE_ADMIN, True, False),
         (ROLE_PICKLIST, False, True),
     ],

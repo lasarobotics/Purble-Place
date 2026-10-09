@@ -3,12 +3,15 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from threading import Lock
 
 from ..auth import (
     create_token,
     current_scouter,
     get_account,
     verify_login_password,
+    canonical_account_id,
+    hash_password,
 )
 from .. import repo
 from ..config import settings
@@ -16,6 +19,7 @@ from .. import seasons
 from ..models import Scouter
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+_setup_lock = Lock()
 
 
 class LoginIn(BaseModel):
@@ -45,13 +49,54 @@ def _scouter_out(s: Scouter, token: str) -> LoginOut:
     )
 
 
+class AccountIn(BaseModel):
+    scout_id: str
+
+
+class SetupIn(AccountIn):
+    password: str
+    password_confirmation: str
+
+
+def _roster_account(scout_id: str) -> Scouter:
+    canonical = canonical_account_id(scout_id)
+    account = repo.scouter(canonical) if canonical else None
+    if account is None:
+        raise HTTPException(status_code=403, detail="This ID is not on the account roster. Ask an admin for help.")
+    return account
+
+
+@router.post("/account-status")
+def account_status(body: AccountIn) -> dict:
+    account = _roster_account(body.scout_id)
+    return {"needs_setup": account.scout_id != "Admin" and not account.password_hash}
+
+
+@router.post("/setup", response_model=LoginOut)
+def setup(body: SetupIn) -> LoginOut:
+    if not 8 <= len(body.password) <= 128:
+        raise HTTPException(status_code=400, detail="Use a password between 8 and 128 characters.")
+    if body.password != body.password_confirmation:
+        raise HTTPException(status_code=400, detail="Passwords do not match.")
+    # The service uses one authoritative process. Serialize first-time claims
+    # so two requests cannot replace each other's initial password.
+    with _setup_lock:
+        account = _roster_account(body.scout_id)
+        if account.scout_id == "Admin" or account.password_hash:
+            raise HTTPException(status_code=409, detail="This account is already set up. Sign in instead.")
+        account.password_hash = hash_password(body.password)
+        account.role = settings.ACCOUNTS[account.scout_id]
+        repo.save_scouter(account)
+    return _scouter_out(account, create_token(account.scout_id, account.is_admin))
+
+
 @router.post("/login", response_model=LoginOut)
 def login(body: LoginIn) -> LoginOut:
     scout_id = body.scout_id.strip()
     if not scout_id:
         raise HTTPException(status_code=400, detail="Scouter ID required")
     if not verify_login_password(scout_id, body.team_password):
-        raise HTTPException(status_code=401, detail="Incorrect team password")
+        raise HTTPException(status_code=401, detail="Incorrect ID or password")
     # Refuses anything that is not on the team's roster (403).
     scouter = get_account(scout_id)
     token = create_token(scouter.scout_id, scouter.is_admin)
