@@ -6,9 +6,13 @@ Destination: this repository's `main` branch.
 Commit and push these files to this repository's default `main` branch to activate
 the workflow. GitHub Actions must be enabled and allowed to write repository
 contents. **Actions → Sync upstream main → Run workflow** runs it immediately.
-The schedule checks every five minutes; GitHub can delay scheduled runs. It syncs
-the latest upstream tip, including intervening commits, rather than guaranteeing
-one workflow run for every individual upstream push.
+GitHub starts a scheduled run every five minutes (its minimum scheduling interval).
+Each run checks five times, roughly one minute apart, while keeping its runner
+active. This uses about four runner minutes per scheduled run even when no code
+changes. GitHub can delay scheduled runs, so there can still be gaps between runs;
+this is not a guaranteed 60-second service. It syncs the latest upstream tip,
+including intervening commits, rather than guaranteeing one workflow run for
+every individual upstream push.
 
 The script merges upstream history and favors upstream at conflicting code paths,
 including upstream deletion of a locally modified file. Nonconflicting private

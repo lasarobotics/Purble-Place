@@ -28,5 +28,16 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-      - name: Pull upstream and retain sync automation
-        run: python3 scripts/sync_upstream.py --push
+      - name: Check upstream every minute
+        shell: python
+        run: |
+          import subprocess
+          import time
+
+          # GitHub schedules have a five-minute minimum. Check at roughly
+          # 0, 60, 120, 180 and 240 seconds within each scheduled run.
+          for attempt in range(5):
+              started = time.monotonic()
+              subprocess.run(["python3", "scripts/sync_upstream.py", "--push"], check=True)
+              if attempt < 4:
+                  time.sleep(max(0, 60 - (time.monotonic() - started)))
