@@ -106,6 +106,53 @@ def test_admin_cannot_create_second_admin(client):
     assert client.post("/api/admin/scouters/10217860/role", headers=headers, json={"role": "admin"}).status_code == 400
 
 
+def test_admin_reset_returns_member_to_first_use_setup(client, accounts):
+    enroll(client)
+    admin = client.post("/api/auth/login", json={"scout_id": "admin", "team_password": settings.TEAM_PASSWORD})
+    headers = {"Authorization": "Bearer " + admin.json()["token"]}
+
+    reset = client.post(
+        "/api/admin/scouters/password-reset",
+        headers=headers,
+        json={"scout_id": "10217860"},
+    )
+    assert reset.status_code == 200
+    assert accounts["10217860"].password_hash == ""
+    assert client.post("/api/auth/login", json={"scout_id": "10217860", "team_password": "Unique-for-Haze-123"}).status_code == 401
+    assert client.post("/api/auth/account-status", json={"scout_id": "10217860"}).json() == {"needs_setup": True}
+
+    replacement = client.post("/api/auth/setup", json={
+        "scout_id": "10217860",
+        "password": "Replacement-password-456",
+        "password_confirmation": "Replacement-password-456",
+    })
+    assert replacement.status_code == 200
+    assert accounts["10217860"].password_hash.startswith("scrypt$")
+
+
+def test_password_reset_is_admin_only_and_cannot_reset_admin(client):
+    member_token = enroll(client).json()["token"]
+    member_headers = {"Authorization": "Bearer " + member_token}
+    assert client.post(
+        "/api/admin/scouters/password-reset",
+        headers=member_headers,
+        json={"scout_id": "10217860"},
+    ).status_code == 403
+
+    admin = client.post("/api/auth/login", json={"scout_id": "admin", "team_password": settings.TEAM_PASSWORD})
+    admin_headers = {"Authorization": "Bearer " + admin.json()["token"]}
+    assert client.post(
+        "/api/admin/scouters/password-reset",
+        headers=admin_headers,
+        json={"scout_id": "Admin"},
+    ).status_code == 400
+    assert client.post(
+        "/api/admin/scouters/password-reset",
+        headers=admin_headers,
+        json={"scout_id": "not-on-roster"},
+    ).status_code == 404
+
+
 def test_old_tokens_are_revoked():
     raw = base64.urlsafe_b64encode(json.dumps({"sub": "Admin", "exp": time.time() + 600}).encode()).decode().rstrip("=")
     assert auth.decode_token(raw + "." + auth._sign(raw.encode())) is None
