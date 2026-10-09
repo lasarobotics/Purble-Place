@@ -47,7 +47,7 @@ class SyncTests(unittest.TestCase):
         os.chdir(self.previous)
         self.temp.cleanup()
 
-    def test_merge_conflicts_deletions_and_preserve_automation(self):
+    def test_exact_mirror_deletions_and_preserve_automation(self):
         self.write(self.checkout, "app.txt", "private edit\n")
         self.write(self.checkout, "removed.txt", "private edit\n")
         self.write(self.checkout, "private-only.txt", "keep this\n")
@@ -63,7 +63,7 @@ class SyncTests(unittest.TestCase):
         self.assertTrue(subject.sync(str(self.upstream), push=True))
         self.assertEqual((self.checkout / "app.txt").read_text(), "new upstream\n")
         self.assertFalse((self.checkout / "removed.txt").exists())
-        self.assertTrue((self.checkout / "private-only.txt").exists())
+        self.assertFalse((self.checkout / "private-only.txt").exists())
         for name in subject.PRESERVE:
             self.assertEqual((self.checkout / name).read_text(), "private automation\n")
         self.assertEqual(self.command(self.checkout, "status", "--porcelain"), "")
@@ -72,6 +72,16 @@ class SyncTests(unittest.TestCase):
         head = self.command(self.checkout, "rev-parse", "HEAD")
         self.assertFalse(subject.sync(str(self.upstream), push=True))
         self.assertEqual(head, self.command(self.checkout, "rev-parse", "HEAD"))
+
+    def test_private_changes_removed_even_when_upstream_is_ancestor(self):
+        self.write(self.checkout, "app.txt", "private edit\n")
+        self.write(self.checkout, "private-only.txt", "remove this\n")
+        self.commit(self.checkout, "private divergence")
+        self.command(self.checkout, "push", "origin", "main")
+        self.assertTrue(subject.sync(str(self.upstream), push=True))
+        self.assertEqual((self.checkout / "app.txt").read_text(), "initial\n")
+        self.assertFalse((self.checkout / "private-only.txt").exists())
+        self.assertEqual(self.command(self.checkout, "diff", "--name-only", "HEAD", self.command(self.upstream, "rev-parse", "HEAD")), "")
 
     def test_dirty_checkout_refused(self):
         self.write(self.checkout, "app.txt", "unsaved work\n")

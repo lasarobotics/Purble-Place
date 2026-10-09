@@ -1,6 +1,11 @@
 name: Sync upstream main
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/sync-upstream.yml
+      - scripts/sync_upstream.py
   schedule:
     - cron: '3-58/5 * * * *'
   workflow_dispatch:
@@ -17,7 +22,7 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -34,10 +39,11 @@ jobs:
           import subprocess
           import time
 
-          # GitHub schedules have a five-minute minimum. Check at roughly
-          # 0, 60, 120, 180 and 240 seconds within each scheduled run.
-          for attempt in range(5):
+          # Keep polling through scheduler delays. Scheduled starts queue one
+          # replacement run behind this one via the concurrency group.
+          for attempt in range(55):
               started = time.monotonic()
+              print(f"Upstream check {attempt + 1}/55", flush=True)
               subprocess.run(["python3", "scripts/sync_upstream.py", "--push"], check=True)
-              if attempt < 4:
+              if attempt < 54:
                   time.sleep(max(0, 60 - (time.monotonic() - started)))

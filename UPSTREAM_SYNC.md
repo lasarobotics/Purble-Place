@@ -6,20 +6,23 @@ Destination: this repository's `main` branch.
 Commit and push these files to this repository's default `main` branch to activate
 the workflow. GitHub Actions must be enabled and allowed to write repository
 contents. **Actions → Sync upstream main → Run workflow** runs it immediately.
-GitHub starts a scheduled run every five minutes (its minimum scheduling interval).
-Each run checks five times, roughly one minute apart, while keeping its runner
-active. This uses about four runner minutes per scheduled run even when no code
-changes. GitHub can delay scheduled runs, so there can still be gaps between runs;
-this is not a guaranteed 60-second service. It syncs the latest upstream tip,
-including intervening commits, rather than guaranteeing one workflow run for
-every individual upstream push.
+The workflow starts on changes to the automation, a manual dispatch, and a
+five-minute schedule. Each run stays active for 55 checks at roughly 60-second
+intervals. Concurrency allows one active run and one pending replacement, so a
+scheduled replacement can start when the current run ends. GitHub outages, queues,
+billing limits, and long Git operations can still interrupt that cadence. This
+keeps a hosted Actions runner active most of the day (roughly 1,440 runner minutes
+per day), including when upstream has no changes.
 
-The script merges upstream history and favors upstream at conflicting code paths,
-including upstream deletion of a locally modified file. Nonconflicting private
-changes remain. It is a merge, not an exact mirror. The workflow, script, its tests,
-and this document always retain their private-repository versions, even if upstream
-changes or deletes them. It never force-pushes. A concurrent destination push is
-rejected and retried on the next scheduled run. Failures appear in Actions.
+**Private main's tracked app files exactly match upstream main.** Private-only
+application files and private edits are removed. Only the four paths in the
+script's `PRESERVE` list remain private: this workflow, the sync script, its tests,
+and this document. History is retained through normal commits; pushes never use
+force. Even an already-merged upstream commit repairs a divergent private tree.
+A separate temporary Git index constructs the tree without executing upstream
+code. Concurrent pushes are rejected and retried by the next fresh workflow run.
+Failures appear in Actions; a run must actually be visible there to confirm it
+is operating. Scheduled configuration alone is not evidence of a successful sync.
 
 The default token is sufficient for ordinary contents writes. If upstream changes
 other `.github/workflows` files, configure repository secret `UPSTREAM_SYNC_TOKEN`
@@ -42,8 +45,8 @@ adding these local files.
 From a clean clone on `main`, with Python 3 and Git installed:
 
 ```powershell
-python scripts/sync_upstream.py         # merge locally
-python scripts/sync_upstream.py --push  # merge and push to origin/main
+python scripts/sync_upstream.py         # mirror locally
+python scripts/sync_upstream.py --push  # mirror and push to origin/main
 python scripts/test_sync_upstream.py   # isolated local Git tests, no GitHub writes
 ```
 

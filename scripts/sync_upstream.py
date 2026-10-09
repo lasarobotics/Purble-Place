@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""Merge upstream main into a clean main checkout; never force-push."""
+"""Mirror upstream main plus private sync files, preserving Git history."""
 import argparse
+import os
+import tempfile
 from pathlib import Path
 import subprocess
 import sys
@@ -14,9 +16,9 @@ PRESERVE = (
 )
 
 
-def git(*args, check=True):
+def git(*args, check=True, env=None):
     result = subprocess.run(["git", *args], stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE)
+                            stderr=subprocess.PIPE, env=env)
     if check and result.returncode:
         raise RuntimeError(result.stderr.decode(errors="replace").strip())
     return result
@@ -30,53 +32,47 @@ def sync(upstream=UPSTREAM, push=False):
     if git("rev-parse", "--verify", "MERGE_HEAD", check=False).returncode == 0:
         raise RuntimeError("Finish the existing merge first.")
 
-    # Private files are saved before touching upstream, including this script.
-    saved = {name: git("show", f"HEAD:{name}").stdout for name in PRESERVE}
     git("fetch", "--no-tags", "origin", "main")
     origin_tip = git("rev-parse", "FETCH_HEAD").stdout.strip()
     git("merge", "--ff-only", "FETCH_HEAD")
-    # Capture the latest private versions if another run updated origin.
-    saved = {name: git("show", f"HEAD:{name}").stdout for name in PRESERVE}
+    previous = git("rev-parse", "HEAD").stdout.decode().strip()
+    saved = {}
+    for name in PRESERVE:
+        record = git("ls-tree", "HEAD", "--", name).stdout
+        if not record:
+            raise RuntimeError(f"Required sync file is missing: {name}")
+        mode, kind, oid = record.split(b"\t", 1)[0].decode().split()
+        if kind != "blob" or mode not in ("100644", "100755"):
+            raise RuntimeError(f"Sync file must be a regular tracked file: {name}")
+        saved[name] = (mode, oid)
     git("fetch", "--no-tags", upstream, "refs/heads/main")
     incoming = git("rev-parse", "FETCH_HEAD").stdout.decode().strip()
-    if git("merge-base", "--is-ancestor", incoming, "HEAD", check=False).returncode == 0:
-        if push and git("rev-parse", "HEAD").stdout.strip() != origin_tip:
+
+    # Build the exact desired tree in a separate index. This removes private-only
+    # app files and edits, even if upstream's commit is already in our history.
+    # No upstream script is executed and no working files change until complete.
+    with tempfile.TemporaryDirectory(prefix="hazehub-sync-index-") as temporary:
+        env = dict(os.environ, GIT_INDEX_FILE=str(Path(temporary) / "index"))
+        git("read-tree", incoming, env=env)
+        for name, (mode, oid) in saved.items():
+            git("update-index", "--add", "--cacheinfo", f"{mode},{oid},{name}", env=env)
+        desired = git("write-tree", env=env).stdout.decode().strip()
+    current = git("rev-parse", "HEAD^{tree}").stdout.decode().strip()
+    if desired == current:
+        if push and previous.encode() != origin_tip:
             git("push", "origin", "HEAD:refs/heads/main")
-            print("Upstream already merged; pushed pending local commits.")
+            print("Already mirrored; pushed pending local commits.", flush=True)
             return True
-        print("Already synced; no commit or push needed.")
+        print(f"Already mirrored upstream {incoming[:12]}; no changes.", flush=True)
         return False
 
-    try:
-        result = git("merge", "--no-ff", "--no-commit", "--allow-unrelated-histories",
-                     "-X", "theirs", incoming, check=False)
-        conflicts = git("diff", "--name-only", "--diff-filter=U", "-z").stdout
-        if result.returncode and not conflicts:
-            raise RuntimeError(result.stderr.decode(errors="replace"))
-        # Handle delete/modify and other structural conflicts as well as text.
-        # Upstream wins at conflicting paths; private automation is restored below.
-        for raw in conflicts.split(b"\0"):
-            if not raw:
-                continue
-            name = raw.decode("utf-8")
-            exists = git("cat-file", "-e", f"{incoming}:{name}", check=False).returncode == 0
-            if exists:
-                git("restore", f"--source={incoming}", "--staged", "--worktree", "--", name)
-            else:
-                git("rm", "-f", "--ignore-unmatch", "--", name)
-        for name, contents in saved.items():
-            path = Path(name)
-            if path.is_symlink():
-                path.unlink()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(contents)
-            git("add", "--", name)
-        if git("diff", "--name-only", "--diff-filter=U").stdout:
-            raise RuntimeError("Unresolved merge conflicts; nothing will be pushed.")
-        git("commit", "-m", f"Sync HazeHub-2- main ({incoming[:12]})")
-    except Exception:
-        git("merge", "--abort", check=False)
-        raise
+    parents = ["-p", previous]
+    if git("merge-base", "--is-ancestor", incoming, previous, check=False).returncode:
+        parents += ["-p", incoming]
+    commit = git("commit-tree", desired, *parents, "-m",
+                 f"Mirror upstream main ({incoming[:12]}) plus sync automation").stdout.decode().strip()
+    git("merge", "--ff-only", commit)
+
     if push:
         # A concurrent user push rejects this push; the next run retries safely.
         git("push", "origin", "HEAD:refs/heads/main")
@@ -86,7 +82,7 @@ def sync(upstream=UPSTREAM, push=False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--push", action="store_true", help="Push the merge to origin/main")
+    parser.add_argument("--push", action="store_true", help="Push the mirrored tree to origin/main")
     args = parser.parse_args()
     try:
         sync(push=args.push)
