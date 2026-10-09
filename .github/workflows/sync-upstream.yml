@@ -35,9 +35,15 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
       - name: Check upstream every minute
         shell: python
+        env:
+          UPSTREAM_READ_TOKEN: ${{ secrets.UPSTREAM_READ_TOKEN || secrets.UPSTREAM_SYNC_TOKEN }}
         run: |
+          import os
           import subprocess
           import time
+
+          if not os.environ.get("UPSTREAM_READ_TOKEN"):
+              raise SystemExit("Add UPSTREAM_READ_TOKEN: a credential with read access to the private lasarobotics/HazeHub-2- repository.")
 
           # Keep polling through scheduler delays. Scheduled starts queue one
           # replacement run behind this one via the concurrency group.

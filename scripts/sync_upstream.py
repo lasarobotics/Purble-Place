@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Mirror upstream main plus private sync files, preserving Git history."""
 import argparse
+import base64
 import os
 import tempfile
 from pathlib import Path
@@ -45,7 +46,24 @@ def sync(upstream=UPSTREAM, push=False):
         if kind != "blob" or mode not in ("100644", "100755"):
             raise RuntimeError(f"Sync file must be a regular tracked file: {name}")
         saved[name] = (mode, oid)
-    git("fetch", "--no-tags", upstream, "refs/heads/main")
+    upstream_env = None
+    token = os.environ.get("UPSTREAM_READ_TOKEN")
+    if token and upstream == UPSTREAM:
+        # checkout's GITHUB_TOKEN is destination-only. Use a separate credential
+        # for this one source fetch; never embed credentials in URLs or files.
+        authorization = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+        upstream_env = dict(os.environ)
+        count = int(upstream_env.get("GIT_CONFIG_COUNT", "0"))
+        settings = [
+            ("http.https://github.com/.extraheader", ""),
+            (f"http.{UPSTREAM}.extraheader", f"AUTHORIZATION: basic {authorization}"),
+        ]
+        for key, value in settings:
+            upstream_env[f"GIT_CONFIG_KEY_{count}"] = key
+            upstream_env[f"GIT_CONFIG_VALUE_{count}"] = value
+            count += 1
+        upstream_env["GIT_CONFIG_COUNT"] = str(count)
+    git("fetch", "--no-tags", upstream, "refs/heads/main", env=upstream_env)
     incoming = git("rev-parse", "FETCH_HEAD").stdout.decode().strip()
 
     # Build the exact desired tree in a separate index. This removes private-only

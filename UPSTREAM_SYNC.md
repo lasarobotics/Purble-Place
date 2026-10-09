@@ -24,7 +24,15 @@ code. Concurrent pushes are rejected and retried by the next fresh workflow run.
 Failures appear in Actions; a run must actually be visible there to confirm it
 is operating. Scheduled configuration alone is not evidence of a successful sync.
 
-The default token is sufficient for ordinary contents writes. If upstream changes
+The source repository is private. Set the destination repository's encrypted
+Actions secret `UPSTREAM_READ_TOKEN` to a token with **Contents: read** access to
+`lasarobotics/HazeHub-2-` (and organization approval if required). The default
+`GITHUB_TOKEN` cannot read another private repository. Source authentication is
+passed only to that fetch, in memory. Without this secret the workflow stops with
+an explicit setup error. `UPSTREAM_SYNC_TOKEN` is accepted as a fallback when it
+already has access to both repositories.
+
+The default token is sufficient for ordinary destination contents writes. If upstream changes
 other `.github/workflows` files, configure repository secret `UPSTREAM_SYNC_TOKEN`
 with a fine-grained token permitted to write **Contents** and **Workflows** in this
 private repository. Branch protection rules still apply. Pushes made with the
