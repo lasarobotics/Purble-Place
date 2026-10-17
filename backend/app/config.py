@@ -105,12 +105,11 @@ class Settings:
     STARTING_BUCKS: int = 100
 
     # External APIs (keys provided by the team)
-    TBA_KEY: str = os.getenv(
-        "TBA_AUTH_KEY",
-        "rZxJQVjP40eTtskoUbT3OWTKEnKNxk8McjB9QqRdU8mT78o8EN3OuzuMppJTADtV",
-    )
+    TBA_KEY: str = os.getenv("TBA_AUTH_KEY", "").strip()
     TBA_BASE: str = "https://www.thebluealliance.com/api/v3"
     STATBOTICS_BASE: str = "https://api.statbotics.io/v3"
+    MATCH13_KEY: str = os.getenv("MATCH13_API_KEY", "").strip()
+    MATCH13_BASE: str = os.getenv("MATCH13_API_BASE", "https://actions.match13.com").rstrip("/")
     EXTERNAL_TTL_SECONDS: int = int(os.getenv("HAZEHUB_CACHE_TTL", "900"))
 
     # Environment / datastore

@@ -8,7 +8,8 @@ import { api } from "@/lib/api";
 import { loadSchedule } from "@/lib/schedule";
 import { emitBus, onBus, DATA_EVENTS } from "@/lib/bus";
 import { flushQueue } from "@/lib/sync";
-import { pendingCount, requestPersistentStorage } from "@/lib/db";
+import { flushPitQueue } from "@/lib/pit-sync";
+import { pendingCount, pendingPits, requestPersistentStorage } from "@/lib/db";
 import { useBattery } from "@/lib/battery";
 import { useOffline } from "@/lib/offline";
 import { Loading } from "./ui";
@@ -25,15 +26,18 @@ const MAIN_NAV: NavItem[] = [
   { href: "/pit", label: "Pit Scout", icon: "wrench" },
   { href: "/picklists", label: "Picklists", icon: "list" },
   { href: "/meeting", label: "Picklist Meeting Mode", icon: "folder" },
+  { href: "/results", label: "Results", icon: "chart" },
+  { href: "/match-schedule", label: "Match Schedule", icon: "list" },
   { href: "/status", label: "Devices", icon: "refresh" },
   { href: "/account", label: "Account", icon: "user" },
 ];
 
-// The picklist meeting account reaches exactly two screens. Everything else
-// is hidden here and refused by the server, so a mis-tap on a shared screen
-// cannot advance the match or settle bets.
+// The shared meeting account can also read the public event and analysis tabs.
 const PICKLIST_NAV = [
   { href: "/meeting", label: "Picklist Meeting", icon: "folder" },
+  { href: "/results", label: "Results", icon: "chart" },
+  { href: "/match-schedule", label: "Match Schedule", icon: "list" },
+  { href: "/data-analysis", label: "Data Analysis", icon: "chart" },
   { href: "/account", label: "Account", icon: "user" },
 ];
 
@@ -52,6 +56,8 @@ const ADMIN_GROUPS: { title: string; items: NavItem[] }[] = [
       { href: "/admin/team-search", label: "Team Search", icon: "search" },
       { href: "/admin/team-rank", label: "Team Rank", icon: "chart" },
       { href: "/admin/compare", label: "Compare", icon: "scale" },
+      { href: "/data-analysis", label: "Data Analysis", icon: "chart" },
+      { href: "/data", label: "Data", icon: "list" },
     ],
   },
   {
@@ -70,6 +76,12 @@ const MOBILE_NAV = [
   { href: "/pit", label: "Pit", icon: "wrench" },
   { href: "/picklists", label: "Picks", icon: "list" },
   { href: "/status", label: "Devices", icon: "refresh" },
+];
+
+const OFFLINE_ROUTES = [
+  "/", "/home", "/scout", "/pit", "/picklists", "/meeting", "/results", "/match-schedule", "/data-analysis", "/picklist-simulator", "/data", "/status", "/account", "/login",
+  "/admin", "/admin/compare", "/admin/data-picklist", "/admin/forms", "/admin/picklists", "/admin/seasons",
+  "/admin/system", "/admin/team-rank", "/admin/team-search",
 ];
 
 export function Shell({ children }: { children: React.ReactNode }) {
@@ -92,7 +104,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   // page of permission errors.
   useEffect(() => {
     if (!session?.picklist_only) return;
-    const allowed = ["/meeting", "/account"];
+    const allowed = ["/meeting", "/results", "/match-schedule", "/data-analysis", "/picklist-simulator", "/account"];
     if (!allowed.some((prefix) => pathname.startsWith(prefix))) router.replace("/meeting");
   }, [session, pathname, router]);
 
@@ -108,10 +120,14 @@ export function Shell({ children }: { children: React.ReactNode }) {
       if (!navigator.onLine) return;
       void loadSchedule().catch(() => {});
       void api("/api/admin/event-teams").catch(() => {});
+      void api("/api/admin/raw-data").catch(() => {});
+      void api("/api/admin/data-analysis").catch(() => {});
+      void api("/api/matches/event-ratings").catch(() => {});
+      void api("/api/pit").catch(() => {});
+      void api("/api/picklists/finals").catch(() => {});
     };
     warm();
-    navigator.serviceWorker?.ready.then(reg => reg.active?.postMessage({type: "WARM_ROUTES", routes:
-      [...MAIN_NAV.map(n => n.href), "/login", ...ADMIN_GROUPS.filter(g => session.is_admin || g.title !== "Event").flatMap(g => g.items.map(n => n.href))]}));
+    navigator.serviceWorker?.ready.then(reg => reg.active?.postMessage({ type: "WARM_ROUTES", routes: OFFLINE_ROUTES }));
     let timer: ReturnType<typeof setTimeout>;
     const off = onBus(event => { if (DATA_EVENTS.includes(event)) { clearTimeout(timer); timer = setTimeout(warm, 250); } });
     window.addEventListener("online", warm);
@@ -138,22 +154,26 @@ export function Shell({ children }: { children: React.ReactNode }) {
   // Flush the offline queue when we come online + periodically.
   useEffect(() => {
     let alive = true;
+    const allPending = async () => (await pendingCount()) + (await pendingPits()).length;
     const tick = async () => {
       const before = await pendingCount();
       if (before > 0 && navigator.onLine) {
         await flushQueue();
       }
-      if (alive) setPending(await pendingCount());
+      if (navigator.onLine) await flushPitQueue();
+      if (alive) setPending(await allPending());
     };
     tick();
-    const changed = () => { void pendingCount().then(n => { if (alive) setPending(n); }); };
+    const changed = () => { void allPending().then(n => { if (alive) setPending(n); }); };
     window.addEventListener("scout-queue-changed", changed);
+    window.addEventListener("pit-queue-changed", changed);
     const id = setInterval(tick, 8000);
     window.addEventListener("online", tick);
     return () => {
       alive = false;
       clearInterval(id);
       window.removeEventListener("scout-queue-changed", changed);
+      window.removeEventListener("pit-queue-changed", changed);
       window.removeEventListener("online", tick);
     };
   }, [online]);

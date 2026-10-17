@@ -8,6 +8,7 @@ import { api } from "@/lib/api";
 import { loadSchedule, type ScheduleSource } from "@/lib/schedule";
 import { useToast } from "@/lib/toast";
 import { markAcknowledged, markStatus, queueScout, uuid } from "@/lib/db";
+import { PineappleCelebration } from "@/components/PineappleCelebration";
 import { flushQueue, payloadHash } from "@/lib/sync";
 import type { HeatPoint, MatchRec, ScoutEntry } from "@/lib/types";
 import { useAuth } from "@/lib/auth";
@@ -28,6 +29,8 @@ const blank = (endgameNone = "none"): ScoutEntry => ({
   auto_leave: false,
   auto_climb: false,
   heatmap: [],
+  auto_missed: 0,
+  teleop_missed: 0,
   climb: endgameNone,
   tags: [],
   played_defense: false,
@@ -75,7 +78,7 @@ export default function ScoutPage() {
       const keys = JSON.parse(localStorage.getItem(hotkeyKey) || "null");
       if (keys && validHotkeys(keys)) setHotkeys(keys);
       const draft = JSON.parse(localStorage.getItem(draftKey) || "null");
-      if (draft?.f) { restored.current = true; setF(draft.f); setStarted(!!draft.started); }
+      if (draft?.f) { restored.current = true; setF({ ...draft.f, heatmap: (draft.f.heatmap || []).map((p: HeatPoint) => ({ ...p, result: "made" })) }); setStarted(!!draft.started); }
     } catch {}
   }, [draftKey, hotkeyKey]);
   useEffect(() => {
@@ -88,10 +91,13 @@ export default function ScoutPage() {
   const [scheduleSource, setScheduleSource] = useState<ScheduleSource>("none");
   const [busy, setBusy] = useState(false);
   const [pendingSlot, setPendingSlot] = useState<SlotChange | null>(null);
+  const [pendingTeamEdit, setPendingTeamEdit] = useState(false);
+  const [editingTeam, setEditingTeam] = useState(true);
   // A submitted report leaves the screen instantly (the form resets for the
   // next match), so without this a scout has no idea whether the tap landed.
   // The stamp is the receipt: it names the team and says where the record is.
   const [receipt, setReceipt] = useState<{ team: number; detail: string; queued: boolean } | null>(null);
+  const [celebration, setCelebration] = useState<number | null>(null);
   const set = <K extends keyof ScoutEntry>(k: K, v: ScoutEntry[K]) => {
     if (!["match_number", "comp_level", "team_number", "alliance", "station", "event_key"].includes(k)) setStarted(true);
     setF((p) => ({ ...p, season_id: p.season_id || game.season_id, game_version: p.game_version || game.game_version, [k]: v }));
@@ -135,7 +141,10 @@ export default function ScoutPage() {
   // Auto-fill the team from the schedule whenever the slot changes and the
   // scouter hasn't typed their own number.
   useEffect(() => {
-    if (scheduledTeam) setF((p) => (p.team_number === 0 || p.team_number !== scheduledTeam ? { ...p, team_number: scheduledTeam } : p));
+    if (scheduledTeam) {
+      setF((p) => (p.team_number === 0 || p.team_number !== scheduledTeam ? { ...p, team_number: scheduledTeam } : p));
+      setEditingTeam(false);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scheduledTeam, f.match_number]);
 
@@ -162,7 +171,8 @@ export default function ScoutPage() {
   }
 
   async function submit() {
-    if (!f.team_number) return toast("Enter the team number first", "err");
+    if (f.match_number < 1) return toast("Match number must be at least 1", "err");
+    if (f.team_number < 1) return toast("Team number must be at least 1", "err");
     setBusy(true);
     const submissionId = f.client_uuid || uuid();
     try {
@@ -178,6 +188,10 @@ export default function ScoutPage() {
         return;
       }
       showReceipt(f.team_number, saved?.sync_status === "acknowledged" ? "Saved to cloud" : "Saved on this device", saved?.sync_status !== "acknowledged");
+      if (sessionStorage.getItem(`hazehub.celebrated:${submissionId}`) !== "1") {
+        sessionStorage.setItem(`hazehub.celebrated:${submissionId}`, "1");
+        setCelebration(Math.floor(Math.random() * 5));
+      }
       resetForNext();
     } catch (err: any) {
       toast(err?.message || "Could not save on this device. Your report is still here.", "err");
@@ -245,8 +259,9 @@ export default function ScoutPage() {
                 <input
                   type="number"
                   inputMode="numeric"
+                  min={1}
                   value={f.match_number}
-                  onChange={(e) => set("match_number", parseInt(e.target.value || "0", 10))}
+                  onChange={(e) => set("match_number", Math.max(1, parseInt(e.target.value || "1", 10)))}
                 />
               </label>
               <div className="field" style={{ margin: 0 }}>
@@ -281,16 +296,19 @@ export default function ScoutPage() {
                   <input
                     type="number"
                     inputMode="numeric"
+                    min={1}
+                    disabled={f.team_number > 0 && !editingTeam}
                     value={f.team_number || ""}
-                    onChange={(e) => set("team_number", parseInt(e.target.value || "0", 10))}
+                    onChange={(e) => set("team_number", Math.max(0, parseInt(e.target.value || "0", 10)))}
+                    onBlur={() => { if (f.team_number > 0) setEditingTeam(false); }}
                     placeholder="0000"
                   />
                 </label>
               )}
               <div className="watching-actions">
-                {scheduledTeamProfile && f.team_number === scheduledTeam && (
-                  <button className="btn sm ghost" type="button" onClick={() => set("team_number", 0)}>
-                    Edit team
+                {f.team_number > 0 && !editingTeam && (
+                  <button className="btn sm ghost" type="button" onClick={() => setPendingTeamEdit(true)}>
+                    Change team number
                   </button>
                 )}
                 <label className={"pill-check no-show" + (f.no_show ? " on" : "")}>
@@ -309,6 +327,10 @@ export default function ScoutPage() {
             /* 2, score the match */
             <Step title="Scoring">
               <FieldInput hotkeys={hotkeys} active={started && !editingKeys && !busy} points={f.heatmap} onChange={(pts: HeatPoint[]) => set("heatmap", pts)} />
+              <div className="row" style={{ gap: 16, marginTop: 14, flexWrap: "wrap" }}>
+                <div role="group" aria-label="Auto missed shots"><span>Auto missed shots</span><Stepper value={f.auto_missed || 0} onChange={v => set("auto_missed", v)} /></div>
+                <div role="group" aria-label="Teleop missed shots"><span>Teleop missed shots</span><Stepper value={f.teleop_missed || 0} onChange={v => set("teleop_missed", v)} /></div>
+              </div>
               <div className="row" style={{ gap: 10, marginTop: 14 }}>
                 <label className={"pill-check" + (f.auto_leave ? " on" : "")}>
                   <input type="checkbox" checked={f.auto_leave} onChange={(e) => set("auto_leave", e.target.checked)} /> Auto leave
@@ -419,6 +441,7 @@ export default function ScoutPage() {
           </span>
         </div>
       )}
+      {celebration !== null && <PineappleCelebration variant={celebration} onClose={() => setCelebration(null)} />}
 
       {pendingSlot && (
         <Confirm
@@ -432,6 +455,16 @@ export default function ScoutPage() {
           cancelLabel="Cancel"
           onConfirm={() => applySlotChange(pendingSlot)}
           onCancel={() => setPendingSlot(null)}
+        />
+      )}
+      {pendingTeamEdit && (
+        <Confirm
+          title="Change the team number?"
+          body={<>This report is currently assigned to Team {f.team_number}. Confirm before changing which robot the report belongs to.</>}
+          confirmLabel="Change team"
+          cancelLabel="Keep team"
+          onConfirm={() => { setPendingTeamEdit(false); setEditingTeam(true); if (f.team_number === scheduledTeam) set("team_number", 0); }}
+          onCancel={() => setPendingTeamEdit(false)}
         />
       )}
     </div>

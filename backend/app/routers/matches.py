@@ -8,7 +8,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from .. import repo
 from ..auth import current_scouter
 from ..external import sync_event_matches
+from ..external import match13_event_ratings
 from ..models import MatchRecord, Scouter
+from ..config import settings
 
 router = APIRouter(prefix="/api/matches", tags=["matches"])
 
@@ -77,7 +79,7 @@ async def list_matches(
         return {"event": "", "matches": []}
     existing = repo.matches_for_event(event_key)
     if refresh or not existing:
-        await sync_event_matches(event_key)
+        await sync_event_matches(event_key, ttl=60 if refresh else None)
         existing = repo.matches_for_event(event_key)
     if not include_teams:
         return {"event": event_key, "matches": [_match_dict(m) for m in existing]}
@@ -89,6 +91,37 @@ async def list_matches(
         return d
 
     return {"event": event_key, "matches": [enrich(m) for m in existing]}
+
+
+@router.get("/event-board")
+async def event_board(
+    event: str | None = None,
+    _: Scouter = Depends(current_scouter),
+) -> dict:
+    """Public, frequently refreshed qualification schedule and results."""
+    event_key = repo.resolve_event(event)
+    if not event_key:
+        return {"event": "", "matches": [], "home_teams": []}
+    await sync_event_matches(event_key, ttl=60)
+    matches = [m for m in repo.matches_for_event(event_key) if m.comp_level == "qm"]
+    return {
+        "event": event_key,
+        "home_teams": settings.HOME_TEAMS,
+        "matches": [_match_dict(m) for m in matches],
+    }
+
+
+@router.get("/event-ratings")
+async def event_ratings(
+    event: str | None = None,
+    _: Scouter = Depends(current_scouter),
+) -> dict:
+    """Public HazeHub proxy for Match 13; credentials stay on the server."""
+    event_key = repo.resolve_event(event)
+    ratings = await match13_event_ratings(event_key) if event_key else {}
+    return {"event": event_key, "source": "match13", "teams": [
+        {"team": team, **values} for team, values in sorted(ratings.items())
+    ]}
 
 
 @router.get("/current")

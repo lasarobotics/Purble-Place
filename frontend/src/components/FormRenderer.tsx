@@ -331,7 +331,7 @@ export function FieldControl({
       );
 
     case "photo":
-      return <PhotoField field={field} value={String(value || "")} onChange={set} disabled={disabled} />;
+      return <PhotoField field={field} value={Array.isArray(value) ? value : value ? [String(value)] : []} onChange={set} disabled={disabled} />;
 
     case "textarea":
       return (
@@ -358,11 +358,14 @@ export function FieldControl({
             inputMode="numeric"
             value={value === 0 && (field.type === "team" || field.type === "match") ? "" : String(value ?? "")}
             disabled={disabled}
-            min={field.min}
+            min={field.type === "team" || field.type === "match" ? Math.max(1, field.min ?? 1) : field.min}
             max={field.max}
             step={field.type === "decimal" ? (field.step ?? 0.1) : field.step}
             placeholder={field.hint}
-            onChange={(e) => set(e.target.value === "" ? 0 : Number(e.target.value))}
+            onChange={(e) => {
+              const next = e.target.value === "" ? 0 : Number(e.target.value);
+              set(field.type === "team" || field.type === "match" ? Math.max(0, next) : next);
+            }}
           />
         </label>
       );
@@ -476,18 +479,19 @@ function PhotoField({
   disabled,
 }: {
   field: FormField;
-  value: string;
-  onChange: (v: string) => void;
+  value: string[];
+  onChange: (v: string[]) => void;
   disabled?: boolean;
 }) {
   const input = useRef<HTMLInputElement>(null);
   const [error, setError] = useState("");
 
   async function pick(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
     try {
-      onChange(await readPhoto(file));
+      const added = await Promise.all(files.map(readPhoto));
+      onChange([...value, ...added]);
       setError("");
     } catch (err: any) {
       setError(err?.message || "Could not use that photo");
@@ -505,17 +509,26 @@ function PhotoField({
         type="file"
         accept="image/*"
         capture="environment"
+        multiple
         disabled={disabled}
         onChange={pick}
       />
       <div className="pit-photo">
-        {value ? (
+        {value.length ? (
           <>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={value} alt={field.label} />
+            <div className="pit-photo-grid">
+              {value.map((photo, index) => (
+                <figure key={`${photo.slice(-32)}-${index}`}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={photo} alt={`${field.label} ${index + 1}`} />
+                  <button type="button" className="btn sm ghost" disabled={disabled}
+                    onClick={() => onChange(value.filter((_, i) => i !== index))}>Remove</button>
+                </figure>
+              ))}
+            </div>
             <div className="btn-row">
-              <button type="button" className="btn sm" disabled={disabled} onClick={() => input.current?.click()}>Retake</button>
-              <button type="button" className="btn sm ghost" disabled={disabled} onClick={() => onChange("")}>Remove</button>
+              <button type="button" className="btn sm" disabled={disabled} onClick={() => input.current?.click()}>Add more photos</button>
+              <span className="faint">{value.length} saved with this report</span>
             </div>
           </>
         ) : (

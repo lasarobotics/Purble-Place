@@ -196,7 +196,7 @@ PICKLIST_ALLOWED_PREFIXES = (
 #: ``/api/pit`` is here rather than above because the team detail popup
 #: reads a robot's pit report, but a projector account must not be able to
 #: submit one.
-PICKLIST_ALLOWED_READS = ("/api/scout/match", "/api/scout/team", "/api/pit")
+PICKLIST_ALLOWED_READS = ("/api/scout/match", "/api/scout/team", "/api/pit", "/api/admin/data-analysis", "/api/admin/analysis")
 
 
 def _picklist_account_may_reach(path: str, method: str = "GET") -> bool:

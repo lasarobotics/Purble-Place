@@ -19,6 +19,7 @@ export function emitBus(event: string, payload: any) {
 // Data-changing server events that analytics/schedule pages care about.
 export const DATA_EVENTS = [
   "scout_submitted",
+  "scouting_corrected",
   "settings_changed",
   "match_advanced",
   "pit_submitted",

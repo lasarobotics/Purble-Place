@@ -44,6 +44,10 @@ _HASHED_FIELDS = (
 def canonical_hash(data: dict[str, Any]) -> str:
     """SHA-256 of the canonical (sorted-keys) JSON of the observation."""
     subset = {k: data.get(k) for k in _HASHED_FIELDS}
+    # Omit absent/zero counters to preserve hashes from older offline clients.
+    for key in ("auto_missed", "teleop_missed"):
+        if data.get(key):
+            subset[key] = data[key]
     canonical = json.dumps(subset, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -110,6 +114,8 @@ class ScoutIn(BaseModel):
     auto_leave: bool = False
     auto_climb: bool = False
     heatmap: list[dict[str, Any]] = Field(default_factory=list)
+    auto_missed: int = Field(default=0, ge=0, le=999)
+    teleop_missed: int = Field(default=0, ge=0, le=999)
 
     climb: str = "none"
     climb_seconds: Optional[float] = None
@@ -142,6 +148,8 @@ def _entry_dict(e: ScoutEntry) -> dict:
         "auto_leave": e.auto_leave,
         "auto_climb": e.auto_climb,
         "heatmap": e.heatmap,
+        "auto_missed": e.data.get("auto_missed", 0),
+        "teleop_missed": e.data.get("teleop_missed", 0),
         "climb": e.climb,
         "climb_seconds": e.climb_seconds,
         "tags": e.tags or [],
@@ -344,19 +352,22 @@ class PitIn(BaseModel):
     """
 
     event_key: Optional[str] = None
-    team_number: int
+    team_number: int = Field(gt=0)
     drivetrain: str = ""
     archetype: str = ""
-    weight_lbs: Optional[float] = None
-    width_in: Optional[float] = None
-    length_in: Optional[float] = None
+    weight_lbs: Optional[float] = Field(default=None, ge=0, le=1000)
+    width_in: Optional[float] = Field(default=None, ge=0, le=500)
+    length_in: Optional[float] = Field(default=None, ge=0, le=500)
     can_climb: str = "none"
     auto_routine: str = ""
-    capabilities: list[str] = Field(default_factory=list)
+    capabilities: list[str] = Field(default_factory=list, max_length=100)
     robot_photo: str = ""
-    notes: str = ""
+    robot_photos: list[str] = Field(default_factory=list)
+    notes: str = Field(default="", max_length=schema.MAX_NOTES_CHARS)
     answers: dict[str, Any] = Field(default_factory=dict)
-    form_version: int = 0
+    form_id: str = Field(default="", max_length=100)
+    form_version: int = Field(default=0, ge=0)
+    season_id: str = Field(default="", max_length=100)
 
 
 #: PitEntry columns that a form field may fill in by using the same key.
@@ -375,12 +386,28 @@ def submit_pit(
     scouter: Scouter = Depends(current_scouter),
 ) -> dict:
     event_key = repo.resolve_event(body.event_key)
+    scheduled = {
+        team
+        for match in repo.matches_for_event(event_key)
+        for team in (*match.red, *match.blue)
+    }
+    if not scheduled:
+        raise HTTPException(
+            status_code=409,
+            detail="Load this event's schedule before pit scouting so team numbers can be verified.",
+        )
+    if body.team_number not in scheduled:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Team {body.team_number} is not on the schedule for {event_key}.",
+        )
     row = repo.pit(event_key, body.team_number) or PitEntry(
         event_key=event_key, team_number=body.team_number
     )
     data = body.model_dump()
     data.pop("event_key", None)
     answers = data.pop("answers", None) or {}
+    photos = list(data.pop("robot_photos", None) or [])
     form_version = data.pop("form_version", 0)
 
     for k, v in data.items():
@@ -401,15 +428,23 @@ def submit_pit(
     row.event_key = event_key
     row.scout_id = scouter.scout_id
     try:
-        repo.save_pit(row)
-    except WriteTooLarge as exc:
+        answer_photos = answers.pop("robot_photo", None)
+        if isinstance(answer_photos, list):
+            photos = answer_photos
+        elif isinstance(answer_photos, str) and answer_photos:
+            photos = [answer_photos]
+        elif row.robot_photo and not photos:
+            photos = [row.robot_photo]
+        repo.save_pit_with_photos(row, photos)
+    except (WriteTooLarge, ValueError) as exc:
         raise HTTPException(status_code=413, detail=str(exc)) from exc
     emit("pit_submitted", {"team": body.team_number})
     return {"ok": True}
 
 
-def _pit_dict(row) -> dict:
+def _pit_dict(row, include_photos: bool = True) -> dict:
     return {
+        "event_key": row.event_key,
         "team_number": row.team_number,
         "drivetrain": row.drivetrain,
         "archetype": row.archetype,
@@ -420,9 +455,13 @@ def _pit_dict(row) -> dict:
         "auto_routine": row.auto_routine,
         "capabilities": row.capabilities,
         "robot_photo": row.robot_photo,
+        "robot_photos": repo.pit_photo_images(row) if include_photos else [],
+        "photo_count": len(row.photo_ids) + (1 if row.robot_photo else 0),
         "notes": row.notes,
         "responses": row.responses,
+        "form_id": row.form_id,
         "form_version": row.form_version,
+        "season_id": row.season_id,
         "scout_id": row.scout_id,
         "updated_at": row.updated_at.isoformat(),
     }
@@ -442,12 +481,13 @@ def list_pit(
     event_key = repo.resolve_event(event)
     out = []
     for row in repo.pits_for_event(event_key):
-        data = _pit_dict(row)
+        data = _pit_dict(row, include_photos=photos)
         if not photos:
             data["robot_photo"] = ""
-            data["has_photo"] = bool(row.robot_photo)
+            data["robot_photos"] = []
+            data["has_photo"] = bool(row.robot_photo or row.photo_ids)
         else:
-            data["has_photo"] = bool(row.robot_photo)
+            data["has_photo"] = bool(data["robot_photos"])
         out.append(data)
     return out
 
@@ -463,3 +503,25 @@ def get_pit(
     if not row:
         return None
     return _pit_dict(row)
+
+
+@pit_router.get("/verify/team/{team_number}")
+def check_pit_team(
+    team_number: int,
+    event: str | None = None,
+    _: Scouter = Depends(current_scouter),
+) -> dict:
+    if team_number < 1:
+        raise HTTPException(status_code=400, detail="Team number must be at least 1")
+    event_key = repo.resolve_event(event)
+    scheduled = {
+        team
+        for match in repo.matches_for_event(event_key)
+        for team in (*match.red, *match.blue)
+    }
+    return {
+        "event": event_key,
+        "team_number": team_number,
+        "valid": team_number in scheduled,
+        "schedule_loaded": bool(scheduled),
+    }

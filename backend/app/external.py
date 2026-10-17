@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import threading
 import time
+import asyncio
 from datetime import date, datetime, timezone
 from typing import Any, Optional
 
@@ -95,10 +96,87 @@ async def statbotics(path: str, ttl: Optional[int] = None) -> Optional[Any]:
     )
 
 
+async def match13(path: str, ttl: Optional[int] = None) -> Optional[Any]:
+    """Call Match 13 from the server so its bearer key never reaches a browser."""
+    if not settings.MATCH13_KEY:
+        return None
+    return await _get_json(
+        f"{settings.MATCH13_BASE}{path}",
+        headers={"accept": "application/json", "Authorization": f"Bearer {settings.MATCH13_KEY}"},
+        ttl=ttl,
+    )
+
+
+async def match13_event_ratings(event_key: str) -> dict[int, dict[str, Any]]:
+    """Return the Match 13 event ratings and adjacent official event stats."""
+    payload, rankings = await asyncio.gather(
+        match13(f"/v1/events/{event_key}/teams", ttl=300),
+        tba(f"/event/{event_key}/rankings", ttl=300),
+    )
+    rows = payload.get("teams", []) if isinstance(payload, dict) else []
+    out: dict[int, dict[str, Any]] = {}
+
+    def number(value: Any) -> Optional[float]:
+        try:
+            return float(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            team = int(row.get("teamNumber"))
+        except (TypeError, ValueError):
+            continue
+        if team < 1:
+            continue
+        out[team] = {
+            "opr": number(row.get("opr")),
+            "match13_epa": number(row.get("epa")),
+            "xp": number(row.get("xpEnd")),
+            "x_auto": number(row.get("xAuto")),
+            "x_tele": number(row.get("xTele")),
+            "x_end": number(row.get("xEnd")),
+            "match13_sos": number(row.get("sos")),
+        }
+    defaults = {"opr": None, "match13_epa": None, "xp": None, "x_auto": None,
+                "x_tele": None, "x_end": None, "match13_sos": None}
+    for row in (rankings or {}).get("rankings", []):
+        key = str(row.get("team_key", ""))
+        if not key.startswith("frc") or not key[3:].isdigit():
+            continue
+        target = out.setdefault(int(key[3:]), dict(defaults))
+        record = row.get("record") or {}
+        target["record"] = f"{int(record.get('wins', 0))}-{int(record.get('losses', 0))}-{int(record.get('ties', 0))}"
+        orders = row.get("sort_orders") or []
+        target["ranking_score"] = number(orders[0]) if orders else None
+
+    scored: dict[int, list[float]] = {}
+    records: dict[int, list[int]] = {}
+    for completed in repo.matches_for_event(event_key):
+        if completed.comp_level != "qm" or completed.red_score is None or completed.blue_score is None:
+            continue
+        for teams, score, other in ((completed.red, completed.red_score, completed.blue_score),
+                                    (completed.blue, completed.blue_score, completed.red_score)):
+            for team in teams:
+                scored.setdefault(team, []).append(float(score))
+                rec = records.setdefault(team, [0, 0, 0])
+                rec[0 if score > other else 1 if score < other else 2] += 1
+    for team in set(scored) | set(records):
+        target = out.setdefault(team, dict(defaults))
+        values = scored.get(team, [])
+        target["avg_score"] = round(sum(values) / len(values), 2) if values else None
+        if "record" not in target:
+            wins, losses, ties = records.get(team, [0, 0, 0])
+            target["record"] = f"{wins}-{losses}-{ties}"
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # Higher level helpers                                                         #
 # --------------------------------------------------------------------------- #
-async def sync_event_matches(event_key: str) -> list[MatchRecord]:
+async def sync_event_matches(event_key: str, ttl: Optional[int] = None) -> list[MatchRecord]:
     """Pull the match schedule for an event into ``matches`` documents.
 
     Uses the full ``/matches`` endpoint (not ``/simple``) so we also capture
@@ -110,7 +188,7 @@ async def sync_event_matches(event_key: str) -> list[MatchRecord]:
     typical advance writes 1-2 documents instead of the whole 120-match
     schedule.
     """
-    data = await tba(f"/event/{event_key}/matches")
+    data = await tba(f"/event/{event_key}/matches", ttl=ttl)
     await sync_event_info(event_key)
     if not data:
         return repo.matches_for_event(event_key)

@@ -59,12 +59,14 @@ SCOUTERS = "scouters"
 EVENTS = "events"
 MATCHES = "matches"
 MATCH_SCOUTING = "match_scouting"
+SCOUTING_AUDIT = "scouting_audit"
 PICKLISTS = "picklists"
 PICKLIST_RECORDS = "picklist_records"
 PICKLIST_WORKSPACES = "picklist_workspaces"
 PICKLIST_HISTORY = "picklist_history"
 BETS = "bets"
 PIT_SCOUTING = "pit_scouting"
+PIT_PHOTOS = "pit_photos"
 TEAM_CACHE = "team_cache"
 APP_SETTINGS = "app_settings"
 SYNC_OUTBOX = "sync_outbox"
@@ -89,9 +91,11 @@ ALL_COLLECTIONS = (
     EVENTS,
     MATCHES,
     MATCH_SCOUTING,
+    SCOUTING_AUDIT,
     PICKLISTS, PICKLIST_RECORDS, PICKLIST_WORKSPACES, PICKLIST_HISTORY,
     BETS,
     PIT_SCOUTING,
+    PIT_PHOTOS,
     TEAM_CACHE,
     APP_SETTINGS,
     SYNC_OUTBOX,
@@ -117,10 +121,10 @@ GLOBAL_CACHED = (
 #: Collections mirrored into RAM filtered to the current event. These grow
 #: with the competition, so scoping the listener to one event keeps both the
 #: memory footprint and the listener's initial read cost bounded.
-EVENT_SCOPED_CACHED = (MATCHES, MATCH_SCOUTING, PICKLISTS, BETS, PIT_SCOUTING)
+EVENT_SCOPED_CACHED = (MATCHES, MATCH_SCOUTING, SCOUTING_AUDIT, PICKLISTS, BETS, PIT_SCOUTING)
 
 #: Written but never listened to: nothing in the UI reads them hot.
-WRITE_ONLY = (PICKLIST_RECORDS, PICKLIST_WORKSPACES, PICKLIST_HISTORY, SYNC_OUTBOX, NETWORK_STATUS, FORM_REVISIONS, SEASON_REVISIONS, EVENT_ARCHIVE_CHUNKS)
+WRITE_ONLY = (PICKLIST_RECORDS, PICKLIST_WORKSPACES, PICKLIST_HISTORY, PIT_PHOTOS, SYNC_OUTBOX, NETWORK_STATUS, FORM_REVISIONS, SEASON_REVISIONS, EVENT_ARCHIVE_CHUNKS)
 
 
 # --------------------------------------------------------------------------- #
@@ -206,6 +210,7 @@ MAX_PHOTO_BYTES = 700 * 1024
 #: array-of-map fields from eating into the 40,000 index entries per document.
 INDEX_EXEMPT_FIELDS: dict[str, tuple[str, ...]] = {
     MATCH_SCOUTING: ("data", "comments", "payload_hash"),
+    SCOUTING_AUDIT: ("patch", "before", "reason"),
     MATCHES: ("film_events", "film_summary", "youtube_key"),
     PICKLISTS: ("items",),
     "picklist_records": ("items",),
@@ -213,6 +218,7 @@ INDEX_EXEMPT_FIELDS: dict[str, tuple[str, ...]] = {
     "picklist_history": ("snapshot", "published"),
     TEAM_CACHE: ("avatar", "photos", "record"),
     PIT_SCOUTING: ("robot_photo", "capabilities", "notes"),
+    PIT_PHOTOS: ("image",),
     EVENT_ARCHIVE_CHUNKS: ("data",),
     NETWORK_STATUS: ("packet_loss",),
 }

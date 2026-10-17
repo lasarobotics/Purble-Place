@@ -71,6 +71,9 @@ async def lifespan(app: FastAPI):
         repo.reconcile_current_event()
     except Exception as exc:  # noqa: BLE001
         log.exception("startup failed: %s", exc)
+    from .heatmap_migration import migrate_heatmap_shots, migrate_epa_scores
+    migrate_heatmap_shots()
+    migrate_epa_scores()
     yield
     try:
         close_db()

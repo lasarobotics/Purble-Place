@@ -22,14 +22,23 @@
  * duplicates get invented.
  */
 
-const VERSION = "hazehub-v4";
+const VERSION = "hazehub-v7";
 const SHELL_CACHE = `${VERSION}-shell`;
 const ASSET_CACHE = `${VERSION}-assets`;
 const API_CACHE = `${VERSION}-api`;
 
 /* Pages a scout can land on with no connection. Everything else falls back to
  * whichever of these is cached. */
-const SHELL_ROUTES = ["/", "/home", "/scout", "/pit", "/picklists", "/status", "/login"];
+const SHELL_ROUTES = [
+  "/", "/home", "/scout", "/pit", "/picklists", "/meeting", "/results", "/match-schedule", "/data-analysis", "/picklist-simulator", "/data", "/status", "/account", "/login",
+  "/admin", "/admin/compare", "/admin/data-picklist", "/admin/forms", "/admin/picklists", "/admin/seasons",
+  "/admin/system", "/admin/team-rank", "/admin/team-search",
+];
+const PUBLIC_ASSETS = [
+  "/field.png", "/icon.svg", "/manifest.webmanifest",
+  "/pineapples/pineapple1.gif", "/pineapples/pineapple2.gif", "/pineapples/pineapple3.gif",
+  "/pineapples/pineapple4.gif", "/pineapples/pineapple5.gif",
+];
 
 /* API responses worth keeping a copy of. All reads, all cheap, all things the
  * scouting form needs to render the right controls and the right robot. */
@@ -38,14 +47,7 @@ const CACHEABLE_API = []; // API snapshots are partitioned by user in IndexedDB.
 self.addEventListener("install", (event) => {
   event.waitUntil(
     (async () => {
-      const cache = await caches.open(SHELL_CACHE);
-      // addAll is atomic: one 404 during a deploy would throw the whole
-      // install away, so each route is allowed to fail on its own.
-      await Promise.all(
-        SHELL_ROUTES.map((route) =>
-          cache.add(new Request(route, { cache: "reload" })).catch(() => {})
-        )
-      );
+      await warmRoutes(SHELL_ROUTES);
       await self.skipWaiting();
     })()
   );
@@ -70,8 +72,69 @@ self.addEventListener("message", (event) => {
 function isAsset(url) {
   return (
     url.pathname.startsWith("/_next/static/") ||
-    /\.(?:js|css|woff2?|png|jpg|jpeg|svg|webp|ico)$/.test(url.pathname)
+    /\.(?:js|css|woff2?|png|jpg|jpeg|svg|webp|gif|ico|webmanifest)$/.test(url.pathname)
   );
+}
+
+function discoverAssets(text) {
+  const found = new Set(PUBLIC_ASSETS);
+  const patterns = [
+    /(?:src|href)=["']([^"'\s]+)["']/g,
+    /url\(["']?([^"')\s]+)["']?\)/g,
+    /(\/_next\/static\/[^"'()\s\\]+)/g,
+  ];
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) {
+      const raw = (match[1] || "").replaceAll("&amp;", "&");
+      try {
+        const url = new URL(raw, self.location.origin);
+        if (url.origin === self.location.origin && (isAsset(url) || PUBLIC_ASSETS.includes(url.pathname))) {
+          found.add(`${url.pathname}${url.search}`);
+        }
+      } catch { /* Ignore malformed markup emitted by third-party code. */ }
+    }
+  }
+  return found;
+}
+
+async function warmRoutes(routes) {
+  const shellCache = await caches.open(SHELL_CACHE);
+  const assetCache = await caches.open(ASSET_CACHE);
+  const assets = new Set(PUBLIC_ASSETS);
+
+  for (const route of routes) {
+    if (typeof route !== "string" || !/^\/[a-z0-9/-]*$/.test(route)) continue;
+    try {
+      const response = await fetch(new Request(route, { cache: "reload", credentials: "same-origin" }));
+      if (!response.ok) continue;
+      const html = await response.clone().text();
+      await shellCache.put(route, response);
+      for (const asset of discoverAssets(html)) assets.add(asset);
+    } catch { /* Retry preparation the next time the app opens online. */ }
+  }
+
+  // Asset files can reference more chunks and fonts. Follow those references
+  // until the complete same-origin dependency graph is stored locally.
+  const queued = [...assets];
+  const visited = new Set();
+  while (queued.length && visited.size < 1000) {
+    const url = queued.shift();
+    if (!url || visited.has(url)) continue;
+    visited.add(url);
+    try {
+      let response = await assetCache.match(url);
+      if (!response) {
+        response = await fetch(new Request(url, { cache: "reload", credentials: "same-origin" }));
+        if (!response.ok) continue;
+        await assetCache.put(url, response.clone());
+      }
+      const type = response.headers.get("content-type") || "";
+      if (/text\/|javascript|json/.test(type)) {
+        const text = await response.clone().text();
+        for (const dependency of discoverAssets(text)) if (!visited.has(dependency)) queued.push(dependency);
+      }
+    } catch { /* One optional asset must not prevent the rest from caching. */ }
+  }
 }
 
 /* Same-origin only, on purpose.
@@ -182,25 +245,7 @@ self.addEventListener("fetch", (event) => {
 self.addEventListener("message", event => {
   if (event.data?.type !== "WARM_ROUTES") return;
   event.waitUntil((async () => {
-    const cache = await caches.open(SHELL_CACHE);
-    const assetCache = await caches.open(ASSET_CACHE);
-    const assets = new Set(["/field.png"]);
-    for (const route of event.data.routes || []) {
-      if (typeof route !== "string" || !/^\/[a-z/-]*$/.test(route)) continue;
-      try {
-        const response = await fetch(route);
-        if (!response.ok) continue;
-        const html = await response.clone().text();
-        await cache.put(route, response);
-        for (const match of html.matchAll(/(?:src|href)="([^"\s]+)"/g)) {
-          if (match[1].startsWith("/_next/static/")) assets.add(match[1].replaceAll("&amp;", "&"));
-        }
-      } catch { /* Retry preparation at the next online visit. */ }
-    }
-    await Promise.all([...assets].map(async url => {
-      if (await assetCache.match(url)) return;
-      try { const response = await fetch(url); if (response.ok) await assetCache.put(url, response); } catch {}
-    }));
+    await warmRoutes(event.data.routes?.length ? event.data.routes : SHELL_ROUTES);
     event.source?.postMessage({ type: "OFFLINE_READY" });
   })());
 });

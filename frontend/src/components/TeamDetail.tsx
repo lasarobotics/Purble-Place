@@ -18,10 +18,11 @@ export function TeamDetail({ team }: { team: Team }) {
     api<PitEntry | null>(`/api/pit/${team.team_number}`).then(setPit).catch(() => {});
   }, [team.team_number]);
 
-  const photos = [
+  const photos = Array.from(new Set([
+    ...((pit?.robot_photos || []).filter(Boolean)),
     ...(pit?.robot_photo ? [pit.robot_photo] : []),
     ...((full.photos || []).filter(Boolean)),
-  ];
+  ]));
 
   return (
     <div>

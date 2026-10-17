@@ -54,6 +54,8 @@ export interface ScoutEntry {
   auto_leave: boolean;
   auto_climb: boolean;
   heatmap: HeatPoint[];
+  auto_missed?: number;
+  teleop_missed?: number;
   climb: string;
   climb_seconds?: number | null;
   tags: string[];
@@ -84,6 +86,8 @@ export interface PitEntry {
   auto_routine?: string;
   capabilities?: string[];
   robot_photo?: string;
+  robot_photos?: string[];
+  photo_count?: number;
   has_photo?: boolean;
   notes?: string;
   /** Answers to questions the pit form asks that have no column of their own. */
@@ -189,7 +193,7 @@ export interface PicklistItem {
   justification?: string;
 }
 
-/** 1 = first pick, 2 = second pick. Everyone keeps one list of each. */
+/** 1 = first pick, 2 = second pick. A user may keep any number of each. */
 export type PickRound = 1 | 2;
 
 export interface Picklist {
@@ -203,6 +207,9 @@ export interface Picklist {
   name: string;
   is_master: boolean;
   pick_round: PickRound;
+  workspace_id?: string;
+  robot_number?: number;
+  robot_name?: string;
   items: PicklistItem[];
   updated_at: string;
 }
@@ -251,7 +258,7 @@ export interface DisagreementRow {
   nickname: string;
   avatar?: string;
   matches: number;
-  avg_points: number;
+  avg_points: number | null;
   quant_pct: number;
   qual_pct: number;
   gap: number;
@@ -269,7 +276,7 @@ export interface TeamSummary {
   avatar?: string;
   epa?: number | null;
   matches: number;
-  avg_points: number;
+  avg_points: number | null;
   max_points: number;
   min_points: number;
   std_points: number;
@@ -314,14 +321,22 @@ export interface PicklistRecord extends Picklist {
   source_id?: number;
   latest?: boolean;
   created_at: string;
+  submitted_at?: string;
+  submission_number?: number;
 }
+export interface MeetingRobot { team_number: number; name: string; custom?: boolean }
 export interface PicklistMeetingState {
   event_key: string;
+  session_id?: string;
+  presenter?: string | null;
   version: number;
   status: "not_started" | "live" | "paused" | "ended";
   locked: boolean;
   view: "first" | "second" | "both";
   selected_team: number | null;
+  active_robot: number;
+  robots: MeetingRobot[];
+  presentation: { type: "none" | "team" | "analysis" | "comparison" | "reference"; team: number | null; comparison_ids: number[]; match?: number | "all"; field?: string };
   boards: Picklist[];
   notes: Record<string, string>;
   team_statuses: Record<string, string>;

@@ -2,7 +2,7 @@ export const DEFAULT_HOTKEYS = { auto: "a", teleop: "s", made: "q", missed: "w",
 export type Hotkeys = typeof DEFAULT_HOTKEYS;
 export const HOTKEY_LABELS: Record<keyof Hotkeys, string> = { auto: "Select auto", teleop: "Select teleop", made: "Select made", missed: "Select missed", undo: "Undo attempt", clear: "Clear attempts" };
 export function validHotkeys(keys: Hotkeys) {
-  const values = Object.keys(DEFAULT_HOTKEYS).map(k => keys[k as keyof Hotkeys]);
+  const values = (["auto", "teleop", "undo", "clear"] as (keyof Hotkeys)[]).map(k => keys[k]);
   return values.every(v => /^[a-z0-9]$/.test(v)) && new Set(values).size === values.length;
 }
 export function ignoreHotkey(e: KeyboardEvent) {

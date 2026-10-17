@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import hashlib
 import threading
 import time
 from datetime import datetime, timezone
@@ -34,7 +35,7 @@ from .models import (
     NetworkStatus,
     OutboxRecord,
     Picklist,
-    PitEntry,
+    PitEntry, PitPhoto,
     Scouter,
     ScoutEntry,
     TeamCache,
@@ -467,6 +468,16 @@ def save_matches(rows: list[MatchRecord]) -> int:
     return store.write_many(rows)
 
 
+def replace_event_schedule(event_key: str, rows: list[MatchRecord]) -> int:
+    """Atomically replace an event schedule after the whole CSV validates."""
+    for row in rows:
+        row.updated_at = _now()
+    old_ids = {m.doc_id for m in matches_for_event(event_key)}
+    new_ids = {m.doc_id for m in rows}
+    deletes = [(schema.MATCHES, doc_id) for doc_id in old_ids - new_ids]
+    return store.atomic_replace(rows, deletes)
+
+
 def delete_matches_for_event(event_key: str) -> int:
     ids = [m.match_key for m in store.all(schema.MATCHES) if m.event_key == event_key]
     return store.delete_many(schema.MATCHES, ids)
@@ -488,6 +499,10 @@ def _scouting_index(event_key: str) -> dict[str, dict[Any, list[ScoutEntry]]]:
         by_match: dict[int, list[ScoutEntry]] = {}
         by_scout: dict[str, list[ScoutEntry]] = {}
         rows = [e for e in store.all(schema.MATCH_SCOUTING) if e.event_key == event_key]
+        from .scouting_review import effective_entries
+        rows = effective_entries(rows, scouting_audits(event_key))
+        from .epa_scoring import rescore_reports
+        rows = rescore_reports(rows, store.all(schema.MATCHES), store.all(schema.TEAM_CACHE))
         rows.sort(key=lambda e: (e.match_number, e.id))
         for e in rows:
             by_team.setdefault(e.team_number, []).append(e)
@@ -495,7 +510,17 @@ def _scouting_index(event_key: str) -> dict[str, dict[Any, list[ScoutEntry]]]:
             by_scout.setdefault(e.scout_id, []).append(e)
         return {"all": rows, "team": by_team, "match": by_match, "scout": by_scout}
 
-    return memoized(f"scouting:{event_key}", (schema.MATCH_SCOUTING,), build)
+    return memoized(f"scouting:{event_key}", (schema.MATCH_SCOUTING, schema.SCOUTING_AUDIT, schema.MATCHES,
+        schema.TEAM_CACHE, schema.SEASONS, schema.SEASON_REVISIONS), build)
+
+
+def scouting_audits(event_key: str) -> list:
+    return [row for row in store.all(schema.SCOUTING_AUDIT)
+            if row.event_key == event_key]
+
+
+def create_scouting_audit(row) -> bool:
+    return store.create(row)
 
 
 def scouting_for_event(event_key: str) -> list[ScoutEntry]:
@@ -585,9 +610,67 @@ def save_pit(row: PitEntry) -> None:
     store.write(row)
 
 
+def pit_photo_images(row: PitEntry) -> list[str]:
+    """Load only the photos referenced by one report, never the whole event."""
+    images = [row.robot_photo] if row.robot_photo else []
+    if store.backend is None:
+        return images
+    for photo_id in row.photo_ids:
+        try:
+            data = store.backend.get(schema.PIT_PHOTOS, photo_id)
+        except Exception:  # noqa: BLE001 - report text remains usable offline
+            data = None
+        if data and data.get("event_key") == row.event_key and int(data.get("team_num") or 0) == row.team_number:
+            image = data.get("image") or ""
+            if image:
+                images.append(image)
+    return images
+
+
+def save_pit_with_photos(row: PitEntry, images: list[str]) -> None:
+    """Atomically save the report and its deduplicated, independently stored photos."""
+    clean: list[str] = []
+    for image in images:
+        image = str(image or "")
+        if not image:
+            continue
+        if not image.startswith("data:image/"):
+            raise ValueError("Pit photos must be images captured by this app")
+        size = len(image.encode("utf-8"))
+        if size > schema.MAX_PHOTO_BYTES:
+            raise WriteTooLarge(
+                f"A robot photo is {size // 1024} KiB; the compressed-photo limit is "
+                f"{schema.MAX_PHOTO_BYTES // 1024} KiB"
+            )
+        clean.append(image)
+    # A SHA-based ID makes retries and repeated saves free of duplicates.
+    photos: list[PitPhoto] = []
+    for image in dict.fromkeys(clean):
+        digest = hashlib.sha256(image.encode("utf-8")).hexdigest()[:32]
+        photo_id = f"{row.event_key}_{row.team_number}_{digest}"
+        photos.append(PitPhoto(photo_id, row.event_key, row.team_number, image))
+    old_ids = set(row.photo_ids)
+    for photo in photos:
+        store.create_uncached(photo)
+    row.photo_ids = [photo.id for photo in photos]
+    row.robot_photo = ""  # legacy single-photo field is migrated on the next save
+    row.updated_at = _now()
+    store.atomic_replace([row], [])
+    retired = list(old_ids - set(row.photo_ids))
+    if retired:
+        # Cleanup is safe after the manifest changes: failures leave invisible
+        # orphan bytes, never a report that references a missing photo.
+        store.delete_many(schema.PIT_PHOTOS, retired)
+
+
 def delete_pits_for_event(event_key: str) -> int:
-    ids = [p.doc_id for p in store.all(schema.PIT_SCOUTING) if p.event_key == event_key]
-    return store.delete_many(schema.PIT_SCOUTING, ids)
+    rows = [p for p in store.all(schema.PIT_SCOUTING) if p.event_key == event_key]
+    ids = [p.doc_id for p in rows]
+    deleted = store.delete_many(schema.PIT_SCOUTING, ids)
+    photo_ids = [photo_id for row in rows for photo_id in row.photo_ids]
+    if photo_ids:
+        store.delete_many(schema.PIT_PHOTOS, photo_ids)
+    return deleted
 
 
 # --------------------------------------------------------------------------- #

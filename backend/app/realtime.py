@@ -44,8 +44,10 @@ class Hub:
     def __init__(self) -> None:
         self._clients: set[WebSocket] = set()
         self._lock = asyncio.Lock()
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     async def connect(self, ws: WebSocket) -> None:
+        self._loop = asyncio.get_running_loop()
         await ws.accept()
         async with self._lock:
             self._clients.add(ws)
@@ -71,6 +73,21 @@ class Hub:
 
     def client_count(self) -> int:
         return len(self._clients)
+
+    def publish(self, event: str, payload: Any = None) -> None:
+        """Schedule a broadcast from the event loop or a FastAPI worker thread."""
+        try:
+            asyncio.get_running_loop().create_task(self.broadcast(event, payload))
+            return
+        except RuntimeError:
+            pass
+        loop = self._loop
+        if loop and loop.is_running():
+            # Build the coroutine on the server loop. Creating it in this
+            # worker thread can leak an un-awaited coroutine during shutdown.
+            loop.call_soon_threadsafe(
+                lambda: loop.create_task(self.broadcast(event, payload))
+            )
 
 
 hub = Hub()
@@ -99,11 +116,7 @@ def _record(event: str, payload: Any) -> None:
 def emit(event: str, payload: Any = None) -> None:
     """Fire-and-forget broadcast, usable from sync request handlers."""
     _record(event, payload)
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return
-    loop.create_task(hub.broadcast(event, payload))
+    hub.publish(event, payload)
 
 
 # --------------------------------------------------------------------------- #

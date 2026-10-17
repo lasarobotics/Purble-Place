@@ -10,6 +10,7 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@tsparticles/confetti": "^4.4.0",
     "dexie": "^4.0.8",
     "next": "14.2.5",
     "react": "18.3.1",

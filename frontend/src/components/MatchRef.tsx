@@ -56,6 +56,8 @@ export function NoteText({ note, team }: { note: string; team: number }) {
               onClick={(e) => {
                 // These sit inside cards that open a team modal of their own.
                 e.stopPropagation();
+                const shared = new CustomEvent("hazehub-match-ref-open", { cancelable: true, detail: { team, match: seg.match, field: seg.field } });
+                if (!window.dispatchEvent(shared)) return;
                 setOpen({ match: seg.match, field: seg.field });
               }}
             >

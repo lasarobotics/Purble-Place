@@ -39,7 +39,7 @@ export function usePicklistLive(load: () => void, interval = 15000) {
   }, [load, interval]);
 }
 
-export function useRecoveredEdit<T>(key: string, save: (data: T) => Promise<void | ((latest: T) => T)>) {
+export function useRecoveredEdit<T>(key: string, save: (data: T) => Promise<void | ((latest: T) => T)>, delayMs = 900) {
   const [pending, setPending] = useState<T | null>(null);
   const [status, setStatus] = useState("Saved");
   const value = useRef<T | null>(null);
@@ -67,24 +67,24 @@ export function useRecoveredEdit<T>(key: string, save: (data: T) => Promise<void
       } else {
         if (rebase && value.current) { value.current = rebase(value.current); setPending(value.current); localStorage.setItem(key, JSON.stringify(value.current)); }
         setStatus("Saving");
-        timer.current = setTimeout(() => { void flush(); }, 900);
+        timer.current = setTimeout(() => { void flush(); }, delayMs);
       }
       return true;
     } catch (e: any) { if (run === generation.current) setStatus(`Save Failed: ${e.message}`); return false; }
     finally { busy.current = false; }
-  }, [key]);
+  }, [key, delayMs]);
   const enqueue = useCallback((data: T) => {
     value.current = data; setPending(data); setStatus("Saving");
     try { localStorage.setItem(key, JSON.stringify(data)); }
     catch { setStatus("Save Failed: local recovery storage is full; keep this page open"); }
-    clearTimeout(timer.current); timer.current = setTimeout(() => { void flush(); }, 900);
-  }, [key, flush]);
+    clearTimeout(timer.current); timer.current = setTimeout(() => { void flush(); }, delayMs);
+  }, [key, flush, delayMs]);
   useEffect(() => {
     if (status === "Saving" && pending && !busy.current) {
-      timer.current = setTimeout(() => { void flush(); }, 900);
+      timer.current = setTimeout(() => { void flush(); }, delayMs);
     }
     return () => clearTimeout(timer.current);
-  }, [status, pending, flush]);
+  }, [status, pending, flush, delayMs]);
   useEffect(() => {
     const warn = (e: BeforeUnloadEvent) => { if (value.current) { e.preventDefault(); e.returnValue = ""; } };
     window.addEventListener("beforeunload", warn);

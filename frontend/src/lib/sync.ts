@@ -38,6 +38,9 @@ function canonicalJson(value: any): string {
 export async function payloadHash(entry: Record<string, any>): Promise<string> {
   const subset: Record<string, any> = {};
   for (const k of HASHED_FIELDS) subset[k] = entry[k] ?? null;
+  for (const k of ["auto_missed", "teleop_missed"]) {
+    if (entry[k]) subset[k] = entry[k];
+  }
   const canonical = canonicalJson(subset);
   try {
     const bytes = new TextEncoder().encode(canonical);

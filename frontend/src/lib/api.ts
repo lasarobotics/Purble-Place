@@ -117,7 +117,14 @@ async function request<T = any>(
     // Do not rewrite identical snapshots on every refresh.
     try {
       const previous = await db().responses.get(key);
-      if (previous?.json !== json) await db().responses.put({ key, json, saved_at: Date.now() });
+      if (previous?.json !== json) {
+        await db().responses.put({ key, json, saved_at: Date.now() });
+        const count = await db().responses.count();
+        if (count > 300) {
+          const stale = await db().responses.orderBy("saved_at").limit(count - 300).primaryKeys();
+          await db().responses.bulkDelete(stale);
+        }
+      }
     } catch { /* A cache failure must not hide a successful cloud response. */ }
   }
   return result as T;

@@ -25,7 +25,7 @@ export interface ScheduleState {
 export async function loadSchedule(
   event?: string
 ): Promise<{ matches: MatchRec[]; event: string; source: ScheduleSource; savedAt: number | null }> {
-  const query = event ? `?event=${encodeURIComponent(event)}` : "";
+  const query = event ? `?event=${encodeURIComponent(event)}&refresh=true` : "?refresh=true";
   try {
     const res = await api<{ event: string; matches: MatchRec[] }>(`/api/matches${query}`);
     if (res.matches?.length) {
@@ -68,9 +68,11 @@ export function useSchedule(event?: string): ScheduleState {
     // Re-fetch as soon as the connection returns so a device that was offline
     // through a schedule change catches up without anyone thinking about it.
     const onOnline = () => { void refresh(); };
+    const timer = window.setInterval(() => { if (navigator.onLine) void refresh(); }, 60_000);
     window.addEventListener("online", onOnline);
     return () => {
       alive = false;
+      window.clearInterval(timer);
       window.removeEventListener("online", onOnline);
     };
   }, [event, refresh]);

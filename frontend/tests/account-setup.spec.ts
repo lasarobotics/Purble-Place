@@ -85,6 +85,9 @@ test("admin can reset a member password from the Accounts popup", async ({ page 
   });
 
   await page.goto("/admin");
+  await page.getByRole("button", { name: "Import match schedule CSV" }).click();
+  await expect(page.getByRole("dialog")).toContainText("match_number,comp_level,red1,red2,red3,blue1,blue2,blue3");
+  await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
   await page.getByRole("button", { name: "Reset user password", exact: true }).click();
   const popup = page.getByRole("dialog");
   await expect(popup).toContainText("usual create-and-retype-password popup");

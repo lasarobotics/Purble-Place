@@ -24,7 +24,6 @@ export function FieldInput({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [phase, setPhase] = useState<"auto" | "teleop">("teleop");
-  const [result, setResult] = useState<"made" | "missed">("made");
 
   function undo() {
     onChange(points.slice(0, -1));
@@ -50,14 +49,6 @@ export function FieldInput({
           e.preventDefault();
           setPhase("teleop");
           break;
-        case hotkeys.made:
-          e.preventDefault();
-          setResult("made");
-          break;
-        case hotkeys.missed:
-          e.preventDefault();
-          setResult("missed");
-          break;
         case hotkeys.undo:
           e.preventDefault();
           undo();
@@ -79,14 +70,17 @@ export function FieldInput({
     const x = (e.clientX - r.left) / r.width;
     const y = (e.clientY - r.top) / r.height;
     if (x < 0 || x > 1 || y < 0 || y > 1) return;
-    onChange([...points, { x, y, phase, result }]);
+    onChange([...points, { x, y, phase, result: "made" }]);
+  }
+
+  function remove(index: number, e: React.MouseEvent<SVGCircleElement>) {
+    e.stopPropagation();
+    onChange(points.filter((_, pointIndex) => pointIndex !== index));
   }
 
   const counts = {
-    autoMade: points.filter((p) => p.phase === "auto" && p.result === "made").length,
-    autoMiss: points.filter((p) => p.phase === "auto" && p.result === "missed").length,
-    teleMade: points.filter((p) => p.phase === "teleop" && p.result === "made").length,
-    teleMiss: points.filter((p) => p.phase === "teleop" && p.result === "missed").length,
+    autoMade: points.filter((p) => p.phase === "auto").length,
+    teleMade: points.filter((p) => p.phase === "teleop").length,
   };
 
   return (
@@ -100,14 +94,7 @@ export function FieldInput({
             Teleop
           </button>
         </div>
-        <div className="seg">
-          <button type="button" className={result === "made" ? "on" : ""} aria-pressed={result === "made"} onClick={() => setResult("made")} title={hotkeys.made.toUpperCase()}>
-            Made
-          </button>
-          <button type="button" className={result === "missed" ? "on" : ""} aria-pressed={result === "missed"} onClick={() => setResult("missed")} title={hotkeys.missed.toUpperCase()}>
-            Missed
-          </button>
-        </div>
+        <span className="badge green">Count made shots</span>
       </div>
 
       <div className="field-wrap" ref={ref} onClick={add} style={{ cursor: "crosshair" }}>
@@ -115,33 +102,31 @@ export function FieldInput({
         <img className="field-bg" src={FIELD_SRC} alt="field" draggable={false} />
         <svg className="field-svg" viewBox="0 0 100 50" preserveAspectRatio="none">
           {points.map((p, i) => (
-            <circle
-              key={i}
-              cx={p.x * 100}
-              cy={p.y * 50}
-              r={p.result === "made" ? 1.4 : 1.1}
-              fill={colorFor(p)}
-              stroke="white"
-              strokeWidth={0.25}
-              opacity={0.92}
-            />
+            <g key={i}>
+              <circle cx={p.x * 100} cy={p.y * 50} r={p.result === "made" ? 1.4 : 1.1}
+                fill={colorFor(p)} stroke="white" strokeWidth={0.25} opacity={0.92} pointerEvents="none" />
+              <circle cx={p.x * 100} cy={p.y * 50} r={3.2} fill="transparent"
+                className="heatmap-remove-target" onClick={(event) => remove(i, event)}
+                aria-label={`Remove ${p.phase} heatmap dot ${i + 1}`}>
+                <title>Click to remove this dot</title>
+              </circle>
+            </g>
           ))}
         </svg>
       </div>
 
       <div className="heatmap-keybinds" aria-label="Heatmap keyboard shortcuts">
+        <span>Click a dot to remove it</span>
         <span><kbd>{hotkeys.auto.toUpperCase()}</kbd> Auto</span>
         <span><kbd>{hotkeys.teleop.toUpperCase()}</kbd> Teleop</span>
-        <span><kbd>{hotkeys.made.toUpperCase()}</kbd> Made</span>
-        <span><kbd>{hotkeys.missed.toUpperCase()}</kbd> Missed</span>
         <span><kbd>{hotkeys.undo.toUpperCase()}</kbd> Undo</span>
         <span><kbd>{hotkeys.clear.toUpperCase()}</kbd> Clear</span>
       </div>
 
       <div className="row" style={{ justifyContent: "space-between", marginTop: 10 }}>
         <div className="row" style={{ gap: 8, fontSize: "0.8rem" }}>
-          <span className="badge">Auto {counts.autoMade}/{counts.autoMade + counts.autoMiss}</span>
-          <span className="badge">Teleop {counts.teleMade}/{counts.teleMade + counts.teleMiss}</span>
+          <span className="badge">Auto made {counts.autoMade}</span>
+          <span className="badge">Teleop made {counts.teleMade}</span>
         </div>
         <div className="btn-row">
           <button type="button" className="btn sm ghost" onClick={undo} disabled={!points.length} title={hotkeys.undo.toUpperCase()}>
@@ -171,6 +156,7 @@ export function FieldInput({
 // starts changes which parts of the field it can reach.
 
 export type StationFilter = "all" | "red1" | "red2" | "red3" | "blue1" | "blue2" | "blue3";
+type HeatPhase = "all" | "auto" | "teleop";
 
 /** Which driver station the scout was watching, if the report carried it. */
 function stationKey(p: HeatPoint): StationFilter | "" {
@@ -181,6 +167,159 @@ function stationKey(p: HeatPoint): StationFilter | "" {
 function stationLabel(s: StationFilter): string {
   if (s === "all") return "All stations";
   return s.replace("red", "Red ").replace("blue", "Blue ");
+}
+
+/** Distinct hue per overlaid team so stacked density clouds stay separable. */
+const OVERLAY_COLORS = ["#22d3ee", "#d946ef", "#fbbf24", "#34d399", "#fb7185", "#60a5fa"];
+const OVERLAY_MAX = 6;
+
+export function OverlayHeatmap({
+  series,
+}: {
+  series: { team: number; label: string; points: HeatPoint[] }[];
+}) {
+  const uid = useId().replace(/:/g, "");
+  const [phase, setPhase] = useState<HeatPhase>("all");
+  const [station, setStation] = useState<StationFilter>("all");
+  const [active, setActive] = useState<number[]>([]);
+  const signature = series.map((item) => item.team).join(",");
+
+  useEffect(() => {
+    setActive((current) => {
+      const available = new Set(series.map((item) => item.team));
+      const kept = current.filter((team) => available.has(team));
+      const added = series.map((item) => item.team).filter((team) => !kept.includes(team));
+      return [...kept, ...added].slice(0, OVERLAY_MAX);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signature]);
+
+  const colors = new Map(active.map((team, index) => [team, OVERLAY_COLORS[index]]));
+  const visible = series
+    .filter((item) => active.includes(item.team))
+    .map((item) => ({
+      ...item,
+      color: colors.get(item.team)!,
+      filtered: item.points.filter(
+        (point) =>
+          (phase === "all" || point.phase === phase) &&
+          (station === "all" || stationKey(point) === station)
+      ),
+    }));
+  const total = visible.reduce((sum, item) => sum + item.filtered.length, 0);
+  const radius = total > 180 ? 2.8 : total > 70 ? 3.8 : 5;
+
+  function toggle(team: number) {
+    setActive((current) =>
+      current.includes(team)
+        ? current.filter((value) => value !== team)
+        : current.length < OVERLAY_MAX
+          ? [...current, team]
+          : current
+    );
+  }
+
+  return (
+    <div className="overlay-heatmap">
+      <div className="overlay-heatmap-controls">
+        <div className="seg" aria-label="Overlay phase">
+          {(["all", "auto", "teleop"] as const).map((value) => (
+            <button
+              type="button"
+              key={value}
+              className={phase === value ? "on" : ""}
+              aria-pressed={phase === value}
+              onClick={() => setPhase(value)}
+            >
+              {value === "all" ? "Both" : value === "auto" ? "Auto" : "Teleop"}
+            </button>
+          ))}
+        </div>
+        <label>
+          Driver station
+          <select
+            aria-label="Overlay driver station"
+            value={station}
+            onChange={(event) => setStation(event.target.value as StationFilter)}
+          >
+            <option value="all">All stations</option>
+            {(["red1", "red2", "red3", "blue1", "blue2", "blue3"] as StationFilter[]).map((value) => (
+              <option key={value} value={value}>
+                {stationLabel(value)}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <div className="overlay-team-toggles" aria-label="Teams shown on overlay">
+        {series.map((item) => {
+          const on = active.includes(item.team);
+          const disabled = !on && active.length >= OVERLAY_MAX;
+          return (
+            <button
+              type="button"
+              key={item.team}
+              className={`overlay-team-toggle${on ? " on" : ""}`}
+              aria-pressed={on}
+              disabled={disabled}
+              onClick={() => toggle(item.team)}
+            >
+              <i style={{ background: colors.get(item.team) || "#6b6471" }} />
+              <span>{item.label}</span>
+              <small>{item.points.length} shots</small>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="field-wrap overlay-field">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img className="field-bg" src={FIELD_SRC} alt="field" style={{ opacity: 0.38 }} />
+        <svg className="field-svg" viewBox="0 0 100 50" preserveAspectRatio="none">
+          {visible.map((item) => (
+            <g key={item.team} style={{ mixBlendMode: "screen" }}>
+              <defs>
+                <radialGradient id={`${uid}-${item.team}-gradient`}>
+                  <stop offset="0%" stopColor={item.color} stopOpacity="0.95" />
+                  <stop offset="52%" stopColor={item.color} stopOpacity="0.38" />
+                  <stop offset="100%" stopColor={item.color} stopOpacity="0" />
+                </radialGradient>
+                <filter id={`${uid}-${item.team}-blur`} x="-15%" y="-15%" width="130%" height="130%">
+                  <feGaussianBlur stdDeviation="1.25" />
+                </filter>
+              </defs>
+              <g filter={`url(#${uid}-${item.team}-blur)`}>
+                {item.filtered.map((point, index) => (
+                  <circle
+                    key={index}
+                    cx={point.x * 100}
+                    cy={point.y * 50}
+                    r={radius}
+                    fill={`url(#${uid}-${item.team}-gradient)`}
+                  />
+                ))}
+              </g>
+            </g>
+          ))}
+        </svg>
+        {!total && <div className="overlay-empty">No shots match these filters.</div>}
+      </div>
+
+      <div className="overlay-gradient-legends">
+        {visible.map((item) => (
+          <div key={item.team}>
+            <span>{item.label}</span>
+            <i style={{ background: `linear-gradient(90deg, transparent, ${item.color})` }} />
+            <small>{item.filtered.length} shots</small>
+          </div>
+        ))}
+      </div>
+      <p className="faint overlay-help">
+        Brighter areas mean more shots from that location. When team colors overlap, the colors blend so shared scoring zones stay visible.
+      </p>
+    </div>
+  );
 }
 
 /**
@@ -360,11 +499,11 @@ export function FieldHeatmap({
 
   const legend = (
     <div className="heatmap-legend">
-      <span className="faint">Shots from here:</span>
+      <span className="faint">Made shots from here:</span>
       <span className="heat-ramp" aria-hidden />
       <span className="faint">a few</span>
       <span className="faint">a lot</span>
-      {markers && <span className="faint">Light dots are makes, dark dots are misses.</span>}
+      {markers && <span className="faint">Each dot is a made shot.</span>}
     </div>
   );
 

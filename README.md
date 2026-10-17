@@ -25,8 +25,8 @@ Firestore's free daily allowance. **Setup walkthrough: [instructions.txt](instru
   On first use, enter the ID, then create and confirm a unique password in the popup.
   Later sign-ins use that personal password. Unknown IDs cannot create accounts.
 - **Home** — live Top-Bettors leaderboard, the match on the field, and your open bets.
-- **Match Scouting** — tap-the-field heatmap for every scoring attempt (auto/teleop,
-  made/missed), endgame climb, defense, driver/speed ratings, fouls, failures, and notes.
+- **Match Scouting** — tap-the-field map for missed shots (auto/teleop), endgame
+  climb, defense, driver/speed ratings, fouls, failures, and notes.
   - **Station memory:** alliance and station are remembered between matches.
   - **Pull from schedule:** auto-fills the team you're watching from the TBA schedule.
   - **Offline-first:** if the connection drops, entries are saved in IndexedDB and
@@ -43,7 +43,10 @@ Firestore's free daily allowance. **Setup walkthrough: [instructions.txt](instru
   (auto-settles bets), turn betting **on/off**, **reset everyone to 100 PB**, lock
   individual matches, and set match results.
 - **Team Search** — every match for a team + a **field heatmap overlay** of all their
-  scoring positions (filter auto/teleop), trend chart and breakdown.
+  scoring positions (filter auto/teleop), trend chart, and the complete pit report
+  with every robot photo.
+- **Data** — live raw match and pit scouting records, cached on each device for
+  offline review with CSV and JSON export.
 - **Team Rank** — rank all teams by any metric (avg points, consistency, climb rate, EPA…).
 - **Data Picklist** — auto-ranks robots by **true strength**, discounting teams that look
   good only because they keep drawing weak opponents / strong partners (strength of

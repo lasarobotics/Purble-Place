@@ -8,6 +8,9 @@
 // you have already done loads that report, and a list of who is finished.
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { db, queuePit } from "@/lib/db";
+import { flushPitQueue } from "@/lib/pit-sync";
+import { loadSchedule } from "@/lib/schedule";
 import { useToast } from "@/lib/toast";
 import { onBus } from "@/lib/bus";
 import { blankAnswers, useActiveForm } from "@/lib/formdef";
@@ -15,6 +18,7 @@ import type { PitEntry } from "@/lib/types";
 import { Empty, Loading, TeamIdentity } from "@/components/ui";
 import { FormRenderer } from "@/components/FormRenderer";
 import { Icon } from "@/components/icons";
+import { PineappleCelebration } from "@/components/PineappleCelebration";
 
 /** The field key the form uses for the robot number. */
 const TEAM_KEY = "team_number";
@@ -32,11 +36,33 @@ export default function PitScoutPage() {
   const [done, setDone] = useState<PitEntry[]>([]);
   const [busy, setBusy] = useState(false);
   const [loadedTeam, setLoadedTeam] = useState(0);
+  const [eventKey, setEventKey] = useState("");
+  const [scheduledTeams, setScheduledTeams] = useState<Set<number>>(new Set());
+  const [scheduleReady, setScheduleReady] = useState(false);
+  const [online, setOnline] = useState(true);
+  const [celebration, setCelebration] = useState<number | null>(null);
 
   const definition = form?.definition;
   const teamNumber = Number(answers[TEAM_KEY]) || 0;
   const publishedVersion = form?.published_version;
   const game = form?.game ?? null;
+  const teamValid = teamNumber > 0 && scheduledTeams.has(teamNumber);
+
+  useEffect(() => {
+    loadSchedule().then(result => {
+      setEventKey(result.event);
+      setScheduledTeams(new Set(result.matches.flatMap(match => [...match.red, ...match.blue])));
+      setScheduleReady(result.matches.length > 0);
+    }).catch(() => setScheduleReady(false));
+  }, []);
+
+  useEffect(() => {
+    const update = () => setOnline(navigator.onLine);
+    update();
+    window.addEventListener("online", update);
+    window.addEventListener("offline", update);
+    return () => { window.removeEventListener("online", update); window.removeEventListener("offline", update); };
+  }, []);
 
   // Reset whenever the published form changes underneath, so an edit does not
   // leave a half-filled form from the old questions.
@@ -70,6 +96,7 @@ export default function PitScoutPage() {
           // Columns first, then whatever the form asked that has no column.
           ...pick(row as Record<string, any>, REUSABLE_COLUMNS),
           ...(row.responses || {}),
+          robot_photo: row.robot_photos || (row.robot_photo ? [row.robot_photo] : []),
           [TEAM_KEY]: teamNumber,
         }));
         toast(`Loaded the existing report for ${teamNumber}`, "info");
@@ -81,11 +108,12 @@ export default function PitScoutPage() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!teamNumber) return toast("Enter the robot number first", "err");
+    if (!scheduleReady) return toast("Load or import this event's schedule before pit scouting", "err");
+    if (!teamValid) return toast(`Team ${teamNumber} is not at ${eventKey}`, "err");
     setBusy(true);
     try {
-      await api("/api/pit", {
-        method: "POST",
-        body: {
+      const body = {
+          event_key: eventKey,
           team_number: teamNumber,
           answers,
           // Provenance: which form, which version, which season. Pinned here
@@ -94,9 +122,21 @@ export default function PitScoutPage() {
           form_id: form?.form_id ?? "",
           form_version: publishedVersion ?? 0,
           season_id: form?.season_id ?? "",
-        },
-      });
-      toast(`Pit report saved for ${teamNumber}`, "ok");
+      };
+      const queued = await queuePit(body);
+      await flushPitQueue();
+      const saved = await db().pendingPits.get(queued.id);
+      if (saved?.sync_status === "invalid") throw new Error(saved.last_error || "Review this pit report");
+      toast(
+        saved?.sync_status === "acknowledged"
+          ? `Pit report saved for ${teamNumber}`
+          : `Pit report for ${teamNumber} saved on this device and queued`,
+        "ok",
+      );
+      if (sessionStorage.getItem(`hazehub.celebrated:pit:${queued.id}`) !== "1") {
+        sessionStorage.setItem(`hazehub.celebrated:pit:${queued.id}`, "1");
+        setCelebration(Math.floor(Math.random() * 5));
+      }
       if (definition) setAnswers(blankAnswers(definition));
       setLoadedTeam(0);
       loadDone();
@@ -128,6 +168,7 @@ export default function PitScoutPage() {
         <h1>{definition.name || "Pit Scout"}</h1>
         <span className="badge muted">{done.length} robot{done.length === 1 ? "" : "s"} done</span>
         {fromCache && <span className="badge amber">saved copy</span>}
+        {!online && <span className="badge amber">offline</span>}
       </div>
 
 
@@ -139,7 +180,16 @@ export default function PitScoutPage() {
             game={game}
             onChange={(key, value) => setAnswers((cur) => ({ ...cur, [key]: value }))}
           />
-          <button className="btn primary block" type="submit" disabled={busy}>
+          {teamNumber > 0 && (
+            <p className={teamValid ? "faint" : "form-error"} role="status">
+              {!scheduleReady
+                ? "No event schedule is available to verify this team."
+                : teamValid
+                  ? `Team ${teamNumber} is scheduled at ${eventKey}.`
+                  : `Team ${teamNumber} is not listed at ${eventKey}.`}
+            </p>
+          )}
+          <button className="btn primary block" type="submit" disabled={busy || !teamValid}>
             {busy ? "Saving..." : teamNumber ? `Save pit report for ${teamNumber}` : "Save pit report"}
           </button>
         </form>
@@ -170,6 +220,7 @@ export default function PitScoutPage() {
           )}
         </section>
       </div>
+      {celebration !== null && <PineappleCelebration variant={celebration} onClose={() => setCelebration(null)} />}
     </div>
   );
 }

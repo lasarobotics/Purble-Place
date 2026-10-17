@@ -154,7 +154,7 @@ export default function TeamRankPage() {
       </div>
 
       {reference?.team != null && reference.avg_points != null && (tab === "analysis" || ["defense_capability", "relative_scoring"].includes(metric)) && (
-        <p className="faint">Scoring reference: Team {reference.team} · {num(reference.avg_points, 2)} average points. Defense and relative scoring use this event leader.</p>
+        <p className="faint">Scoring reference: Team {reference.team} · {num(reference.avg_points, 2)} Haze Power Rating. Defense and relative scoring use this event leader.</p>
       )}
       {tab === "rank" ? (
       <>
@@ -171,7 +171,7 @@ export default function TeamRankPage() {
         <div className="card">
           <div className="table-wrap">
             <table className="data">
-              <thead><tr><th className="sticky-col sticky-rank">#</th><th className="sticky-col sticky-team">Team</th><th className="num"><MetricLabel metric={metric}>{metrics.find((m) => m.key === metric)?.label}</MetricLabel></th><th style={{ width: "30%" }}></th><th className="num"><MetricLabel metric="matches">Matches</MetricLabel></th><th className="num"><MetricLabel metric="avg_points">Avg</MetricLabel></th><th className="num"><MetricLabel metric="consistency">Consist.</MetricLabel></th></tr></thead>
+              <thead><tr><th className="sticky-col sticky-rank">#</th><th className="sticky-col sticky-team">Team</th><th className="num"><MetricLabel metric={metric}>{metrics.find((m) => m.key === metric)?.label}</MetricLabel></th><th style={{ width: "30%" }}></th><th className="num"><MetricLabel metric="matches">Matches</MetricLabel></th><th className="num"><MetricLabel metric="avg_points">Haze Power Rating</MetricLabel></th><th className="num"><MetricLabel metric="consistency">Consist.</MetricLabel></th></tr></thead>
               <tbody>
                 {rows.map((r) => (
                   <tr key={r.team}>

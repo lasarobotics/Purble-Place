@@ -42,11 +42,23 @@ export interface CachedMatch extends MatchRec {
   cached_at: number;
 }
 
+export interface PendingPit {
+  id: string;
+  owner_id: string;
+  event_key: string;
+  team_number: number;
+  body: Record<string, any>;
+  sync_status: "queued" | "sending" | "acknowledged" | "invalid" | "retry_wait";
+  updated_at: number;
+  last_error?: string | null;
+}
+
 class HazeDB extends Dexie {
   pendingScouts!: Table<PendingScout, string>;
   settings!: Table<Setting, string>;
   schedule!: Table<CachedMatch, string>;
   responses!: Table<{ key: string; json: string; saved_at: number }, string>;
+  pendingPits!: Table<PendingPit, string>;
 
   constructor() {
     super("hazehub");
@@ -82,6 +94,13 @@ class HazeDB extends Dexie {
     this.version(4).stores({
       pendingScouts: "client_uuid, team_number, match_number, queued_at, sync_status, next_attempt_at, owner_id",
       settings: "key", schedule: "match_key, event_key, match_number, comp_level", responses: "key, saved_at",
+    });
+    this.version(5).stores({
+      pendingScouts: "client_uuid, team_number, match_number, queued_at, sync_status, next_attempt_at, owner_id",
+      settings: "key",
+      schedule: "match_key, event_key, match_number, comp_level",
+      responses: "key, saved_at",
+      pendingPits: "id, owner_id, event_key, team_number, sync_status, updated_at",
     });
   }
 }
@@ -163,6 +182,27 @@ export async function removePending(uuids: string[]) {
 
 export async function pendingCount(): Promise<number> {
   return (await pendingScouts()).length;
+}
+
+export async function queuePit(body: Record<string, any>): Promise<PendingPit> {
+  const row: PendingPit = {
+    id: `${body.event_key}:${Number(body.team_number)}`,
+    owner_id: localOwner(),
+    event_key: String(body.event_key || ""),
+    team_number: Number(body.team_number),
+    body,
+    sync_status: "queued",
+    updated_at: Date.now(),
+    last_error: null,
+  };
+  await db().pendingPits.put(row);
+  window.dispatchEvent(new Event("pit-queue-changed"));
+  return row;
+}
+
+export async function pendingPits(): Promise<PendingPit[]> {
+  const rows = await db().pendingPits.where("owner_id").equals(localOwner()).toArray();
+  return rows.filter(row => row.sync_status !== "acknowledged" && row.sync_status !== "invalid");
 }
 
 export interface QueueStats {

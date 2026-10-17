@@ -581,6 +581,47 @@ class Store:
             self._written.update(canons)
         return len(ops)
 
+    def atomic_replace(self, models: list[Any], deletes: list[tuple[str, str]]) -> int:
+        """Durably apply one bounded replacement before changing the RAM mirror.
+
+        Schedule CSV imports use this path so validation or a Firestore error
+        cannot leave half an event's schedule installed.
+        """
+        ops: list[tuple[str, str, str, Optional[dict]]] = []
+        prepared: list[tuple[Any, str, str, dict, str]] = []
+        for model in models:
+            collection, doc_id = model.COLLECTION, model.doc_id
+            data = model.to_doc()
+            if doc_bytes(data) > schema.MAX_DOC_BYTES:
+                raise WriteTooLarge(f"{collection}/{doc_id} is too large")
+            ops.append(("set", collection, doc_id, data))
+            prepared.append((model, collection, doc_id, data, _canon(data)))
+        ops.extend(("delete", collection, doc_id, None) for collection, doc_id in deletes)
+        if len(ops) > schema.MAX_BATCH_OPS or sum(doc_bytes(op[3]) if op[3] else 64 for op in ops) > schema.MAX_BATCH_BYTES:
+            raise WriteTooLarge("The import is too large for one atomic update")
+        if not ops:
+            return 0
+        if not fs.guard.allow("write", len(models), essential=True) or not fs.guard.allow("delete", len(deletes), essential=True):
+            raise StoreUnavailable("Firestore operation budget is exhausted")
+        try:
+            self.backend.commit(ops)
+        except Exception as exc:  # noqa: BLE001
+            raise StoreUnavailable(str(exc)) from exc
+        with self._lock:
+            touched: set[str] = set()
+            for collection, doc_id in deletes:
+                self._docs.get(collection, {}).pop(doc_id, None)
+                self._written.pop((collection, doc_id), None)
+                touched.add(collection)
+            for model, collection, doc_id, _, canon in prepared:
+                if collection not in schema.WRITE_ONLY:
+                    self._docs.setdefault(collection, {})[doc_id] = model
+                    self._written[(collection, doc_id)] = canon
+                touched.add(collection)
+            for collection in touched:
+                self._revision[collection] += 1
+        return len(ops)
+
     def _commit(self, ops: list[tuple[str, str, str, Optional[dict]]]) -> None:
         """Commit in chunks that respect Firestore's per-commit ceilings.
 
@@ -623,6 +664,18 @@ class Store:
                 self._revision[collection] += 1
             self._last_write[(collection, doc_id)] = time.monotonic()
         return created
+
+    def create_uncached(self, model: Any) -> bool:
+        """Create an immutable large record without retaining its bytes in RAM."""
+        data = model.to_doc()
+        if doc_bytes(data) > schema.MAX_DOC_BYTES:
+            raise WriteTooLarge(f"{model.COLLECTION}/{model.doc_id} is too large")
+        if not fs.guard.allow("write", essential=True):
+            raise StoreUnavailable("Firestore write budget is exhausted")
+        try:
+            return self.backend.create(model.COLLECTION, model.doc_id, data)
+        except Exception as exc:  # noqa: BLE001
+            raise StoreUnavailable(str(exc)) from exc
 
     def delete(self, collection: str, doc_id: str, essential: bool = True) -> None:
         with self._lock:

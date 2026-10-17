@@ -3,7 +3,7 @@ export const METRICS: Record<string, { label: string; description: string; formu
 function metric(key: string, label: string, description: string, formula: string, percent = false) {
   METRICS[key] = { label, description, formula, percent };
 }
-metric("avg_points", "Avg points", "Mean performance points across attended scouting reports, using the configured scoring proxy.", "Σ report points ÷ attended reports");
+metric("avg_points", "Haze Power Rating", "Estimated points this robot will contribute in a typical future match using scouting observations only. Duplicate scout reports become one match consensus; shooting accuracy is smoothed toward the event average, normal attempt volume is resistant to outliers, and configured endgame and attributable penalty values are included.", "Σ[typical attempts × (made + K × event accuracy) × action value] ÷ (attempts + K) ; + Σ(endgame probability × configured value) ; − expected attributable penalties");
 metric("matches", "Matches", "Number of attended scouting reports; multiple observers count separately.", "count(attended reports)");
 metric("match_points", "Points per match", "Mean performance points reported for each match; multiple scouts of the same match are averaged.", "Σ points reported for that match ÷ attended reports for that match");
 metric("max_points", "Peak points", "Highest performance score reported for this team.", "max(report points)");
@@ -18,6 +18,16 @@ metric("avg_speed", "Speed", "Average scout-assigned speed rating on a one-to-fi
 metric("total_fouls", "Total fouls", "Total fouls recorded across attended reports.", "Σ report fouls");
 metric("total_stops", "Defensive stops", "Total successful defensive stops across attended reports.", "Σ successful stops");
 metric("epa", "EPA", "Expected Points Added supplied by Statbotics; its external model is not calculated by HazeHub.", "EPA = Statbotics model estimate");
+metric("opr", "OPR", "Offensive Power Rating estimates how many alliance points a team contributes from match score results. Match 13 supplies this event rating.", "OPR = least-squares solution of alliance scores = sum of the three teams' ratings");
+metric("match13_epa", "EPA", "Expected Points Added estimates a team's scoring contribution after accounting for its partners and opponents. Match 13 supplies the event value.", "EPA = expected alliance score with team - expected alliance score without team");
+metric("xp", "xP", "Match 13's expected-points rating after this event. Higher values indicate stronger expected scoring output in a future match.", "xP shown = xpEnd from Match 13");
+metric("x_auto", "xAuto", "The autonomous-period portion of Match 13's expected-points model.", "xAuto = expected autonomous points contributed");
+metric("x_tele", "xTele", "The teleoperated-period portion of Match 13's expected-points model.", "xTele = expected teleoperated points contributed");
+metric("x_end", "xEnd", "The endgame portion of Match 13's expected-points model.", "xEnd = expected endgame points contributed");
+metric("record", "Record", "Official qualification wins, losses, and ties for this event.", "record = wins − losses − ties");
+metric("ranking_score", "RS", "The official first ranking sort value published for this event.", "RS = event ranking score from official qualification results");
+metric("avg_score", "Avg", "Average final alliance score in this team's completed qualification matches.", "Avg = sum of alliance scores ÷ completed qualification matches");
+metric("match13_sos", "SOS", "Match 13 strength of schedule. Higher values indicate a stronger schedule under its event model.", "SOS = Match 13 schedule-strength estimate");
 metric("accuracy", "Scoring accuracy", "Share of recorded scoring attempts that were made; unavailable without attempts.", "made attempts ÷ all attempts", true);
 metric("attempts", "Attempts", "Number of recorded scoring attempts in the selected phase.", "made attempts + missed attempts");
 metric("made", "Made", "Number of successful scoring attempts in the selected phase.", "count(attempts marked made)");
@@ -48,7 +58,7 @@ metric("qual_pct", "Eye-test percentile", "Percentile of the rating, failure, an
 metric("score", "Review score", "Review priority combining scout disagreement and the gap between output and qualitative percentiles.", "0.55 × min(1, spread / max(6, avg points)) + 0.45 × |output percentile − eye-test percentile|");
 metric("max_spread", "Max spread", "Largest score difference between scouts observing the same team and match.", "max over matches(max report points − min report points)");
 
-metric("relative_scoring", "Scoring vs event leader", "This robot's average report score divided by the highest robot average at this event. The event leader is 100%; all comparisons share that reference, even when the leader is not selected.", "this robot's average points ÷ event leader's average points", true);
+metric("relative_scoring", "Scoring vs event leader", "This robot's Haze Power Rating divided by the highest rating at this event. The event leader is 100%; all comparisons share that reference, even when the leader is not selected.", "this robot's Haze Power Rating ÷ event leader's rating", true);
 metric("defense_capability", "Defense Capability", "Average season-scored defensive-stop points as a percentage of the event scoring leader's average points. Failed or non-defense reports contribute zero. This is a stop-based proxy, not measured points prevented; unavailable without a positive leader score.", "100 × mean defensive-stop points ÷ event leader's average points");
 metric("skew_distribution", "Skew Distribution", "Adjusted sample skewness of report scores. Positive values indicate a longer high-score tail; requires three reports. s is sample standard deviation.", "n × Σ[(score − mean) / s]³ ÷ [(n − 1)(n − 2)]");
 metric("foul_match_rate", "Foul Match Rate", "Share of attended reports with at least one foul.", "reports with fouls > 0 ÷ attended reports", true);

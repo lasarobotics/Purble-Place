@@ -120,6 +120,11 @@
       "collectionGroup": "picklist_history",
       "fieldPath": "published",
       "indexes": []
+    },
+    {
+      "collectionGroup": "pit_photos",
+      "fieldPath": "image",
+      "indexes": []
     }
   ]
 }

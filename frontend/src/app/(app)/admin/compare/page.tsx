@@ -1,13 +1,12 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import { MetricLabel } from "@/components/MetricLabel";
 import { METRICS } from "@/lib/metrics";
 import { api } from "@/lib/api";
 import { useLiveRefetch } from "@/lib/bus";
 import { num } from "@/lib/format";
 import type { Team, TeamSummary } from "@/lib/types";
 import { Loading, Empty, TeamIdentity } from "@/components/ui";
-import { FieldHeatmap } from "@/components/Field";
+import { FieldHeatmap, OverlayHeatmap } from "@/components/Field";
 
 interface CompareData {
   teams: TeamSummary[];
@@ -62,7 +61,7 @@ export default function ComparePage() {
   return (
     <div>
       <div className="page-title"><h1>Compare Robots</h1></div>
-      {reference?.team != null && reference.avg_points != null && <p className="faint">Scoring reference: Team {reference.team} · {num(reference.avg_points, 2)} average points. Defense and relative scoring use this event leader.</p>}
+      {reference?.team != null && reference.avg_points != null && <p className="faint">Scoring reference: Team {reference.team} · {num(reference.avg_points, 2)} Haze Power Rating. Defense and relative scoring use this event leader.</p>}
 
 
       <div className="card" style={{ marginBottom: 16 }}>
@@ -123,6 +122,23 @@ export default function ComparePage() {
               </table>
             </div>
           </div>
+
+          <section className="card compare-overlay-card" style={{ marginBottom: 16 }}>
+            <div className="card-h">
+              <div>
+                <h2>Heatmap Overlay</h2>
+                <p className="faint">Overlay up to six robots, then filter their combined field by match phase and driver station.</p>
+              </div>
+              <span className="badge haze">Up to 6 teams</span>
+            </div>
+            <OverlayHeatmap
+              series={data.teams.map((team) => ({
+                team: team.team,
+                label: label(team.team),
+                points: heats[team.team]?.points || [],
+              }))}
+            />
+          </section>
 
           <div className="grid auto">
             {data.teams.map((t) => (

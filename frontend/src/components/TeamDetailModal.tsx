@@ -4,7 +4,7 @@ import { useLiveRefetch } from "@/lib/bus";
 import { MetricLabel } from "./MetricLabel";
 import { api } from "@/lib/api";
 import { matchLabel, num, pct, timeAgo } from "@/lib/format";
-import type { HeatPoint, Team, TeamSummary } from "@/lib/types";
+import type { HeatPoint, PitEntry, Team, TeamSummary } from "@/lib/types";
 import { Empty, Loading, Modal, Stat, TeamIdentity } from "@/components/ui";
 import { FieldHeatmap } from "@/components/Field";
 import { LineChart } from "@/components/Chart";
@@ -42,6 +42,7 @@ interface TeamDetail {
   heatmap: { points: HeatPoint[]; total: number; made: number; accuracy: number };
   reports: TeamReport[];
   heatmaps?: Record<string, { points: HeatPoint[]; total: number; made: number; accuracy: number }>;
+  pit?: PitEntry | null;
 }
 
 export function TeamDetailModal({ teamNumber, onClose }: { teamNumber: number; onClose: () => void }) {
@@ -50,8 +51,8 @@ export function TeamDetailModal({ teamNumber, onClose }: { teamNumber: number; o
 
   const load = useCallback(() => {
     setLoading(true);
-    api<TeamDetail>(`/api/teams/${teamNumber}/scouting`)
-      .then(setData)
+    Promise.all([api<TeamDetail>(`/api/teams/${teamNumber}/scouting`), api<PitEntry | null>(`/api/pit/${teamNumber}`)])
+      .then(([result, pit]) => setData({ ...result, pit }))
       .catch(() => setData(null))
       .finally(() => setLoading(false));
   }, [teamNumber]);
@@ -66,7 +67,7 @@ export function TeamDetailModal({ teamNumber, onClose }: { teamNumber: number; o
       {loading ? <Loading /> : !data ? (
         <Empty title="Could not load team data" />
       ) : data.summary.matches === 0 ? (
-        <Empty title={`No scouting data for ${teamNumber}`} />
+        <div className="team-detail"><div className="card tight"><TeamIdentity team={data.summary} size="lg" /></div><PitDetail pit={data.pit || null} team={teamNumber} /><Empty title={`No match scouting data for ${teamNumber}`} /></div>
       ) : (
         <TeamDetailBody data={data} />
       )}
@@ -107,10 +108,12 @@ function TeamDetailBody({ data }: { data: TeamDetail }) {
 
       <div className="grid cols-4">
         <Stat label="Matches" value={summary.matches} />
-        <Stat label="Avg Points" value={num(summary.avg_points)} accent />
+        <Stat label="Haze Power Rating" value={num(summary.avg_points)} accent />
         <Stat label="Consistency" value={pct(summary.consistency)} />
         <Stat label="EPA" value={summary.epa != null ? num(summary.epa, 0) : "-"} />
       </div>
+
+      <PitDetail pit={data.pit || null} team={summary.team} />
 
       <div className="grid cols-2">
         <div className="card tight">
@@ -189,4 +192,12 @@ function TeamDetailBody({ data }: { data: TeamDetail }) {
       </div>
     </div>
   );
+}
+
+function PitDetail({ pit, team }: { pit: PitEntry | null; team: number }) {
+  const [photo, setPhoto] = useState<string>();
+  if (!pit) return <div className="card tight"><h3>Pit Scouting</h3><p className="faint">No pit report for Team {team}.</p></div>;
+  const photos = Array.from(new Set([...(pit.robot_photos || []), ...(pit.robot_photo ? [pit.robot_photo] : [])]));
+  const fields = [["Drivetrain", pit.drivetrain], ["Archetype", pit.archetype], ["Climb", pit.can_climb], ["Auto routine", pit.auto_routine], ["Notes", pit.notes]].filter(([, value]) => value !== undefined && value !== null && value !== "");
+  return <div className="card tight"><div className="card-h"><h3>Pit Scouting</h3><span className="badge muted">{photos.length} photo{photos.length === 1 ? "" : "s"}</span></div>{!!photos.length && <div className="pit-photo-grid">{photos.map((src, index) => <figure key={index}><button type="button" className="pit-photo-button" aria-label={`Open pit photo ${index + 1} full size`} onClick={() => setPhoto(src)}>{/* eslint-disable-next-line @next/next/no-img-element */}<img src={src} alt={`Team ${team} robot ${index + 1}`} /><span>Open full size</span></button></figure>)}</div>}<div className="report-grid" style={{ marginTop: 10 }}>{fields.map(([label, value]) => <div key={String(label)}><span className="faint">{label}</span><p>{String(value)}</p></div>)}</div>{pit.responses && <details><summary>All pit form answers</summary><pre className="raw-record">{JSON.stringify(pit.responses, null, 2)}</pre></details>}{photo && <Modal dialog onClose={() => setPhoto(undefined)}><div className="modal-head"><h2>Team {team} pit photo</h2><button className="btn" onClick={() => setPhoto(undefined)}>Close</button></div>{/* eslint-disable-next-line @next/next/no-img-element */}<img className="pit-photo-full" src={photo} alt={`Team ${team} robot full size`} /></Modal>}</div>;
 }

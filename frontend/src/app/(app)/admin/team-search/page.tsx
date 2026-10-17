@@ -3,8 +3,8 @@ import { useEffect, useState, useCallback } from "react";
 import { useLiveRefetch } from "@/lib/bus";
 import { api } from "@/lib/api";
 import { matchLabel, num, pct, timeAgo } from "@/lib/format";
-import type { Team, TeamSummary, HeatPoint } from "@/lib/types";
-import { Loading, Empty, Stat, TeamIdentity } from "@/components/ui";
+import type { Team, TeamSummary, HeatPoint, PitEntry } from "@/lib/types";
+import { Loading, Empty, Modal, Stat, TeamIdentity } from "@/components/ui";
 import { FieldHeatmap } from "@/components/Field";
 import { LineChart } from "@/components/Chart";
 
@@ -40,6 +40,7 @@ export default function TeamSearchPage() {
   const [summary, setSummary] = useState<TeamSummary | null>(null);
   const [heat, setHeat] = useState<{ points: HeatPoint[]; total: number; made: number; accuracy: number } | null>(null);
   const [reports, setReports] = useState<TeamReport[]>([]);
+  const [pit, setPit] = useState<PitEntry | null>(null);
   // The scoring map filters by phase and driver station itself now.
   const phase = "" as "" | "auto" | "teleop";
   const [loading, setLoading] = useState(false);
@@ -58,15 +59,17 @@ export default function TeamSearchPage() {
   }, [teams, teamProfiles]);
 
   const selectTeam = useCallback(async (n: number) => {
-    setTeam(n); setLoading(true);
-    try {
-      const [s, h, r] = await Promise.all([
+    setTeam(n); setLoading(true); setSummary(null); setHeat(null); setReports([]); setPit(null);
+    const [s, h, r, p] = await Promise.allSettled([
         api<TeamSummary>(`/api/admin/team/${n}/summary`),
         api<any>(`/api/admin/team/${n}/heatmap`),
         api<TeamReport[]>(`/api/admin/team/${n}/reports`),
-      ]);
-      setSummary(s); setHeat(h); setReports(r);
-    } catch { setReports([]); }
+        api<PitEntry | null>(`/api/pit/${n}`),
+    ]);
+    if (s.status === "fulfilled") setSummary(s.value);
+    if (h.status === "fulfilled") setHeat(h.value);
+    if (r.status === "fulfilled") setReports(r.value);
+    if (p.status === "fulfilled") setPit(p.value);
     setLoading(false);
   }, []);
 
@@ -101,16 +104,21 @@ export default function TeamSearchPage() {
       {loading ? <Loading /> : !summary ? (
         <Empty icon="bot" title="Search a team" />
       ) : summary.matches === 0 ? (
-        <Empty icon="inbox" title={`No scouting data for ${team}`} />
+        <>
+          <div className="card team-name-white" style={{ marginBottom: 16 }}><TeamIdentity team={summary} size="lg" /></div>
+          <PitShowcase pit={pit} team={team || 0} />
+          <Empty icon="inbox" title={`No match scouting data for ${team}`} />
+        </>
       ) : (
         <>
           <div className="card team-name-white" style={{ marginBottom: 16 }}>
             <TeamIdentity team={summary} size="lg" />
           </div>
+          <PitShowcase pit={pit} team={team || 0} />
 
           <div className="grid cols-4" style={{ marginBottom: 16 }}>
             <Stat label="Matches" value={summary.matches} />
-            <Stat label="Avg Points" value={num(summary.avg_points)} accent />
+            <Stat label="Haze Power Rating" value={num(summary.avg_points)} accent />
             <Stat label="Consistency" value={pct(summary.consistency)} />
             <Stat label="EPA" value={summary.epa != null ? num(summary.epa, 0) : "-"} />
           </div>
@@ -209,4 +217,23 @@ export default function TeamSearchPage() {
       )}
     </div>
   );
+}
+
+function PitShowcase({ pit, team }: { pit: PitEntry | null; team: number }) {
+  const [openPhoto, setOpenPhoto] = useState<number | null>(null);
+  if (!pit) return <section className="card" style={{ marginBottom: 16 }}><h3>Pit Scouting</h3><p className="faint">No pit report for Team {team}.</p></section>;
+  const photos = Array.from(new Set([...(pit.robot_photos || []), ...(pit.robot_photo ? [pit.robot_photo] : [])]));
+  const details = ([
+    ["Drivetrain", pit.drivetrain], ["Archetype", pit.archetype], ["Weight", pit.weight_lbs ? `${pit.weight_lbs} lb` : ""],
+    ["Width", pit.width_in ? `${pit.width_in} in` : ""], ["Length", pit.length_in ? `${pit.length_in} in` : ""],
+    ["Climb", pit.can_climb], ["Auto routine", pit.auto_routine], ["Notes", pit.notes],
+  ] as [string, any][]).filter(([, value]) => value !== "" && value !== null && value !== undefined);
+  return <section className="card" style={{ marginBottom: 16 }}>
+    <div className="card-h"><h3>Pit Scouting</h3><span className="badge muted">{photos.length} photo{photos.length === 1 ? "" : "s"}</span></div>
+    {!!photos.length && <div className="pit-photo-grid">{photos.map((photo, index) => <figure key={index}><button type="button" className="pit-photo-button" aria-label={`Open pit photo ${index + 1} full size`} onClick={() => setOpenPhoto(index)}>{/* eslint-disable-next-line @next/next/no-img-element */}<img src={photo} alt={`Team ${team} robot ${index + 1}`} /><span>Open full size</span></button></figure>)}</div>}
+    <div className="report-grid" style={{ marginTop: 12 }}>{details.map(([label, value]) => <div key={label}><span className="faint">{label}</span><p>{String(value)}</p></div>)}</div>
+    {!!pit.capabilities?.length && <div className="tag-list">{pit.capabilities.map(value => <span className="chip" key={value}>{value}</span>)}</div>}
+    {!!pit.responses && Object.keys(pit.responses).length > 0 && <><h4>All pit form answers</h4><div className="report-grid">{Object.entries(pit.responses).map(([key, value]) => <div key={key}><span className="faint">{key.replaceAll("_", " ")}</span><p>{Array.isArray(value) ? value.join(", ") : typeof value === "object" ? JSON.stringify(value) : String(value || "—")}</p></div>)}</div></>}
+    {openPhoto !== null && <Modal dialog onClose={() => setOpenPhoto(null)}><div className="pit-photo-viewer"><div className="modal-head"><div><h2 style={{ margin: 0 }}>Team {team}</h2><span className="faint">Pit photo {openPhoto + 1} of {photos.length}</span></div><button type="button" className="btn" onClick={() => setOpenPhoto(null)}>Close</button></div>{/* eslint-disable-next-line @next/next/no-img-element */}<img src={photos[openPhoto]} alt={`Team ${team} robot full size ${openPhoto + 1}`} />{photos.length > 1 && <div className="btn-row" style={{ justifyContent: "center" }}><button type="button" className="btn" onClick={() => setOpenPhoto((openPhoto - 1 + photos.length) % photos.length)}>Previous</button><button type="button" className="btn primary" onClick={() => setOpenPhoto((openPhoto + 1) % photos.length)}>Next</button></div>}</div></Modal>}
+  </section>;
 }

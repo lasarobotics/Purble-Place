@@ -15,13 +15,27 @@ class PicklistIn(BaseModel):
     items: list[dict[str, Any]] = Field(default_factory=list)
     version: int | None = None
     request_id: str = ""
+    robot_number: int = 418
+    robot_name: str = "Purple Haze"
+    owner_name: str | None = None
 
 class DraftIn(PicklistIn):
     id: int
 
+class SubmitIn(PicklistIn):
+    robot_number: int
+
 class DraftBatchIn(BaseModel):
     event_key: str
     drafts: list[DraftIn]
+
+class WorkspaceIn(BaseModel):
+    event_key: str | None = None
+    name: str
+    robot_number: int = 418
+    robot_name: str = "Purple Haze"
+    first_items: list[dict[str, Any]] = Field(default_factory=list)
+    second_items: list[dict[str, Any]] = Field(default_factory=list)
 
 class ActionIn(BaseModel):
     event_key: str | None = None
@@ -94,16 +108,28 @@ def reset(body: DeleteIn, user: Scouter = Depends(require_admin)):
 def create(body: PicklistIn, user: Scouter = Depends(current_scouter)):
     return svc.save_draft(svc.event_key(body.event_key), user, body)
 
+@router.post("/workspace")
+def create_workspace(body: WorkspaceIn, user: Scouter = Depends(current_scouter)):
+    return svc.create_workspace(svc.event_key(body.event_key), user, body)
+
 @router.put("/{pid}")
 def update(pid: int, body: PicklistIn, user: Scouter = Depends(current_scouter)):
     return svc.save_draft(svc.event_key(body.event_key), user, body, pid)
+
+@router.delete("/{pid}")
+def delete_draft(pid: int, event: str | None = None, user: Scouter = Depends(current_scouter)):
+    return svc.delete_draft(svc.event_key(event), user, pid)
+
+@router.delete("/workspace/{workspace_id}")
+def delete_workspace(workspace_id: str, event: str | None = None, user: Scouter = Depends(current_scouter)):
+    return svc.delete_workspace(svc.event_key(event), user, workspace_id)
 
 @router.post("/drafts")
 def save_drafts(body: DraftBatchIn, user: Scouter = Depends(current_scouter)):
     return svc.save_drafts(svc.event_key(body.event_key), user, body.drafts)
 
 @router.post("/{pid}/submit")
-def submit(pid: int, body: PicklistIn, user: Scouter = Depends(current_scouter)):
+def submit(pid: int, body: SubmitIn, user: Scouter = Depends(current_scouter)):
     return svc.submit(svc.event_key(body.event_key), user, pid, body)
 
 # Old collaborative final-write/delete routes intentionally have no handler.

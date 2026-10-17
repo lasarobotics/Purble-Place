@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import re
+import csv
+import io
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from .. import repo
+from .. import repo, schema
 from ..analytics import (
     RANK_METRICS,
     analysis_bundle,
@@ -25,9 +28,11 @@ from ..auth import canonical_account_id, current_scouter, require_admin, require
 from ..config import settings
 from ..external import sync_event_matches
 from ..firestore_db import guard
-from ..models import ROLE_ADMIN, ROLE_SCOUTER, ROLE_STRATEGY, ROLE_PICKLIST, ROLES, Bet, Scouter
+from ..models import ROLE_ADMIN, ROLE_SCOUTER, ROLE_STRATEGY, ROLE_PICKLIST, ROLES, Bet, MatchRecord, Scouter, ScoutingAuditDocument
+from ..scouting_review import audit_state, apply_patch
 from ..realtime import emit
 from .betting import resolve_match_bets
+from .scouting import _entry_dict, _pit_dict
 from .teams import report_dict, scout_name
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -59,6 +64,7 @@ def get_settings(_: Scouter = Depends(require_admin)) -> dict:
         "post_comp_mode": s.get("post_comp_mode", "0") == "1",
         "season": settings.SEASON,
         "environment": settings.ENVIRONMENT,
+        "tba_configured": bool(settings.TBA_KEY),
     }
 
 
@@ -71,7 +77,9 @@ async def set_event(
     body: EventIn,
     _: Scouter = Depends(require_admin),
 ) -> dict:
-    event_key = body.event_key.strip()
+    event_key = body.event_key.strip().lower()
+    if event_key and not re.fullmatch(r"\d{4}[a-z0-9]+", event_key):
+        raise HTTPException(status_code=400, detail="Use a TBA event key such as 2026txman")
     # Freeze the outgoing event first. Switching is the moment its records
     # stop being readable from the cache, so this is the last chance to roll
     # them up cheaply, and doing it here means nobody has to remember to.
@@ -83,7 +91,7 @@ async def set_event(
     # This re-scopes the event-filtered caches, which costs one full read of
     # the new event's documents: the only bulk read outside a cold start.
     repo.set_setting("current_event", event_key)
-    matches = await sync_event_matches(event_key) if event_key else []
+    matches = await sync_event_matches(event_key) if event_key and settings.TBA_KEY else []
     settled = _settle_finished_matches(event_key) if event_key else 0
     emit("settings_changed", {"current_event": event_key})
     return {
@@ -96,7 +104,7 @@ async def set_event(
 
 
 class CurrentMatchIn(BaseModel):
-    match_number: int
+    match_number: int = Field(ge=1)
 
 
 @router.post("/current-match")
@@ -114,6 +122,78 @@ async def set_current_match(
         settled = _settle_finished_matches(event_key)
     emit("match_advanced", {"current_match": body.match_number})
     return {"ok": True, "current_match": body.match_number, "bets_settled": settled}
+
+
+class ScheduleCsvIn(BaseModel):
+    event_key: str = ""
+    csv_text: str
+
+
+@router.post("/schedule/csv")
+def import_schedule_csv(
+    body: ScheduleCsvIn,
+    _: Scouter = Depends(require_admin),
+) -> dict:
+    """Validate an entire CSV, then atomically replace this event's schedule."""
+    event_key = (body.event_key or repo.current_event()).strip().lower()
+    if not re.fullmatch(r"\d{4}[a-z0-9]+", event_key):
+        raise HTTPException(status_code=400, detail="Set a valid event key before importing a schedule")
+    if len(body.csv_text.encode("utf-8")) > 512 * 1024:
+        raise HTTPException(status_code=413, detail="Schedule CSV is larger than 512 KiB")
+    reader = csv.DictReader(io.StringIO(body.csv_text.lstrip("\ufeff")))
+    if not reader.fieldnames:
+        raise HTTPException(status_code=400, detail="The CSV has no header row")
+    aliases = {
+        "match": "match_number", "match_num": "match_number", "matchnumber": "match_number",
+        "red_1": "red1", "red_2": "red2", "red_3": "red3",
+        "blue_1": "blue1", "blue_2": "blue2", "blue_3": "blue3",
+    }
+    normalized_headers = {
+        aliases.get(name.strip().lower().replace(" ", "_"), name.strip().lower().replace(" ", "_"))
+        for name in reader.fieldnames if name
+    }
+    required_headers = {"match_number", "red1", "red2", "red3", "blue1", "blue2", "blue3"}
+    missing = sorted(required_headers - normalized_headers)
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Schedule CSV is missing columns: {', '.join(missing)}")
+    rows: list[MatchRecord] = []
+    seen: set[tuple[str, int]] = set()
+    for line, raw in enumerate(reader, start=2):
+        values = {
+            aliases.get((key or "").strip().lower().replace(" ", "_"), (key or "").strip().lower().replace(" ", "_")): value
+            for key, value in raw.items()
+        }
+        try:
+            match_number = int(values.get("match_number") or 0)
+            comp_level = (values.get("comp_level") or "qm").strip().lower()
+            teams = [int(values.get(key) or 0) for key in ("red1", "red2", "red3", "blue1", "blue2", "blue3")]
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=f"CSV row {line} contains a non-numeric match or team number") from exc
+        if match_number < 1:
+            raise HTTPException(status_code=400, detail=f"CSV row {line}: match_number must be at least 1")
+        if comp_level not in {"qm", "ef", "qf", "sf", "f"}:
+            raise HTTPException(status_code=400, detail=f"CSV row {line}: unsupported comp_level {comp_level!r}")
+        if any(team < 1 for team in teams):
+            raise HTTPException(status_code=400, detail=f"CSV row {line}: all six team numbers must be at least 1")
+        if len(set(teams)) != 6:
+            raise HTTPException(status_code=400, detail=f"CSV row {line}: a team cannot occupy two stations")
+        identity = (comp_level, match_number)
+        if identity in seen:
+            raise HTTPException(status_code=400, detail=f"CSV row {line}: duplicate {comp_level} match {match_number}")
+        seen.add(identity)
+        match = MatchRecord(
+            match_key=f"{event_key}_{comp_level}{match_number}", event_key=event_key,
+            comp_level=comp_level, match_number=match_number,
+        )
+        match.set_alliances(teams[:3], teams[3:])
+        rows.append(match)
+    if not rows:
+        raise HTTPException(status_code=400, detail="The CSV contains no schedule rows")
+    if len(rows) > 200:
+        raise HTTPException(status_code=400, detail="A schedule may contain at most 200 matches")
+    repo.replace_event_schedule(event_key, rows)
+    emit("settings_changed", {"current_event": event_key, "schedule_imported": True})
+    return {"ok": True, "event": event_key, "matches": len(rows)}
 
 
 class ToggleIn(BaseModel):
@@ -269,6 +349,149 @@ def get_analysis(
     return analysis_bundle(repo.resolve_event(event))
 
 
+@router.get("/raw-data")
+def raw_data(
+    event: str | None = None,
+    _: Scouter = Depends(current_scouter),
+) -> dict:
+    """Raw event records from the in-process cache; this causes no Firestore read."""
+    event_key = repo.resolve_event(event)
+    originals = [entry for entry in repo.store.all(schema.MATCH_SCOUTING) if entry.event_key == event_key]
+    states = audit_state(repo.scouting_audits(event_key))
+    expected = {team: team_summary(event_key, team).get("avg_points") for team in event_teams(event_key)}
+    entries = []
+    for original in originals:
+        state = states.get(original.submission_id, {})
+        effective = apply_patch(original, state.get("patch") or {})
+        row = _entry_dict(effective)
+        row["review"] = {k: state.get(k, v) for k, v in {"flagged": False, "voided": False, "revision": 0}.items()}
+        row["expected_avg_points"] = expected.get(effective.team_number)
+        row["original"] = _entry_dict(original) if state.get("patch") else None
+        entries.append(row)
+    return {
+        "event": event_key,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "entries": entries,
+        # Keep image bytes out of this event-wide response. Each report still
+        # exposes its photo count, while Team Search loads and locally caches
+        # the selected team's full-resolution photos on demand.
+        "pit_entries": [_pit_dict(entry, include_photos=False) for entry in repo.pits_for_event(event_key)],
+    }
+
+
+class ReviewActionIn(BaseModel):
+    reason: str = Field(min_length=2, max_length=1000)
+    category: str = Field(default="other", max_length=80)
+    expected_revision: int | None = None
+    patch: dict = Field(default_factory=dict)
+
+
+def _review_action(report_id: str, action: str, body: ReviewActionIn, admin: Scouter) -> dict:
+    original = repo.store.get(schema.MATCH_SCOUTING, report_id)
+    if original is None:
+        raise HTTPException(status_code=404, detail="Scouting report not found")
+    states = audit_state(repo.scouting_audits(original.event_key))
+    current = states.get(report_id, {"revision": 0})
+    if body.expected_revision is not None and body.expected_revision != current.get("revision", 0):
+        raise HTTPException(status_code=409, detail="This report changed since you opened it. Refresh before saving.")
+    patch = dict(body.patch or {}) if action == "edit" else {}
+    blocked = {"submission_id", "client_uuid", "id", "created_at", "payload_hash", "points"}
+    if blocked.intersection(patch):
+        raise HTTPException(status_code=400, detail="Immutable identity and computed fields cannot be edited")
+    for key in ("team_number", "match_number", "station"):
+        if key in patch:
+            try: patch[key] = int(patch[key])
+            except (TypeError, ValueError): raise HTTPException(status_code=400, detail=f"{key} must be an integer")
+    if int(patch.get("team_number", 1)) < 1 or int(patch.get("match_number", 1)) < 1:
+        raise HTTPException(status_code=400, detail="Team and match numbers must be at least 1")
+    if "station" in patch and not 1 <= int(patch["station"]) <= 3:
+        raise HTTPException(status_code=400, detail="Station must be 1-3")
+    if "alliance" in patch and patch["alliance"] not in {"red", "blue"}:
+        raise HTTPException(status_code=400, detail="Alliance must be red or blue")
+    if "comp_level" in patch and patch["comp_level"] not in {"qm", "qf", "sf", "f"}:
+        raise HTTPException(status_code=400, detail="Competition level must be qm, qf, sf, or f")
+    if len(str(patch.get("notes", ""))) > schema.MAX_NOTES_CHARS:
+        raise HTTPException(status_code=400, detail="Notes exceed the maximum length")
+    if "heatmap" in patch:
+        if not isinstance(patch["heatmap"], list):
+            raise HTTPException(status_code=400, detail="Heatmap must be a list of attempts")
+        if len(patch["heatmap"]) > schema.MAX_HEATMAP_ATTEMPTS:
+            raise HTTPException(status_code=400, detail="Heatmap has too many attempts")
+    for key in ("auto_missed", "teleop_missed", "foul_count", "successful_stops"):
+        if key in patch:
+            try: patch[key] = int(patch[key])
+            except (TypeError, ValueError): raise HTTPException(status_code=400, detail=f"{key} must be an integer")
+            if patch[key] < 0: raise HTTPException(status_code=400, detail=f"{key} cannot be negative")
+    for key in ("driver_skill", "speed_rating", "defense_rating"):
+        if key in patch:
+            try: patch[key] = int(patch[key])
+            except (TypeError, ValueError): raise HTTPException(status_code=400, detail=f"{key} must be an integer")
+            if not 1 <= patch[key] <= 5: raise HTTPException(status_code=400, detail=f"{key} must be 1-5")
+    now = datetime.now(timezone.utc).isoformat()
+    next_revision = current.get("revision", 0) + 1
+    effective_before = apply_patch(original, current.get("patch") or {})
+    before = {key: getattr(effective_before, key) if hasattr(effective_before, key) else effective_before.data.get(key)
+              for key in patch}
+    doc = ScoutingAuditDocument(id=f"{report_id}__{next_revision:06d}", event_key=original.event_key, data={
+        "event_key": original.event_key, "report_id": report_id, "action": action,
+        "reason": body.reason.strip(), "category": body.category.strip(), "patch": patch, "before": before,
+        "actor_id": admin.scout_id, "actor_name": admin.display_name, "created_at": now,
+        "previous_revision": current.get("revision", 0),
+    })
+    if not repo.create_scouting_audit(doc):
+        raise HTTPException(status_code=409, detail="This report changed while you were saving. Refresh and try again.")
+    repo.invalidate_memo()
+    emit("scouting_corrected", {"report_id": report_id, "action": action, "event": original.event_key})
+    return {"ok": True, "revision": next_revision}
+
+
+@router.post("/scouting-data/{report_id}/flag")
+def flag_report(report_id: str, body: ReviewActionIn, admin: Scouter = Depends(require_admin)) -> dict:
+    return _review_action(report_id, "flag", body, admin)
+
+@router.post("/scouting-data/{report_id}/resolve")
+def resolve_report(report_id: str, body: ReviewActionIn, admin: Scouter = Depends(require_admin)) -> dict:
+    return _review_action(report_id, "resolve_flag", body, admin)
+
+@router.post("/scouting-data/{report_id}/edit")
+def edit_report(report_id: str, body: ReviewActionIn, admin: Scouter = Depends(require_admin)) -> dict:
+    return _review_action(report_id, "edit", body, admin)
+
+@router.post("/scouting-data/{report_id}/void")
+def void_report(report_id: str, body: ReviewActionIn, admin: Scouter = Depends(require_admin)) -> dict:
+    return _review_action(report_id, "void", body, admin)
+
+@router.post("/scouting-data/{report_id}/restore")
+def restore_report(report_id: str, body: ReviewActionIn, admin: Scouter = Depends(require_admin)) -> dict:
+    return _review_action(report_id, "restore", body, admin)
+
+@router.get("/scouting-data/{report_id}/audit")
+def report_audit(report_id: str, admin: Scouter = Depends(require_admin)) -> dict:
+    original = repo.store.get(schema.MATCH_SCOUTING, report_id)
+    if original is None: raise HTTPException(status_code=404, detail="Scouting report not found")
+    rows = [r.data for r in repo.scouting_audits(original.event_key) if r.data.get("report_id") == report_id]
+    rows.sort(key=lambda r: r.get("created_at", ""))
+    return {"report_id": report_id, "actions": rows}
+
+
+class MatchReviewIn(BaseModel):
+    event_key: str = ""
+    comp_level: str = "qm"
+    match_number: int = Field(ge=1)
+    reason: str = Field(min_length=2, max_length=1000)
+    category: str = Field(default="match_review", max_length=80)
+
+
+@router.post("/scouting-data/match/void")
+def void_match_reports(body: MatchReviewIn, admin: Scouter = Depends(require_admin)) -> dict:
+    event_key = repo.resolve_event(body.event_key or None)
+    rows = [e for e in repo.store.all(schema.MATCH_SCOUTING) if e.event_key == event_key
+            and e.comp_level == body.comp_level and e.match_number == body.match_number]
+    for row in rows:
+        _review_action(row.submission_id, "void", ReviewActionIn(reason=body.reason, category=body.category), admin)
+    return {"ok": True, "count": len(rows)}
+
+
 @router.get("/event-teams")
 def list_event_teams(
     event: str | None = None,
@@ -292,7 +515,28 @@ async def get_data_analysis(
     event: str | None = None,
     _: Scouter = Depends(current_scouter),
 ) -> dict:
-    return {"teams": data_analysis(repo.resolve_event(event))}
+    event_key = repo.resolve_event(event)
+    rows = data_analysis(event_key)
+    # Match 13 is additive: if venue internet is unavailable, scouting analysis
+    # remains usable and the external columns simply display as unavailable.
+    from ..external import match13_event_ratings
+    ratings = await match13_event_ratings(event_key) if event_key else {}
+    for row in rows:
+        row.update(ratings.get(row["team"], {"opr": None, "match13_epa": None, "xp": None}))
+    existing = {row["team"] for row in rows}
+    for team, values in ratings.items():
+        if team in existing:
+            continue
+        cached = repo.team(team)
+        rows.append({
+            "team": team, "nickname": cached.nickname if cached else "", "avatar": cached.avatar if cached else "",
+            "matches": 0, "avg_points": None, "defense_capability": None, "l4m_defense_capability": None,
+            "consistency": 0.0, "l4m_consistency": 0.0, "skew_distribution": None,
+            "l4m_skew_distribution": None, "failure_rate": 0.0, "l4m_failure_rate": 0.0,
+            "foul_match_rate": 0.0, "climb_success_rate": 0.0, "l4m_climb_success_rate": 0.0,
+            "ranking_point_prediction": None, **values,
+        })
+    return {"event": event_key, "ratings_source": "match13", "teams": rows}
 
 
 @router.get("/data-picklist")

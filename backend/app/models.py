@@ -352,6 +352,7 @@ class MatchRecord:
 #: Everything the scouter observed, stored as the nested ``data`` map (the
 #: schema's JSONB column). Exempt from indexing: see schema.INDEX_EXEMPT_FIELDS.
 PAYLOAD_KEYS = (
+    "auto_missed", "teleop_missed",
     "heatmap", "auto_leave", "auto_climb", "climb", "climb_seconds",
     "tags", "played_defense", "defense_rating", "defense_on",
     "successful_stops", "driver_skill", "speed_rating",
@@ -494,7 +495,7 @@ class ScoutEntry:
 
     @property
     def heatmap(self) -> list[dict[str, Any]]:
-        return self._d("heatmap") or []
+        return [{**p, "result": "made"} for p in self._d("heatmap") or [] if isinstance(p, dict)]
 
     @property
     def auto_leave(self) -> bool:
@@ -579,6 +580,7 @@ class ScoutEntry:
         """Split a flat submission dict (API / offline-queue shape) into
         identity fields plus the nested ``data`` payload."""
         payload = {k: sub[k] for k in PAYLOAD_KEYS if k in sub}
+        payload["heatmap"] = [{**p, "result": "made"} for p in sub.get("heatmap") or [] if isinstance(p, dict)]
         if "fouls" in sub:  # API name -> schema name
             payload["foul_count"] = _int(sub.get("fouls"))
         submission_id = (
@@ -633,6 +635,10 @@ class PitEntry:
     auto_routine: str = ""
     capabilities: list[str] = field(default_factory=list)
     robot_photo: str = ""
+    # Photo bytes live in separate immutable documents. Keeping only IDs here
+    # avoids Firestore's 1 MiB document ceiling and stops a new photo from
+    # rewriting every earlier photo.
+    photo_ids: list[str] = field(default_factory=list)
     notes: str = ""
     #: Answers to fields the pit form asks that have no column here. A form
     #: built for a new game invents its own questions, and they have to be
@@ -666,6 +672,7 @@ class PitEntry:
             "auto_routine": self.auto_routine or "",
             "capabilities": list(self.capabilities or []),
             "robot_photo": self.robot_photo or "",
+            "photo_ids": list(self.photo_ids or []),
             "notes": self.notes or "",
             "responses": dict(self.responses or {}),
             "form_id": self.form_id or "",
@@ -689,12 +696,47 @@ class PitEntry:
             auto_routine=d.get("auto_routine") or "",
             capabilities=list(d.get("capabilities") or []),
             robot_photo=d.get("robot_photo") or "",
+            photo_ids=list(d.get("photo_ids") or []),
             notes=d.get("notes") or "",
             responses=dict(d.get("responses") or {}),
             form_id=d.get("form_id") or "",
             form_version=_int(d.get("form_version")),
             season_id=d.get("season_id") or "",
             updated_at=as_utc(d.get("updated_at")) or _now(),
+        )
+
+
+@dataclass
+class PitPhoto:
+    id: str
+    event_key: str
+    team_number: int
+    image: str
+    created_at: datetime = field(default_factory=_now)
+
+    COLLECTION = schema.PIT_PHOTOS
+
+    @property
+    def doc_id(self) -> str:
+        return self.id
+
+    def to_doc(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "event_key": self.event_key,
+            "team_num": _int(self.team_number),
+            "image": self.image,
+            "created_at": as_utc(self.created_at),
+        }
+
+    @classmethod
+    def from_doc(cls, doc_id: str, d: dict[str, Any]) -> "PitPhoto":
+        return cls(
+            id=d.get("id") or doc_id,
+            event_key=d.get("event_key") or "",
+            team_number=_int(d.get("team_num")),
+            image=d.get("image") or "",
+            created_at=as_utc(d.get("created_at")) or _now(),
         )
 
 
@@ -1521,17 +1563,33 @@ class PicklistHistoryDocument(PicklistDocument):
     COLLECTION = schema.PICKLIST_HISTORY
 
 
+@dataclass
+class ScoutingAuditDocument(PicklistDocument):
+    """Immutable admin action applied over an original scouting submission."""
+    event_key: str = ""
+    COLLECTION: ClassVar[str] = schema.SCOUTING_AUDIT
+
+    def to_doc(self) -> dict[str, Any]:
+        return {**super().to_doc(), "event_key": self.event_key}
+
+    @classmethod
+    def from_doc(cls, doc_id: str, d: dict[str, Any]):
+        return cls(id=doc_id, event_key=d.get("event_key") or "", data=dict(d))
+
+
 MODEL_FOR_COLLECTION = {
     schema.SCOUTERS: Scouter,
     schema.EVENTS: Event,
     schema.MATCHES: MatchRecord,
     schema.MATCH_SCOUTING: ScoutEntry,
+    schema.SCOUTING_AUDIT: ScoutingAuditDocument,
     schema.PICKLISTS: Picklist,
     schema.PICKLIST_RECORDS: PicklistDocument,
     schema.PICKLIST_WORKSPACES: PicklistWorkspaceDocument,
     schema.PICKLIST_HISTORY: PicklistHistoryDocument,
     schema.BETS: Bet,
     schema.PIT_SCOUTING: PitEntry,
+    schema.PIT_PHOTOS: PitPhoto,
     schema.TEAM_CACHE: TeamCache,
     schema.DEVICES: Device,
     schema.NETWORK_STATUS: NetworkStatus,

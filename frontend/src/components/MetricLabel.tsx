@@ -42,7 +42,7 @@ export function MetricLabel({ metric, children }: { metric?: string; children?: 
     setPosition({ left: Math.max(12, Math.min(r.left, window.innerWidth - 372)), top: r.bottom + 8 });
     void loadLastDataEntry().then(setLastDataEntry);
   }
-  const fraction = definition.formula.split(" ÷ ");
+  const formulaLines = definition.formula.split(" ; ");
   return <span ref={ref} className="metric-label" tabIndex={0} aria-describedby={position ? id : undefined}
     onMouseEnter={show} onMouseLeave={() => setPosition(null)} onFocus={show} onBlur={() => setPosition(null)}
     onClick={() => position ? setPosition(null) : show()} onKeyDown={e => { if (e.key === "Escape") setPosition(null); }}>
@@ -50,7 +50,10 @@ export function MetricLabel({ metric, children }: { metric?: string; children?: 
     {position && createPortal(<span id={id} role="tooltip" className="metric-tooltip" style={{ left: position.left, top: Math.min(position.top, window.innerHeight - 230) }}>
       <span>{definition.description}</span>
       <span className="metric-formula" aria-label={definition.formula}>
-        {fraction.length === 2 ? <span className="metric-fraction"><span>{fraction[0]}</span><span>{fraction[1]}</span></span> : definition.formula}
+        {formulaLines.map((line, index) => {
+          const fraction = line.split(" ÷ ");
+          return <span key={index} style={{ display: "block" }}>{fraction.length === 2 ? <span className="metric-fraction"><span>{fraction[0]}</span><span>{fraction[1]}</span></span> : line}</span>;
+        })}
       </span>
       <small>Last data entry: {formatLastDataEntry(lastDataEntry)}</small>
     </span>, document.body)}

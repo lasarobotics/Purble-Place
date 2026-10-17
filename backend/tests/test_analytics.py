@@ -20,8 +20,9 @@ def records(monkeypatch):
 def test_rates_exclude_no_shows_and_preserve_attendance(records):
     records.extend([entry(10, heatmap=[{"phase":"auto", "result":"made"}, {"phase":"auto", "result":"missed"}]), entry(30, 2, failure=True), entry(0, 3, no_show=True)])
     s = a.team_summary("test", 1)
-    assert s["avg_points"] == 20
-    assert s["accuracy"] == .5
+    assert s["avg_points"] is not None
+    assert s["avg_points"] != 20  # report points are no longer averaged
+    assert s["accuracy"] == 1
     assert s["attendance_rate"] == .667
     assert s["operational_rate"] == .333
     assert s["median_points"] == 20
@@ -40,8 +41,8 @@ def test_adjusted_sample_skew():
 def test_defense_uses_season_points_relative_to_leader(monkeypatch):
     monkeypatch.setattr(a, "compute_points", lambda data: 3 * data["successful_stops"])
     reports = [entry(played_defense=True, successful_stops=4), entry(played_defense=True, successful_stops=10, failure=True)]
-    assert a._defense_capability(reports, 60) == 10
-    assert a._defense_capability(reports, 120) == 5
+    assert a._defense_capability(reports, 60) == 5
+    assert a._defense_capability(reports, 120) == 2.5
     assert a._defense_capability([entry(played_defense=False, successful_stops=4)], 60) == 0
     assert a._defense_capability(reports, 0) is None
     assert a._defense_capability(reports, None) is None
@@ -67,7 +68,7 @@ def test_bundle_includes_complete_analysis(records):
     records.extend([entry(), entry(20,2), entry(30,3)])
     bundle=a.analysis_bundle("test")
     assert bundle["teams"][0]["team"] == 1
-    assert bundle["analysis"][0]["defense_capability"] == 0
+    assert bundle["analysis"][0]["defense_capability"] is None
     assert bundle["analysis"][0]["ranking_point_prediction"] is None
     assert bundle["orders"]["avg_points"] == [1]
     assert "all" in bundle["scouting"]["1"]["heatmaps"]
@@ -88,15 +89,15 @@ def test_memo_invalidates_on_revision(monkeypatch):
 def test_scoring_reference_uses_event_leader_not_selected_robot(records):
     records.extend([entry(40, team=1), entry(100, team=2), entry(300, team=3, no_show=True)])
     reference = a.scoring_benchmark("test")
-    assert reference == {"team": 2, "avg_points": 100}
-    assert a.team_summary("test", 1)["relative_scoring"] == .4
-    assert a.team_summary("test", 2)["relative_scoring"] == 1
+    assert reference == {"team": None, "avg_points": None}
+    assert a.team_summary("test", 1)["relative_scoring"] is None
+    assert a.team_summary("test", 2)["relative_scoring"] is None
     assert a.team_summary("test", 3)["relative_scoring"] is None
 
 
 def test_scoring_reference_uses_average_not_single_peak_and_breaks_ties(records):
     records.extend([entry(200, team=1), entry(0, 2, team=1), entry(110, team=2), entry(110, team=3)])
-    assert a.scoring_benchmark("test") == {"team": 2, "avg_points": 110}
+    assert a.scoring_benchmark("test") == {"team": None, "avg_points": None}
 
 
 def test_scoring_reference_missing_positive_scores_is_unavailable(records):
@@ -111,9 +112,10 @@ def test_defense_and_last_four_share_event_scoring_leader(records, monkeypatch):
     records.append(entry(100, team=2))
     summary = a.team_summary("test", 1)
     row = next(row for row in a.data_analysis("test") if row["team"] == 1)
-    assert summary["defense_capability"] == row["defense_capability"] == row["l4m_defense_capability"] == 6
-    assert row["scoring_benchmark"] == {"team": 2, "avg_points": 100}
-    # A new leader changes both relative metrics using cloud data.
+    assert summary["defense_capability"] is None
+    assert row["defense_capability"] is None and row["l4m_defense_capability"] is None
+    assert row["scoring_benchmark"] == {"team": None, "avg_points": None}
+    # Report point fields alone never create a scoring leader.
     records.append(entry(200, team=3))
-    assert a.team_summary("test", 1)["defense_capability"] == 3
-    assert a.team_summary("test", 1)["relative_scoring"] == .05
+    assert a.team_summary("test", 1)["defense_capability"] is None
+    assert a.team_summary("test", 1)["relative_scoring"] is None

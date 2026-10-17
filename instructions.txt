@@ -213,7 +213,8 @@ Now edit  backend\.env  and set:
 
     HAZEHUB_TEAM_PASSWORD=<the password everyone types to sign in>
     HAZEHUB_SECRET=<a long random string — signs the login tokens>
-    TBA_AUTH_KEY=<your own key from thebluealliance.com/account>
+    TBA_AUTH_KEY=<your own key from thebluealliance.com/account, optional>
+    MATCH13_API_KEY=<your Match 13 live API key, optional>
 
   Change HAZEHUB_TEAM_PASSWORD and HAZEHUB_SECRET before your first real
   event. The defaults are published in this repository. Changing
@@ -297,6 +298,11 @@ Two ways:
   A. From the app (normal):
        Sign in as admin -> Admin -> set the event key (e.g. 2026txman) -> Save.
        That pulls the schedule from The Blue Alliance.
+
+  If no TBA key is configured, the Admin page shows Import schedule CSV after
+  you set the event key. The required columns are match_number, red1, red2,
+  red3, blue1, blue2 and blue3; comp_level is optional and defaults to qm.
+  HazeHub validates every row before replacing the current schedule.
 
   B. From the command line, if you also want team photos, EPA and synthetic
      test data pre-loaded:
@@ -541,6 +547,10 @@ SETUP
 
      TBA_AUTH_KEY
          Your Blue Alliance key.
+
+     MATCH13_API_KEY
+         Your Match 13 live API key. It stays on the server and powers the
+         OPR, EPA, xP, xAuto, xTele, xEnd, and SOS analysis columns.
 
      HAZEHUB_SECRET is generated for you.
      FIREBASE_PROJECT_ID is already set to hazehub-8a941 in render.yaml.

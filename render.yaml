@@ -46,6 +46,8 @@ services:
         generateValue: true      # Render generates a strong random value once
       - key: TBA_AUTH_KEY
         sync: false
+      - key: MATCH13_API_KEY
+        sync: false
 
       # --- App ---------------------------------------------------------------
       - key: HAZEHUB_SEASON

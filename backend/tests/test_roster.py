@@ -66,6 +66,8 @@ def test_rejection_message_does_not_list_the_valid_ids():
         # A justification can reference a match; reading it must work.
         ("/api/scout/match/12", "GET", True),
         ("/api/pit/254", "GET", True),
+        ("/api/matches/event-ratings", "GET", True),
+        ("/api/admin/analysis", "GET", True),
         # ...but the projector account still cannot write anything.
         ("/api/scout", "POST", False),
         ("/api/pit", "POST", False),

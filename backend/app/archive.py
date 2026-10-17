@@ -88,7 +88,7 @@ def build_archive(event_key: str, name: str | None = None) -> EventArchive:
     # the submissions they came from.
     teams = {}
     for team in event_teams(event_key):
-        summary = team_summary(event_key, team)
+        summary = dict(team_summary(event_key, team))
         # Two things are dropped, both for size. A Firestore document
         # is capped at 1 MiB and a champs-sized event is 60+ teams, so the
         # archive has to stay lean or it stops being writable at exactly the

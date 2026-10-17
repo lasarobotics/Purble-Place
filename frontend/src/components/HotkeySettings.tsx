@@ -7,8 +7,8 @@ export function HotkeySettings({ keys, onSave, onClose }: { keys: Hotkeys; onSav
   const [draft, setDraft] = useState(keys);
   return <Modal onClose={onClose}><div role="dialog" aria-modal="true" aria-labelledby="hotkey-title">
     <h2 id="hotkey-title">Scouting hotkeys</h2>
-    <p className="muted">Choose a unique letter or number for each action. Changes lock when scouting starts. Made/missed selects the next field-tap result.</p>
-    <div className="grid auto">{(Object.keys(DEFAULT_HOTKEYS) as (keyof Hotkeys)[]).map(action => <label className="field" key={action}>
+    <p className="muted">Choose a unique letter or number for each action. Changes lock when scouting starts. Field taps record missed shots.</p>
+    <div className="grid auto">{(["auto", "teleop", "undo", "clear"] as (keyof Hotkeys)[]).map(action => <label className="field" key={action}>
       <span>{HOTKEY_LABELS[action]}</span><input aria-label={HOTKEY_LABELS[action]} value={draft[action]} maxLength={1}
         onChange={e => setDraft({ ...draft, [action]: e.target.value.toLowerCase() })} />
     </label>)}</div>

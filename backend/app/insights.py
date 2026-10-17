@@ -52,7 +52,8 @@ def _evidence(event_key: str, team: int) -> dict[str, Any]:
     field = [f for f in all_summaries(event_key).values() if f["matches"] > 0]
 
     def pct(key: str) -> float:
-        return round(_percentile([f[key] for f in field], s[key]), 2)
+        values = [f[key] for f in field if f.get(key) is not None]
+        return round(_percentile(values, s[key]), 2) if s.get(key) is not None else 0.5
 
     notes = [
         {"match": e.match_number, "scout": e.scout_id, "note": e.notes.strip()}
@@ -65,7 +66,7 @@ def _evidence(event_key: str, team: int) -> dict[str, Any]:
         if e.failure
     ]
     return {
-        "summary": s,
+        "summary": {**s, "avg_points": s.get("avg_points") or 0.0},
         "pct": {
             "avg_points": pct("avg_points"),
             "consistency": pct("consistency"),

@@ -20,10 +20,11 @@ from . import repo, schema
 from . import seasons
 from .models import ScoutEntry
 from .scoring import attempt_value, compute_points, phase_counts
+from .expected_points import estimate_avg_points
 
 #: Revision keys for the memoiser: any change to scouting or team data
 #: invalidates every derived aggregate below.
-_DEPS = (schema.MATCH_SCOUTING, schema.TEAM_CACHE, schema.MATCHES, schema.SEASONS, schema.SEASON_REVISIONS)
+_DEPS = (schema.MATCH_SCOUTING, schema.SCOUTING_AUDIT, schema.TEAM_CACHE, schema.MATCHES, schema.SEASONS, schema.SEASON_REVISIONS)
 
 
 # --------------------------------------------------------------------------- #
@@ -75,11 +76,11 @@ def scoring_benchmark(event_key: str) -> dict[str, Any]:
         best_team = None
         best_score = 0.0
         for team in sorted(event_teams(event_key)):
-            reports = [e for e in team_entries(event_key, team) if not e.no_show]
+            reports = team_entries(event_key, team)
             if not reports:
                 continue
-            score = statistics.fmean(e.points for e in reports)
-            if score > best_score:
+            score = estimate_avg_points(reports, repo.scouting_for_event(event_key))
+            if score is not None and score > best_score:
                 best_team, best_score = team, score
         return {"team": best_team, "avg_points": best_score if best_team is not None else None}
     return repo.memoized(f"scoring-benchmark:{event_key}", _DEPS, build)
@@ -99,8 +100,12 @@ def _defense_capability(entries: list[ScoutEntry], benchmark_points: float | Non
         if not e.played_defense or e.failure:
             continue
         provenance = {"season_id": e.season_id, "game_version": e.game_version}
-        baseline = compute_points({**provenance, "successful_stops": 0})
-        stopped = compute_points({**provenance, "successful_stops": max(0, e.successful_stops)})
+        # Keep the independent defense proxy; stops no longer add report points.
+        from .gamedef import score
+        from .scoring import definition_for
+        game = definition_for(provenance)
+        baseline = score({"successful_stops": 0}, [], game)
+        stopped = score({"successful_stops": max(0, e.successful_stops)}, [], game)
         total += max(0.0, stopped - baseline)
     return round(100 * total / len(entries) / benchmark_points, 2)
 
@@ -131,8 +136,9 @@ def _entry_scoring_points(entry: ScoutEntry) -> float:
         entry.season_id or seasons.current_season_id(),
         int(entry.game_version or 0),
     )
-    total = 0.0
-    records = list(entry.actions or []) + list(entry.heatmap or [])
+    from .epa_scoring import flat_report
+    total = max(0.0, entry.points - compute_points(flat_report(entry), heatmap_value=0)) if not entry.no_show else 0.0
+    records = list(entry.actions or []) if not entry.no_show else []
     for record in records:
         if not isinstance(record, dict):
             continue
@@ -257,6 +263,7 @@ def _build_team_summary(event_key: str, team: int) -> dict[str, Any]:
     entries = [e for e in all_entries if not e.no_show]
     no_shows = len(all_entries) - len(entries)
     pts = [e.points for e in entries]
+    expected_points = estimate_avg_points(all_entries, repo.scouting_for_event(event_key))
     n = len(entries)
 
     per_match: dict[tuple[str, int], list[float]] = {}
@@ -269,7 +276,7 @@ def _build_team_summary(event_key: str, team: int) -> dict[str, Any]:
 
     counts = {"auto_made": 0, "auto_missed": 0, "teleop_made": 0, "teleop_missed": 0}
     for e in entries:
-        c = phase_counts({"heatmap": e.heatmap, "actions": e.actions})
+        c = phase_counts({**e.data, "heatmap": e.heatmap, "actions": e.actions})
         for k in counts:
             counts[k] += c[k]
 
@@ -296,7 +303,7 @@ def _build_team_summary(event_key: str, team: int) -> dict[str, Any]:
     trend = sum((i - xbar) * (p - statistics.fmean(series)) for i, p in enumerate(series)) / denominator if denominator else None
     return {
         "scoring_benchmark": benchmark,
-        "relative_scoring": ratio(statistics.fmean(pts), benchmark["avg_points"]) if pts else None,
+        "relative_scoring": ratio(expected_points, benchmark["avg_points"]) if expected_points is not None else None,
         "accuracy": ratio(counts["auto_made"] + counts["teleop_made"], auto_n + tele_n),
         "auto_accuracy": ratio(counts["auto_made"], auto_n),
         "teleop_accuracy": ratio(counts["teleop_made"], tele_n),
@@ -314,7 +321,7 @@ def _build_team_summary(event_key: str, team: int) -> dict[str, Any]:
         "avatar": tc.avatar if tc else "",
         "epa": tc.epa if tc else None,
         "matches": n,
-        "avg_points": round(statistics.fmean(pts), 2) if pts else 0.0,
+        "avg_points": expected_points,
         "max_points": round(max(pts), 2) if pts else 0.0,
         "min_points": round(min(pts), 2) if pts else 0.0,
         "std_points": round(statistics.pstdev(pts), 2) if n >= 2 else 0.0,
@@ -378,7 +385,7 @@ RANK_METRICS = {
     "failure_rate": "Failure rate",
     "std_points": "Scoring deviation",
     "total_fouls": "Total fouls",
-    "avg_points": "Avg points",
+    "avg_points": "Haze Power Rating",
     "max_points": "Peak points",
     "consistency": "Consistency",
     "climb_rate": "Climb rate",
@@ -441,6 +448,7 @@ def data_analysis(event_key: str) -> list[dict[str, Any]]:
                     "nickname": summary["nickname"],
                     "avatar": summary["avatar"],
                     "matches": summary["matches"],
+                    "avg_points": summary["avg_points"],
                     "defense_capability": _defense_capability(entries, benchmark["avg_points"]),
                     "l4m_defense_capability": _defense_capability(l4m, benchmark["avg_points"]),
                     "scoring_benchmark": benchmark,
@@ -472,11 +480,20 @@ def team_heatmap(
 ) -> dict[str, Any]:
     def build() -> dict[str, Any]:
         points: list[dict[str, Any]] = []
+        misses: list[dict[str, Any]] = []
         by_station: dict[str, dict[str, int]] = {}
         for e in team_entries(event_key, team):
             if e.no_show:
                 continue
             slot = f"{e.alliance}{e.station}"
+            for missed_phase in ("auto", "teleop"):
+                if phase and missed_phase != phase:
+                    continue
+                count = int(e.data.get(f"{missed_phase}_missed") or 0)
+                if count:
+                    misses.append({"phase": missed_phase, "station": slot, "count": count})
+                    bucket = by_station.setdefault(slot, {"total": 0, "made": 0})
+                    bucket["total"] += count
             for a in e.heatmap or []:
                 if phase and a.get("phase") != phase:
                     continue
@@ -503,14 +520,19 @@ def team_heatmap(
             for station_key in ("all", "red1", "red2", "red3", "blue1", "blue2", "blue3"):
                 selected = [p for p in points if (phase_key == "all" or p["phase"] == phase_key) and (station_key == "all" or f'{p["alliance"]}{p["station"]}' == station_key)]
                 successes = sum(p["result"] == "made" for p in selected)
-                filters[f"{phase_key}|{station_key}"] = {"total": len(selected), "made": successes, "accuracy": round(successes / len(selected), 3) if selected else None}
+                missed = sum(m["count"] for m in misses if (phase_key == "all" or m["phase"] == phase_key) and (station_key == "all" or m["station"] == station_key))
+                total = len(selected) + missed
+                filters[f"{phase_key}|{station_key}"] = {"total": total, "made": successes, "missed": missed, "accuracy": round(successes / total, 3) if total else None}
         made = sum(1 for p in points if p["result"] == "made")
+        missed = sum(m["count"] for m in misses)
+        total = len(points) + missed
         return {
             "team": team,
             "points": points,
-            "total": len(points),
+            "total": total,
             "made": made,
-            "accuracy": round(made / len(points), 3) if points else None,
+            "missed": missed,
+            "accuracy": round(made / total, 3) if total else None,
             "filters": filters,
             "by_station": [
                 {
@@ -582,7 +604,7 @@ def data_picklist(event_key: str) -> dict[str, Any]:
                     "opp_strength": round(opp_strength, 1),
                     "partner_help": round(partner_help, 1),
                     "sos": round(sos, 1),
-                    "base": s["avg_points"],
+                    "base": s["avg_points"] or 0.0,
                     "reliability": s["consistency"],
                 }
             )
@@ -656,8 +678,11 @@ def scout_disagreements(event_key: str) -> dict[str, Any]:
             return {"event": event_key, "teams": []}
 
         # Percentile helpers across the event.
-        def _pct(values: dict[int, float], team: int) -> float:
-            vals = sorted(values.values())
+        def _pct(values: dict[int, float | None], team: int) -> float:
+            target = values.get(team)
+            vals = sorted(v for v in values.values() if v is not None)
+            if target is None:
+                return 0.5
             if len(vals) < 2:
                 return 0.5
             below = sum(1 for v in vals if v < values[team])

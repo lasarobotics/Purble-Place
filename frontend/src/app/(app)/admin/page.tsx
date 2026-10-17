@@ -17,6 +17,7 @@ interface AdminSettings {
   post_comp_mode: boolean;
   season: number;
   environment: string;
+  tba_configured: boolean;
 }
 
 const ENV_LABEL: Record<string, string> = {
@@ -61,6 +62,8 @@ export default function AdminDashboard() {
   const [passwordResetOpen, setPasswordResetOpen] = useState(false);
   const [passwordResetId, setPasswordResetId] = useState("");
   const [passwordResetError, setPasswordResetError] = useState("");
+  const [scheduleImportOpen, setScheduleImportOpen] = useState(false);
+  const [scheduleFile, setScheduleFile] = useState<File | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -90,13 +93,29 @@ export default function AdminDashboard() {
     try {
       const r = await api<{ matches: number; bets_settled?: number }>("/api/admin/event", { method: "POST", body: { event_key: event.trim() } });
       if (r.matches === 0) {
-        toast("Event set, but TBA returned no schedule, check the key (e.g. 2026txaus), or the schedule isn't published yet", "err");
+        toast(s?.tba_configured
+          ? "Event set, but TBA returned no schedule. Check the event key or import a CSV."
+          : "Event set. No TBA key is configured, so import the schedule CSV below.", "err");
       } else {
         toast(`Event set · ${r.matches} matches loaded`, "ok");
       }
       if (r.bets_settled) toast(`${r.bets_settled} bets settled from TBA results`, "ok");
       await load();
     } catch (e: any) { toast(e.message || "Failed", "err"); } finally { setBusy(""); }
+  }
+  async function importSchedule(file: File) {
+    if (!event.trim()) return toast("Set the event key before importing a schedule", "err");
+    if (!file.name.toLowerCase().endsWith(".csv")) return toast("Choose a .csv schedule file", "err");
+    setBusy("schedule-csv");
+    try {
+      const result = await api<{ matches: number }>("/api/admin/schedule/csv", {
+        method: "POST", body: { event_key: event.trim(), csv_text: await file.text() },
+      });
+      toast(`Imported ${result.matches} matches`, "ok");
+      setScheduleImportOpen(false); setScheduleFile(null);
+      await load();
+    } catch (e: any) { toast(e.message || "Could not import the schedule", "err"); }
+    finally { setBusy(""); }
   }
   async function archiveAndReset() {
     if (!s.current_event) return toast("Set an event before archiving", "err");
@@ -130,6 +149,7 @@ export default function AdminDashboard() {
     }
   }
   async function saveCurrent(n: number) {
+    if (n < 1) return toast("Current match must be at least 1", "err");
     setCurMatch(n);
     try {
       const r = await api<{ bets_settled: number }>("/api/admin/current-match", { method: "POST", body: { match_number: n } });
@@ -221,6 +241,8 @@ export default function AdminDashboard() {
             <input value={event} onChange={(e) => setEvent(e.target.value)} placeholder="e.g. 2026txende" />
           </label>
           <button className="btn primary" onClick={saveEvent} disabled={busy === "event"}>{busy === "event" ? "Loading schedule..." : "Set event & sync schedule"}</button>
+          {!s.tba_configured && <p className="muted">No TBA key is configured. Import the event schedule from a CSV file.</p>}
+          <button className="btn" style={{ marginLeft: 8 }} onClick={() => { setScheduleFile(null); setScheduleImportOpen(true); }}>Import match schedule CSV</button>
           <button className="btn danger" style={{ marginLeft: 8 }} onClick={archiveAndReset} disabled={busy === "archive-reset" || !s.current_event}>
             {busy === "archive-reset" ? "Archiving..." : "Archive Competition & Start Fresh"}
           </button>
@@ -278,6 +300,8 @@ export default function AdminDashboard() {
 
       {openArchive && <ArchiveViewer archive={openArchive} onClose={() => setOpenArchive(null)} />}
 
+      {scheduleImportOpen && <Modal dialog onClose={() => busy !== "schedule-csv" && setScheduleImportOpen(false)}><div className="schedule-import-dialog"><div><h2>Import Match Schedule</h2><p className="muted">Choose a CSV for <b>{event.trim() || "the current event"}</b>. The entire file is checked before the current schedule changes.</p></div><section className="csv-format-help"><h3>CSV format</h3><p>The first row must contain these headers. <code>comp_level</code> is optional and defaults to <code>qm</code>.</p><pre>match_number,comp_level,red1,red2,red3,blue1,blue2,blue3{"\n"}1,qm,418,436,254,148,118,2848</pre><p>Use one row per match and positive team numbers. Qualification match numbers must be unique.</p></section><label className="schedule-file-picker"><span>Schedule CSV file</span><input type="file" accept=".csv,text/csv" disabled={busy === "schedule-csv"} onChange={e => setScheduleFile(e.target.files?.[0] || null)} /><small>{scheduleFile ? scheduleFile.name : "No file selected"}</small></label><div className="btn-row"><button className="btn primary" disabled={!scheduleFile || busy === "schedule-csv" || !event.trim()} onClick={() => scheduleFile && void importSchedule(scheduleFile)}>{busy === "schedule-csv" ? "Importing…" : "Import schedule"}</button><button className="btn" disabled={busy === "schedule-csv"} onClick={() => setScheduleImportOpen(false)}>Cancel</button></div></div></Modal>}
+
       {passwordResetOpen && (
         <Modal onClose={() => { if (busy !== "password-reset") setPasswordResetOpen(false); }}>
           <form onSubmit={resetUserPassword} role="dialog" aria-modal="true" aria-labelledby="password-reset-title">
@@ -311,7 +335,7 @@ export default function AdminDashboard() {
         <div className="card-h"><h3>Match Schedule</h3>
           <div className="row" style={{ gap: 10 }}>
             <span className="muted">Current match</span>
-            <Stepper value={curMatch} onChange={saveCurrent} />
+            <Stepper value={Math.max(1, curMatch || 1)} min={1} onChange={saveCurrent} />
           </div>
         </div>
         <div className="table-wrap" style={{ maxHeight: 360, overflowY: "auto" }}>
@@ -465,7 +489,7 @@ function ArchiveViewer({ archive, onClose }: { archive: ArchiveDetail; onClose: 
 
       <div className="table-wrap" style={{ maxHeight: 280, overflowY: "auto", marginBottom: 14 }}>
         <table className="data">
-          <thead><tr><th>Team</th><th className="num">Matches</th><th className="num">Avg</th><th className="num">Consistency</th><th className="num">Climb</th><th className="num">Failure</th></tr></thead>
+          <thead><tr><th>Team</th><th className="num">Matches</th><th className="num">Haze Power Rating</th><th className="num">Consistency</th><th className="num">Climb</th><th className="num">Failure</th></tr></thead>
           <tbody>
             {teamRows.map((t: any) => (
               <tr key={t.team}>
