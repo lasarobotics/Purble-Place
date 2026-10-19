@@ -7,6 +7,7 @@ export const metadata: Metadata = {
   description: "Purple Haze scouting, strategy and picklist hub for FRC.",
   manifest: "/manifest.webmanifest",
   appleWebApp: { capable: true, title: "HazeHub", statusBarStyle: "black-translucent" },
+  other: { "mobile-web-app-capable": "yes" },
 };
 
 export const viewport: Viewport = {

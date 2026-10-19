@@ -1,0 +1,23 @@
+{
+  "name": "hazehub-cloudflare-foundation",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test tests/proxy.test.mjs tests/firestore.test.mjs",
+    "bench": "npm run build && node tests/load.mjs",
+    "dev": "wrangler dev -c gateway/wrangler.jsonc",
+    "build:frontend": "node scripts/export-frontend.mjs",
+    "deploy:staging": "npm run build:frontend && wrangler deploy -c gateway/wrangler.jsonc",
+    "migrate:local": "wrangler d1 migrations apply hazehub-staging --local -c domain/wrangler.jsonc",
+    "migrate:validate": "node scripts/migrate-validate.mjs"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261018.1",
+    "esbuild": "^0.25.0",
+    "miniflare": "5.20261012.1-beta",
+    "typescript": "^5.5.3",
+    "wrangler": "4.151.1"
+  }
+}

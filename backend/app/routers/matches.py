@@ -118,7 +118,10 @@ async def event_ratings(
 ) -> dict:
     """Public HazeHub proxy for Match 13; credentials stay on the server."""
     event_key = repo.resolve_event(event)
-    ratings = await match13_event_ratings(event_key) if event_key else {}
+    try:
+        ratings = await match13_event_ratings(event_key) if event_key else {}
+    except Exception:  # noqa: BLE001 — upstream outage must not crash the page
+        ratings = {}
     return {"event": event_key, "source": "match13", "teams": [
         {"team": team, **values} for team, values in sorted(ratings.items())
     ]}

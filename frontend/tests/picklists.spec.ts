@@ -17,6 +17,7 @@ async function setup(context: BrowserContext, admin: boolean, shared: any) {
     const method = route.request().method();
     let result: any = {};
     if (path === "/api/auth/me") result = session;
+    else if (path === "/api/admin/event-teams") result = profiles.map(t => t.team_number);
     else if (path === "/api/admin/analysis") result = { teams: profiles.map(t => ({ team: t.team_number })), profiles, scouting: {}, orders: { avg_points: [] } };
     else if (path === "/api/events") result = { now: new Date().toISOString(), events: [] };
     else if (path === "/api/matches") result = { matches: [] };

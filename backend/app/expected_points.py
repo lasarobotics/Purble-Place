@@ -81,11 +81,21 @@ def _typical(values: list[float]) -> float:
     return 0.75 * med + 0.25 * weighted
 
 
-def estimate_avg_points(team_entries: list[ScoutEntry], event_entries: list[ScoutEntry]) -> float | None:
+def prepare_event(entries: list[ScoutEntry]) -> dict[str, Any]:
+    """Event priors once, retaining the original consensus and summation order."""
+    matches = _consensus(entries)
+    categories = {cat for match in matches for cat in match["counts"]}
+    return {"totals": {cat: (sum(m["counts"].get(cat, (0, 0))[0] for m in matches),
+                             sum(m["counts"].get(cat, (0, 0))[1] for m in matches)) for cat in categories},
+            "states": Counter(m["climb"] for m in matches), "matches": len(matches)}
+
+
+def estimate_avg_points(team_entries: list[ScoutEntry], event_entries: list[ScoutEntry],
+                        *, event_context: dict[str, Any] | None = None) -> float | None:
     """Estimate a typical future contribution without EPA or match results."""
     matches = _consensus(team_entries)
     if not matches: return None
-    event_matches = _consensus(event_entries)
+    context = event_context if event_context is not None else prepare_event(event_entries)
     game = definition_for({"season_id": matches[-1]["representative"].season_id,
                            "game_version": matches[-1]["representative"].game_version})
     k = float((game.extras or {}).get("accuracy_smoothing_k", 20))
@@ -99,8 +109,7 @@ def estimate_avg_points(team_entries: list[ScoutEntry], event_entries: list[Scou
         own_made = sum(m["counts"].get(cat, (0, 0))[0] for m in matches)
         own_miss = sum(m["counts"].get(cat, (0, 0))[1] for m in matches)
         attempts = own_made + own_miss
-        event_made = sum(m["counts"].get(cat, (0, 0))[0] for m in event_matches)
-        event_miss = sum(m["counts"].get(cat, (0, 0))[1] for m in event_matches)
+        event_made, event_miss = context["totals"].get(cat, (0, 0))
         event_attempts = event_made + event_miss
         if attempts <= 0: continue
         prior = event_made / event_attempts if event_attempts else own_made / attempts
@@ -122,9 +131,8 @@ def estimate_avg_points(team_entries: list[ScoutEntry], event_entries: list[Scou
     # Conservative endgame probabilities: two prior matches distributed by
     # the event, falling back to the configured no-result state.
     states = [m["climb"] for m in matches]
-    event_states = [m["climb"] for m in event_matches]
     for state in {s.key for s in game.endgame}:
-        event_rate = event_states.count(state) / len(event_states) if event_states else (1.0 if state == game.endgame_none else 0.0)
+        event_rate = context["states"][state] / context["matches"] if context["matches"] else (1.0 if state == game.endgame_none else 0.0)
         probability = (states.count(state) + 2 * event_rate) / (len(states) + 2)
         points = game.endgame_points(state)
         total += probability * points

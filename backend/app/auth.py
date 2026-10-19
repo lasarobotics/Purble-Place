@@ -5,6 +5,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 import time
 from datetime import datetime, timezone
@@ -15,6 +16,13 @@ from fastapi import Depends, Header, HTTPException, Request, status
 from . import repo, schema
 from .config import settings
 from .models import ROLE_ADMIN, ROLE_SCOUTER, Scouter
+
+log = logging.getLogger("hazehub.auth")
+
+
+def _auth_failure(reason: str) -> None:
+    # Fixed reason codes only: never log tokens, passwords or account IDs.
+    log.info("authentication_rejected reason=%s", reason)
 
 
 def next_s_number() -> int:
@@ -28,14 +36,23 @@ def _sign(data: bytes) -> str:
 
 
 def create_token(scout_id: str, is_admin: bool) -> str:
+    account = repo.scouter(scout_id)
     body = {
         "sub": scout_id,
         "admin": is_admin,
         "auth_version": 2,
+        "credential_revision": credential_revision(account) if account else "",
         "exp": int(time.time()) + settings.TOKEN_TTL_HOURS * 3600,
     }
     raw = base64.urlsafe_b64encode(json.dumps(body).encode()).decode().rstrip("=")
     return f"{raw}.{_sign(raw.encode())}"
+
+
+def credential_revision(account: Scouter) -> str:
+    raw = account.password_hash or ""
+    if account.auth_revision:
+        raw += f"|{account.auth_revision}"
+    return _sign(raw.encode())
 
 
 def _b64decode(s: str) -> bytes:
@@ -78,7 +95,7 @@ def verify_team_password(password: str) -> bool:
 def verify_login_password(scout_id: str, password: str) -> bool:
     canonical = canonical_account_id(scout_id)
     account = repo.scouter(canonical) if canonical else None
-    if not account:
+    if not account or not account.active or account.deleted:
         return False
     if account.password_hash:
         return verify_password(password, account.password_hash)
@@ -115,6 +132,9 @@ def canonical_account_id(scout_id: str) -> Optional[str]:
     if not key:
         return None
     lowered = key.lower()
+    for account in repo.scouters():
+        if account.scout_id.lower() == lowered:
+            return account.scout_id
     for canonical in settings.ACCOUNTS:
         if canonical.lower() == lowered:
             return canonical
@@ -187,6 +207,7 @@ PICKLIST_ALLOWED_PREFIXES = (
     "/api/events",
     "/api/health",
     "/api/matches",
+    "/api/pages",
 )
 
 #: Read-only paths that need a method check as well as a prefix. Picklist
@@ -212,18 +233,32 @@ def current_scouter(
     request: Request, authorization: str = Header(default="")
 ) -> Scouter:
     token = authorization.removeprefix("Bearer ").strip()
+    # Cookie restoration is restricted to this read-only endpoint. Mutations
+    # still require an explicit bearer header, avoiding cookie-based CSRF.
+    if not token and request.method == "GET" and request.url.path == "/api/auth/me":
+        token = request.cookies.get("hazehub_session", "")
     body = decode_token(token)
     if not body:
+        _auth_failure("missing_token" if not token else "invalid_or_expired_token")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not signed in",
         )
     scouter = repo.scouter(body["sub"])
-    if scouter is None or canonical_account_id(scouter.scout_id) != scouter.scout_id:
+    if scouter is None and not repo.store.ready and (repo.store.backend is not None or repo.store.error):
+        _auth_failure("account_cache_unavailable")
+        raise HTTPException(status_code=503, detail="Accounts are temporarily unavailable. Please retry.")
+    if scouter is None or not scouter.active or scouter.deleted or canonical_account_id(scouter.scout_id) != scouter.scout_id:
+        _auth_failure("account_removed")
         raise HTTPException(status_code=401, detail="Unknown scouter")
     if scouter.scout_id != "Admin" and not scouter.password_hash:
+        _auth_failure("password_setup_required")
         raise HTTPException(status_code=401, detail="Password setup required")
-    scouter.role = settings.ACCOUNTS[scouter.scout_id]
+    if not hmac.compare_digest(body.get("credential_revision", ""), credential_revision(scouter)):
+        _auth_failure("credential_revision_changed")
+        raise HTTPException(status_code=401, detail="Credentials changed. Sign in again.")
+    if scouter.scout_id == "Admin":
+        scouter.role = ROLE_ADMIN
     if scouter.picklist_only and not _picklist_account_may_reach(
         request.url.path, request.method
     ):

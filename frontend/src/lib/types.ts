@@ -1,6 +1,9 @@
 export type Role = "scouter" | "strategy" | "admin" | "picklist";
 
 export interface Session {
+  name_confirmed?: boolean;
+  offline_until?: number;
+  s_number?: number;
   token: string;
   scout_id: string;
   role: Role;

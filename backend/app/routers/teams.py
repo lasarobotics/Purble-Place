@@ -87,7 +87,7 @@ def get_team_scouting(
     event_key = repo.resolve_event(event)
     reports = [
         report_dict(e, scout_name(e.scout_id))
-        for e in team_entries(event_key, team_number)
+        for e in sorted(team_entries(event_key, team_number), key=lambda e: ({"qm": 0, "ef": 1, "qf": 2, "sf": 3, "f": 4}.get(e.comp_level, 0), e.match_number, e.created_at), reverse=True)
     ]
     return {
         "summary": team_summary(event_key, team_number),

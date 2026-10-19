@@ -1,0 +1,26 @@
+[
+  {
+    "teams": 73,
+    "submissions": 147,
+    "cold_ms": 497.145,
+    "warm_median_ms": 0.001,
+    "output_sha256": "7d02ebb0de8a8c46812056cc1ce51e8909e7ada91785ab8a590840b5ffcb468f",
+    "peak_rss_mib": 29.55
+  },
+  {
+    "teams": 73,
+    "submissions": 735,
+    "cold_ms": 2104.744,
+    "warm_median_ms": 0.0009,
+    "output_sha256": "13f57363d5a111e2ad8523849893c4bc72babac8a66a28f3c2bb1bda01e9bb3a",
+    "peak_rss_mib": 39.18
+  },
+  {
+    "teams": 150,
+    "submissions": 1470,
+    "cold_ms": 4498.562,
+    "warm_median_ms": 0.0009,
+    "output_sha256": "4d5359bfbbd345c54750c0618a280c2fa69db9f4f8666de7aa6beecf49444d72",
+    "peak_rss_mib": 51.55
+  }
+]

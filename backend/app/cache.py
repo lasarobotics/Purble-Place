@@ -322,6 +322,7 @@ class Store:
         self.error = ""
         #: pending coalesced writes: (collection, doc_id) -> (model, due_at)
         self._pending: dict[tuple[str, str], tuple[Any, float]] = {}
+        self._durable_lock = threading.RLock()
         self._flusher: Optional[threading.Thread] = None
         self._stop = threading.Event()
         #: last time each document was actually written (rate-limit guard)
@@ -582,6 +583,10 @@ class Store:
         return len(ops)
 
     def atomic_replace(self, models: list[Any], deletes: list[tuple[str, str]]) -> int:
+        with self._durable_lock:
+            return self._atomic_replace(models, deletes)
+
+    def _atomic_replace(self, models: list[Any], deletes: list[tuple[str, str]]) -> int:
         """Durably apply one bounded replacement before changing the RAM mirror.
 
         Schedule CSV imports use this path so validation or a Firestore error
@@ -610,10 +615,12 @@ class Store:
         with self._lock:
             touched: set[str] = set()
             for collection, doc_id in deletes:
+                self._pending.pop((collection, doc_id), None)
                 self._docs.get(collection, {}).pop(doc_id, None)
                 self._written.pop((collection, doc_id), None)
                 touched.add(collection)
             for model, collection, doc_id, _, canon in prepared:
+                self._pending.pop((collection, doc_id), None)
                 if collection not in schema.WRITE_ONLY:
                     self._docs.setdefault(collection, {})[doc_id] = model
                     self._written[(collection, doc_id)] = canon
@@ -723,6 +730,10 @@ class Store:
             self._pending[(collection, doc_id)] = (model, time.monotonic() + delay_s)
 
     def flush(self) -> int:
+        with self._durable_lock:
+            return self._flush_pending()
+
+    def _flush_pending(self) -> int:
         """Write every coalesced document that is due (or all, on shutdown)."""
         now = time.monotonic()
         shutting_down = self._stop.is_set()

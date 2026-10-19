@@ -1534,3 +1534,6 @@ table.data tbody tr:nth-child(even) { background: #262626; } table.data tbody tr
   .picklist-reference-summary { grid-template-columns: auto 1fr; }
   .picklist-reference-summary i { grid-column: 1 / -1; }
 }
+
+.rankings-layout { display:grid; grid-template-columns:minmax(0,2fr) minmax(260px,1fr); gap:20px; align-items:start; }
+@media(max-width:850px) { .rankings-layout { grid-template-columns:minmax(0,1fr); } }

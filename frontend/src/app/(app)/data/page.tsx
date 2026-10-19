@@ -178,7 +178,7 @@ function Beautiful({ summaries, pitRows }: { summaries: { team: number; reports:
     const pit = pitRows.find(row => Number(row.team_number) === summary.team);
     const ordered = [...summary.reports].sort((a, b) => Number(a.match_number) - Number(b.match_number));
     return <article className="card beautiful-team" key={summary.team}>
-      <div className="card-h"><ClickableTeam team={{ team_number: summary.team }} size="lg" /><span className="badge haze">{summary.reports.length} reports</span></div>
+      <div className="card-h"><ClickableTeam team={{ team_number: summary.team, nickname: "" }} size="lg" /><span className="badge haze">{summary.reports.length} reports</span></div>
       <div className="grid cols-3"><div className="stat"><span>Haze Power Rating</span><b>{summary.average == null ? "—" : summary.average.toFixed(1)}</b></div><div className="stat"><span>Failures</span><b>{summary.failures}</b></div><div className="stat"><span>Pit Photos</span><b>{pit?.photo_count || 0}</b></div></div>
       <LineChart data={ordered.map(row => ({ x: `Q${row.match_number}`, y: Number(row.points || 0) }))} height={130} label={`Team ${summary.team} points by match`} />
       <div className="beautiful-report-list"><h3>Scouting forms</h3><p className="faint">Each form stays minimized until you open it. Every saved answer is shown exactly as the scouter submitted it.</p>{ordered.map((row, index) => <ScoutingFormDetails key={row.client_uuid || row.id || index} row={row} title={`${String(row.comp_level || "qm").toUpperCase()} ${row.match_number} · ${row.scout_id || "Unknown scout"}`} />)}</div>

@@ -3,7 +3,8 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/lib/toast";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
+import { hasOfflineAccount, revokeOffline } from "@/lib/offline-auth";
 import { Modal } from "@/components/ui";
 
 export default function LoginPage() {
@@ -29,10 +30,19 @@ export default function LoginPage() {
     setBusy(true);
     try {
       if (checkedId !== scoutId.trim()) {
-        const status = await api<{ needs_setup: boolean }>("/api/auth/account-status", {
+        let status: { needs_setup: boolean };
+        try { status = await api<{ needs_setup: boolean }>("/api/auth/account-status", {
           method: "POST", auth: false, body: { scout_id: scoutId.trim() },
-        });
+        }); } catch (error) {
+          if (error instanceof ApiError && error.status < 500) {
+            if ([401, 403].includes(error.status)) await revokeOffline(scoutId);
+            throw error;
+          }
+          if (!await hasOfflineAccount(scoutId)) throw new Error("This account needs an online sign-in on this device before it can be used offline.");
+          status = { needs_setup: false };
+        }
         if (status.needs_setup) {
+          await revokeOffline(scoutId);
           setSetupId(scoutId.trim());
           setNewPassword(""); setConfirmation(""); setSetupError("");
         } else {

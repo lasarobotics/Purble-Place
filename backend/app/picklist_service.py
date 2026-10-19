@@ -472,14 +472,14 @@ def history(event):
         return sorted([r for r in rows.values() if r["generation"] == state["generation"]], key=lambda r: r["created_at"], reverse=True)
 
 
-def action(event, user, body):
+def action(event, user, body, final_mode=False):
     with _lock:
         state, records = workspace(event)
         check_version(state["version"], body.version)
         kind, data = body.action, body.data
         meaningful = kind not in ("view", "select", "present", "select_robot", "clear_temporary")
         editing = kind in ("edit", "edit_boards", "import", "restore", "undo", "redo", "add_robot", "remove_robot", "rename_robot")
-        if editing and state["status"] != "live":
+        if editing and state["status"] != "live" and not final_mode:
             raise HTTPException(409, "Start or resume the meeting before editing")
         if editing and kind not in ("undo", "redo"):
             state["undo"] = (state["undo"] + [snapshot(state)])[-20:]
@@ -600,7 +600,7 @@ def action(event, user, body):
             state["team_statuses"][team] = status
             state["notes"][team] = str(data.get("note", ""))[:5000]
         elif kind == "publish":
-            if state["status"] not in ("live", "paused", "ended"):
+            if state["status"] not in ("live", "paused", "ended") and not final_mode:
                 raise HTTPException(409, "Start the meeting before publishing")
             ready = [b for b in state["boards"] if b["items"]]
             if not ready:

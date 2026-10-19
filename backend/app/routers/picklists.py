@@ -72,6 +72,20 @@ def compare(body: CompareIn, user: Scouter = Depends(require_admin)):
 def meeting(event: str | None = None, client: str | None = None, user: Scouter = Depends(current_scouter)):
     return svc.public_state(svc.event_key(event), client)
 
+
+@router.get("/final-workspace")
+def final_workspace(event: str | None = None, user: Scouter = Depends(require_admin)):
+    state = svc.public_state(svc.event_key(event))
+    return {k: state[k] for k in ("event_key", "version", "robots", "boards", "published", "locked") if k in state}
+
+
+@router.post("/final-workspace")
+def final_action(body: ActionIn, user: Scouter = Depends(require_admin)):
+    if body.action not in ("edit", "edit_boards", "import", "add_robot", "rename_robot", "remove_robot", "publish", "unpublish", "undo", "redo"):
+        raise HTTPException(422, "Unsupported final picklist action")
+    svc.action(svc.event_key(body.event_key), user, body, final_mode=True)
+    return final_workspace(body.event_key, user)
+
 @router.post("/meeting")
 def meeting_action(body: ActionIn, user: Scouter = Depends(require_admin)):
     return svc.action(svc.event_key(body.event_key), user, body)

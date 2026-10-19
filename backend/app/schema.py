@@ -56,6 +56,7 @@ from __future__ import annotations
 # Collections                                                                  #
 # --------------------------------------------------------------------------- #
 SCOUTERS = "scouters"
+ACCOUNT_AUDIT = "account_audit"
 EVENTS = "events"
 MATCHES = "matches"
 MATCH_SCOUTING = "match_scouting"
@@ -87,6 +88,7 @@ SEASONS = "seasons"
 SEASON_REVISIONS = "season_revisions"
 
 ALL_COLLECTIONS = (
+    ACCOUNT_AUDIT,
     SCOUTERS,
     EVENTS,
     MATCHES,
@@ -124,7 +126,7 @@ GLOBAL_CACHED = (
 EVENT_SCOPED_CACHED = (MATCHES, MATCH_SCOUTING, SCOUTING_AUDIT, PICKLISTS, BETS, PIT_SCOUTING)
 
 #: Written but never listened to: nothing in the UI reads them hot.
-WRITE_ONLY = (PICKLIST_RECORDS, PICKLIST_WORKSPACES, PICKLIST_HISTORY, PIT_PHOTOS, SYNC_OUTBOX, NETWORK_STATUS, FORM_REVISIONS, SEASON_REVISIONS, EVENT_ARCHIVE_CHUNKS)
+WRITE_ONLY = (ACCOUNT_AUDIT, PICKLIST_RECORDS, PICKLIST_WORKSPACES, PICKLIST_HISTORY, PIT_PHOTOS, SYNC_OUTBOX, NETWORK_STATUS, FORM_REVISIONS, SEASON_REVISIONS, EVENT_ARCHIVE_CHUNKS)
 
 
 # --------------------------------------------------------------------------- #

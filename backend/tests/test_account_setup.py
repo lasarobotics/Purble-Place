@@ -43,10 +43,10 @@ def enroll(client, password="Unique-for-Haze-123"):
     return client.post("/api/auth/setup", json={"scout_id": "10217860", "password": password, "password_confirmation": password})
 
 
-def test_migration_keeps_admin_deletes_old_users_and_is_repeatable(accounts):
+def test_migration_preserves_existing_users_and_is_repeatable(accounts):
     accounts.update({"admin": Scouter("admin", role="admin", bucks=321), "Strategy": Scouter("Strategy", role="strategy"), "1": Scouter("1")})
     seed.seed()
-    assert set(accounts) == set(settings.ACCOUNTS)
+    assert set(accounts) == set(settings.ACCOUNTS) | {"Strategy", "1"}
     assert accounts["Admin"].bucks == 321
     assert sum(s.is_admin for s in accounts.values()) == 1
     accounts["10217860"].password_hash = auth.hash_password("personal-password")
@@ -69,6 +69,31 @@ def test_first_use_and_personal_login(client, accounts):
     assert login.status_code == 200
     assert login.json()["is_admin"] is False
     assert client.get("/api/auth/me", headers={"Authorization": "Bearer " + result.json()["token"]}).status_code == 200
+
+
+def test_navigation_and_reloaded_account_cache_keep_session_valid(client, accounts):
+    token = enroll(client).json()["token"]
+    headers = {"Authorization": "Bearer " + token}
+    # Reconstruct persisted account objects as a normal deployment/cache load does.
+    restored = deepcopy(accounts)
+    accounts.clear()
+    accounts.update(restored)
+    repo.invalidate_memo()
+    for _ in range(3):
+        assert client.get("/api/auth/me", headers=headers).status_code == 200
+    accounts["10217860"].password_hash = auth.hash_password("changed-password")
+    assert client.get("/api/auth/me", headers=headers).status_code == 401
+
+
+def test_unavailable_account_cache_does_not_revoke_valid_session(client, accounts, monkeypatch):
+    token = enroll(client).json()["token"]
+    accounts.clear()
+    monkeypatch.setattr(repo.store, "ready", False)
+    monkeypatch.setattr(repo.store, "error", "unavailable")
+    headers = {"Authorization": "Bearer " + token}
+    assert client.get("/api/auth/me", headers=headers).status_code == 503
+    monkeypatch.setattr(repo.store, "ready", True)
+    assert client.get("/api/auth/me", headers=headers).status_code == 401
 
 
 @pytest.mark.parametrize("scout_id,password,confirmation,status", [
@@ -163,3 +188,39 @@ def test_password_model_roundtrip():
     restored = Scouter.from_doc(row.scout_id, row.to_doc())
     assert auth.verify_password("unique-password", restored.password_hash)
     assert not auth.verify_password("incorrect", restored.password_hash)
+
+
+def test_offline_provision_requires_fresh_own_password_and_exports_no_verifier(client):
+    session = enroll(client).json()
+    headers = {"Authorization": "Bearer " + session["token"]}
+    body = {"scout_id": "10217860", "team_password": "Unique-for-Haze-123"}
+    assert client.post("/api/auth/offline-provision", json=body).status_code == 401
+    response = client.post("/api/auth/offline-provision", json=body, headers=headers)
+    assert response.status_code == 200
+    grant = response.json()
+    assert set(grant) == {"version", "scout_id", "s_number", "display_name", "issued_at", "expires_at"}
+    assert grant["expires_at"] - grant["issued_at"] == 86400_000
+    assert client.post("/api/auth/offline-provision", json={**body, "team_password": "incorrect"}, headers=headers).status_code == 401
+    assert client.post("/api/auth/offline-provision", json={**body, "scout_id": "Admin"}, headers=headers).status_code == 403
+    admin = client.post("/api/auth/login", json={"scout_id": "Admin", "team_password": settings.TEAM_PASSWORD}).json()
+    assert client.post("/api/auth/offline-provision", json={"scout_id": "Admin", "team_password": settings.TEAM_PASSWORD}, headers={"Authorization": "Bearer " + admin["token"]}).status_code == 403
+
+
+def test_password_change_invalidates_old_tokens_even_after_new_password_setup(client, accounts):
+    session = enroll(client).json()
+    accounts["10217860"].password_hash = auth.hash_password("replacement-password")
+    headers = {"Authorization": "Bearer " + session["token"]}
+    assert client.get("/api/auth/me", headers=headers).status_code == 401
+    new = client.post("/api/auth/login", json={"scout_id": "10217860", "team_password": "replacement-password"}).json()
+    assert client.get("/api/auth/me", headers={"Authorization": "Bearer " + new["token"]}).status_code == 200
+
+
+def test_cookie_restores_identity_but_does_not_authorize_mutations(client):
+    response = enroll(client)
+    assert "HttpOnly" in response.headers["set-cookie"]
+    assert "SameSite=lax" in response.headers["set-cookie"]
+    assert response.headers["cache-control"] == "no-store"
+    assert client.get("/api/auth/me").status_code == 200
+    assert client.post("/api/auth/offline-provision", json={"scout_id": "10217860", "team_password": "Unique-for-Haze-123"}).status_code == 401
+    client.post("/api/auth/logout")
+    assert client.get("/api/auth/me").status_code == 401

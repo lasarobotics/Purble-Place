@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -22,9 +23,8 @@ from . import repo
 from .cache import StoreUnavailable
 from .config import settings
 from .database import close_db, init_db
-from .firestore_db import guard
-from .firestore_db import status as firestore_status
 from .realtime import hub
+from .routers import pages, accounts
 from .routers import (
     admin, auth, betting, events, forms, matches, picklists, scouting, seasons,
     sync, system, teams,
@@ -153,16 +153,41 @@ def _post_comp_locked(request: Request) -> bool:
 
 @app.middleware("http")
 async def post_comp_gate(request: Request, call_next):
+    # Liveness must not wait for the datastore lock or its connectivity probe.
+    if request.url.path == "/api/health":
+        return await call_next(request)
     if _post_comp_locked(request):
         path = request.url.path
-        if path == "/api/health":
-            return await call_next(request)
         if path.startswith("/api/"):
             return JSONResponse(status_code=404, content={"detail": "Not found"})
         return HTMLResponse(POST_COMP_404, status_code=404)
-    return await call_next(request)
+    response = await call_next(request)
+    if request.url.path.startswith("/api/auth/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.middleware("http")
+async def request_duration(request: Request, call_next):
+    started = time.perf_counter()
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        response.headers["Server-Timing"] = f"app;dur={(time.perf_counter() - started) * 1000:.2f}"
+        return response
+    finally:
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        route = request.scope.get("route")
+        if request.url.path.startswith("/api/"):
+            # Route templates avoid logging IDs, query strings, credentials or bodies.
+            log.log(logging.WARNING if elapsed_ms >= 1000 else logging.INFO,
+                    "request method=%s route=%s status=%s duration_ms=%.2f",
+                    request.method, getattr(route, "path", "unmatched"), status_code, elapsed_ms)
 
 for r in (
+    pages.router,
+    accounts.router,
     auth.router,
     auth.game_router,
     teams.router,
@@ -205,36 +230,11 @@ def _datastore_unavailable(request: Request, exc: StoreUnavailable) -> JSONRespo
 
 
 @app.get("/api/health")
-def health() -> dict:
-    db = firestore_status()
-    cache = repo.cache_stats()
-    quota = guard.snapshot()
-    out = {
-        "ok": bool(cache.get("ready")),
-        "app": settings.APP_NAME,
-        "season": settings.SEASON,
-        "environment": settings.ENVIRONMENT,
-        "database": db,
-        "cache": {
-            "backend": cache.get("backend"),
-            "documents": cache.get("cached_total"),
-            "event": cache.get("event_key"),
-        },
-        "quota": {
-            kind: f"{v['used']}/{v['budget']}" for kind, v in quota["operations"].items()
-        },
-        "realtime": "websocket (/ws) with polling fallback (/api/events)",
-    }
-    if cache.get("error"):
-        out["error"] = cache["error"]
-    if cache.get("backend") == "local-file":
-        out["warning"] = (
-            "Running on the local development store: data is NOT in Firestore. "
-            "Set FIREBASE_PROJECT_ID (and FIREBASE_SERVICE_ACCOUNT outside Google "
-            "Cloud), or FIRESTORE_EMULATOR_HOST for local emulator use. "
-            "See instructions.txt."
-        )
-    return out
+async def health() -> dict:
+    # Primitive cached state only: no thread-pool slot, locks or network calls.
+    # Detailed connectivity/quota diagnostics remain in protected System Health.
+    return {"ok": bool(repo.store.ready), "app": settings.APP_NAME,
+            "season": settings.SEASON, "environment": settings.ENVIRONMENT}
 
 
 @app.websocket("/ws")

@@ -5,6 +5,8 @@ import { useAuth } from "@/lib/auth";
 import { matchLabel, timeAgo } from "@/lib/format";
 import type { ScoutEntry, Bet, Team } from "@/lib/types";
 import { Loading, Empty, Stat, TeamIdentity } from "@/components/ui";
+import { hasOfflineAccount, resetOfflineDevice } from "@/lib/offline-auth";
+import { DisplayNameForm } from "@/components/DisplayNameForm";
 
 export default function AccountPage() {
   const { session, logout } = useAuth();
@@ -12,6 +14,11 @@ export default function AccountPage() {
   const [bets, setBets] = useState<Bet[]>([]);
   const [teams, setTeams] = useState<Record<number, Team>>({});
   const [loading, setLoading] = useState(true);
+  const [prepared, setPrepared] = useState(false);
+  const [resetError, setResetError] = useState("");
+  useEffect(() => {
+    if (session) void hasOfflineAccount(session.scout_id).then(setPrepared).catch(() => setPrepared(false));
+  }, [session]);
 
   useEffect(() => {
     Promise.all([
@@ -35,6 +42,7 @@ export default function AccountPage() {
   return (
     <div>
       <div className="page-title"><h1>Account</h1></div>
+      <DisplayNameForm />
 
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="row" style={{ justifyContent: "space-between" }}>
@@ -51,6 +59,18 @@ export default function AccountPage() {
           <button className="btn ghost" onClick={logout}>Sign out</button>
         </div>
       </div>
+
+      {!session?.is_admin && !session?.picklist_only && <div className="card" style={{ marginBottom: 16 }}>
+        <h3>Offline sign-in</h3>
+        <p>{prepared ? "Your account is prepared on this device for up to 24 hours after online sign-in." : "Sign in online with your password to prepare this account on this device. HTTPS and browser storage are required."}</p>
+        <p className="muted">This browser prepares one scouter at a time; preparing another account replaces its offline access. Offline sessions last up to four hours. Sign in online again before syncing. Use a device screen lock; browser storage does not protect an unlocked device.</p>
+        <button className="btn ghost" onClick={async () => {
+          try { await resetOfflineDevice(); setPrepared(false); if (session?.offline_until) logout(); }
+          catch (error: any) { setResetError(error.message); }
+        }}>Remove offline sign-ins from this device</button>
+        <p className="faint">Saved scouting submissions and drafts are kept.</p>
+        {resetError && <p role="alert">{resetError}</p>}
+      </div>}
 
       <div className="grid cols-4" style={{ marginBottom: 16 }}>
         <Stat label="Purple Bucks" value={session?.bucks ?? 0} accent />

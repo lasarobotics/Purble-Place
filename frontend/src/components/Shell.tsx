@@ -15,6 +15,7 @@ import { useOffline } from "@/lib/offline";
 import { Loading } from "./ui";
 import { Icon } from "./icons";
 import { ROLE_LABEL } from "@/lib/types";
+import { DisplayNameForm } from "./DisplayNameForm";
 
 // Betting is not in here on purpose: it lives on the scouting page now, next
 // to the match it is about, rather than behind a tab of its own.
@@ -22,53 +23,23 @@ interface NavItem { href: string; label: string; icon: string }
 
 const MAIN_NAV: NavItem[] = [
   { href: "/home", label: "Home", icon: "home" },
-  { href: "/scout", label: "Scout", icon: "clipboard" },
-  { href: "/pit", label: "Pit Scout", icon: "wrench" },
-  { href: "/picklists", label: "Picklists", icon: "list" },
-  { href: "/meeting", label: "Picklist Meeting Mode", icon: "folder" },
-  { href: "/results", label: "Results", icon: "chart" },
   { href: "/match-schedule", label: "Match Schedule", icon: "list" },
-  { href: "/status", label: "Devices", icon: "refresh" },
-  { href: "/account", label: "Account", icon: "user" },
-];
-
-// The shared meeting account can also read the public event and analysis tabs.
-const PICKLIST_NAV = [
-  { href: "/meeting", label: "Picklist Meeting", icon: "folder" },
-  { href: "/results", label: "Results", icon: "chart" },
-  { href: "/match-schedule", label: "Match Schedule", icon: "list" },
+  { href: "/rankings", label: "Rankings", icon: "chart" },
   { href: "/data-analysis", label: "Data Analysis", icon: "chart" },
+  { href: "/scout", label: "Scouting", icon: "clipboard" },
+  { href: "/pit", label: "Pit Scouting", icon: "wrench" },
+  { href: "/picklists", label: "Picklists", icon: "list" },
   { href: "/account", label: "Account", icon: "user" },
 ];
-
-// Admin navigation groups event operations, analysis and picklists.
-const ADMIN_GROUPS: { title: string; items: NavItem[] }[] = [
-  {
-    title: "Event",
-    items: [
-      { href: "/admin", label: "Dashboard", icon: "sliders" },
-      { href: "/admin/system", label: "System Health", icon: "refresh" },
-    ],
-  },
-  {
-    title: "Analysis",
-    items: [
-      { href: "/admin/team-search", label: "Team Search", icon: "search" },
-      { href: "/admin/team-rank", label: "Team Rank", icon: "chart" },
-      { href: "/admin/compare", label: "Compare", icon: "scale" },
-      { href: "/data-analysis", label: "Data Analysis", icon: "chart" },
-      { href: "/data", label: "Data", icon: "list" },
-    ],
-  },
-  {
-    title: "Picklists",
-    items: [
-      { href: "/meeting", label: "Picklist Meeting", icon: "folder" },
-      { href: "/admin/picklists", label: "All Picklists", icon: "folder" },
-      { href: "/admin/data-picklist", label: "Data Picklist", icon: "trend" },
-    ],
-  },
-];
+const PICKLIST_NAV = MAIN_NAV.filter(n => !["/home", "/scout", "/pit"].includes(n.href));
+const ADMIN_GROUPS = [{ title: "Admin", items: [
+  { href: "/admin", label: "Admin", icon: "sliders" },
+  { href: "/admin/final-picklist", label: "Final Picklist", icon: "list" },
+  { href: "/admin/accounts", label: "Accounts", icon: "user" },
+  { href: "/data", label: "Data", icon: "list" },
+  { href: "/status", label: "Devices", icon: "refresh" },
+  { href: "/admin/system", label: "System Health", icon: "refresh" },
+]}];
 
 const MOBILE_NAV = [
   { href: "/home", label: "Home", icon: "home" },
@@ -79,7 +50,7 @@ const MOBILE_NAV = [
 ];
 
 const OFFLINE_ROUTES = [
-  "/", "/home", "/scout", "/pit", "/picklists", "/meeting", "/results", "/match-schedule", "/data-analysis", "/picklist-simulator", "/data", "/status", "/account", "/login",
+  "/rankings", "/admin/final-picklist", "/admin/accounts", "/", "/home", "/scout", "/pit", "/picklists", "/meeting", "/results", "/match-schedule", "/data-analysis", "/picklist-simulator", "/data", "/status", "/account", "/login",
   "/admin", "/admin/compare", "/admin/data-picklist", "/admin/forms", "/admin/picklists", "/admin/seasons",
   "/admin/system", "/admin/team-rank", "/admin/team-search",
 ];
@@ -104,11 +75,11 @@ export function Shell({ children }: { children: React.ReactNode }) {
   // page of permission errors.
   useEffect(() => {
     if (!session?.picklist_only) return;
-    const allowed = ["/meeting", "/results", "/match-schedule", "/data-analysis", "/picklist-simulator", "/account"];
-    if (!allowed.some((prefix) => pathname.startsWith(prefix))) router.replace("/meeting");
+    const allowed = ["/picklists", "/rankings", "/match-schedule", "/data-analysis", "/account"];
+    if (!allowed.some((prefix) => pathname.startsWith(prefix))) router.replace("/picklists");
   }, [session, pathname, router]);
 
-  const restrictedPage = pathname.replace(/\/$/, "") === "/admin" || pathname.startsWith("/admin/system");
+  const restrictedPage = pathname.replace(/\/$/, "") === "/admin" || pathname.startsWith("/admin/system") || pathname.startsWith("/admin/accounts") || pathname.startsWith("/admin/final-picklist") || pathname.replace(/\/$/, "") === "/data";
   useEffect(() => {
     if (session && !session.is_admin && restrictedPage) router.replace("/home");
   }, [session, restrictedPage, router]);
@@ -116,22 +87,38 @@ export function Shell({ children }: { children: React.ReactNode }) {
   useLiveEvents((event, payload) => emitBus(event, payload));
   useEffect(() => {
     if (!session) return;
-    const warm = () => {
-      if (!navigator.onLine) return;
-      void loadSchedule().catch(() => {});
-      void api("/api/admin/event-teams").catch(() => {});
-      void api("/api/admin/raw-data").catch(() => {});
-      void api("/api/admin/data-analysis").catch(() => {});
-      void api("/api/matches/event-ratings").catch(() => {});
-      void api("/api/pit").catch(() => {});
-      void api("/api/picklists/finals").catch(() => {});
+    let warming = false;
+    const warm = async () => {
+      if (!navigator.onLine || warming) return;
+      warming = true;
+      try {
+        // Run these in sequence after first paint. Parallel warming used to
+        // contend with the current page and made every request feel slower.
+        await loadSchedule().catch(() => {});
+        for (const path of ["/api/admin/event-teams", "/api/admin/data-analysis", "/api/matches/event-ratings", "/api/pit", "/api/picklists/finals"]) {
+          if (!navigator.onLine) break;
+          await api(path).catch(() => {});
+        }
+      } finally { warming = false; }
     };
-    warm();
-    navigator.serviceWorker?.ready.then(reg => reg.active?.postMessage({ type: "WARM_ROUTES", routes: OFFLINE_ROUTES }));
+    const prepareOffline = () => {
+      void warm();
+      navigator.serviceWorker?.ready.then(reg => reg.active?.postMessage({ type: "WARM_ROUTES", routes: OFFLINE_ROUTES }));
+    };
+    let idleId: number | undefined;
+    const startTimer = window.setTimeout(() => {
+      const idle = (window as any).requestIdleCallback;
+      if (idle) idleId = idle(prepareOffline, { timeout: 10000 });
+      else prepareOffline();
+    }, 30000);
     let timer: ReturnType<typeof setTimeout>;
-    const off = onBus(event => { if (DATA_EVENTS.includes(event)) { clearTimeout(timer); timer = setTimeout(warm, 250); } });
-    window.addEventListener("online", warm);
-    return () => {off(); clearTimeout(timer); window.removeEventListener("online", warm);};
+    const off = onBus(event => { if (DATA_EVENTS.includes(event)) { clearTimeout(timer); timer = setTimeout(() => void warm(), 5000); } });
+    const online = () => { clearTimeout(timer); timer = setTimeout(prepareOffline, 2000); };
+    window.addEventListener("online", online);
+    return () => {
+      off(); clearTimeout(timer); clearTimeout(startTimer); window.removeEventListener("online", online);
+      if (idleId !== undefined) (window as any).cancelIdleCallback?.(idleId);
+    };
   }, [session]);
 
   // Ask the browser to protect IndexedDB from automatic eviction, queued
@@ -182,7 +169,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   if (!session) return <Loading label="Redirecting..." />;
 
   if (!session.is_admin && restrictedPage) return <Loading label="Redirecting..." />;
-  const visibleGroups = ADMIN_GROUPS.filter(g => session.is_admin || g.title !== "Event");
+  const visibleGroups = session.is_admin ? ADMIN_GROUPS : [];
 
   const isActive = (href: string) =>
     href === "/admin" ? pathname === "/admin" : pathname.startsWith(href);
@@ -191,7 +178,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   // The sheet shows everything the account can actually reach, so it is built
   // from the same lists the sidebar uses rather than a second hand-kept copy.
   const sheetGroups = picklistOnly
-    ? [{ title: "Picklist Meeting", items: PICKLIST_NAV }]
+    ? [{ title: "Picklists", items: PICKLIST_NAV }]
     : [{ title: "Scouting", items: MAIN_NAV }, ...visibleGroups];
   const mobileNav = picklistOnly
     ? PICKLIST_NAV
@@ -202,12 +189,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
   return (
     <div className="shell">
       <aside className="sidebar">
-        <Link href="/home" className="brand">
+        <Link href="/home" className="brand" prefetch={false}>
           <span className="name">Haze<b>Hub</b></span>
         </Link>
-        <div className="nav-section">{picklistOnly ? "Picklist Meeting" : "Scouting"}</div>
+        <div className="nav-section">{picklistOnly ? "Picklists" : "HazeHub"}</div>
         {mainNav.map((n) => (
-          <Link key={n.href} href={n.href} className={"nav-link" + (isActive(n.href) ? " active" : "")}>
+          <Link key={n.href} href={n.href} prefetch={false} className={"nav-link" + (isActive(n.href) ? " active" : "")}>
             <span className="ico"><Icon name={n.icon} /></span> {n.label}
           </Link>
         ))}
@@ -218,6 +205,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 <Link
                   key={n.href}
                   href={n.href}
+                  prefetch={false}
                   className={"nav-link" + (isActive(n.href) ? " active" : "")}
                 >
                   <span className="ico"><Icon name={n.icon} /></span> {n.label}
@@ -251,7 +239,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
               if ((e.target as HTMLElement).closest("a")) e.currentTarget.closest("details")?.removeAttribute("open");
             }}>
               {sheetGroups.flatMap((group) => group.items).map((n) => (
-                <Link key={n.href} href={n.href} className={"nav-link" + (isActive(n.href) ? " active" : "")}>
+                <Link key={n.href} href={n.href} prefetch={false} className={"nav-link" + (isActive(n.href) ? " active" : "")}>
                   {n.label}
                 </Link>
               ))}
@@ -297,12 +285,16 @@ export function Shell({ children }: { children: React.ReactNode }) {
             Offline · Saved on this device
           </div>
         )}
-        <main className="content">{children}</main>
+        {session.offline_until && <div className="offline-bar" role="status">
+          Offline sign-in · Scouting stays on this device until you sign in online again.
+          {online && <button className="btn ghost" onClick={logout}>Sign in to synchronize</button>}
+        </div>}
+        <main className="content">{session.name_confirmed === false && !session.offline_until ? <DisplayNameForm /> : children}</main>
       </div>
 
       <nav className="bottomnav">
         {mobileNav.map((n) => (
-          <Link key={n.href} href={n.href} className={isActive(n.href) ? "active" : ""}>
+          <Link key={n.href} href={n.href} prefetch={false} className={isActive(n.href) ? "active" : ""}>
             <span className="ico"><Icon name={n.icon} size={20} /></span>
             {n.label}
           </Link>
@@ -375,6 +367,7 @@ function NavSheet({
                   <Link
                     key={n.href}
                     href={n.href}
+                    prefetch={false}
                     onClick={onClose}
                     className={"nav-sheet-item" + (isActive(n.href) ? " active" : "")}
                   >

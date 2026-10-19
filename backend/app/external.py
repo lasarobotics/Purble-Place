@@ -12,6 +12,7 @@ from __future__ import annotations
 import threading
 import time
 import asyncio
+from weakref import WeakKeyDictionary
 from datetime import date, datetime, timezone
 from typing import Any, Optional
 
@@ -25,6 +26,12 @@ from .schema import match_id
 # url -> (payload, fetched_at_monotonic)
 _cache: dict[str, tuple[Any, float]] = {}
 _cache_lock = threading.Lock()
+_flights: dict[tuple, asyncio.Task] = {}
+_etags: dict[str, str] = {}
+_retry_after: dict[str, float] = {}
+_failures: dict[str, int] = {}
+_revision = 0
+_gates = WeakKeyDictionary()
 #: Bound the cache so a long event can't grow it without limit.
 MAX_CACHE_ENTRIES = 2000
 
@@ -43,10 +50,16 @@ def _cache_get(url: str) -> tuple[Optional[Any], float]:
 
 
 def _cache_put(url: str, payload: Any) -> None:
+    global _revision
     with _cache_lock:
+        if _cache.get(url, (None,))[0] != payload:
+            _revision += 1
         if len(_cache) >= MAX_CACHE_ENTRIES:
             oldest = min(_cache, key=lambda k: _cache[k][1])
             _cache.pop(oldest, None)
+            _etags.pop(oldest, None)
+            _retry_after.pop(oldest, None)
+            _failures.pop(oldest, None)
         _cache[url] = (payload, time.monotonic())
 
 
@@ -60,27 +73,70 @@ async def _get_json(
     if cached is not None and age < ttl:
         return cached
 
+    if _retry_after.get(url, 0) > time.monotonic():
+        return cached
+    key = (asyncio.get_running_loop(), url)
+    task = _flights.get(key)
+    if task is None:
+        task = asyncio.create_task(_fetch_json(url, headers, cached))
+        _flights[key] = task
+        task.add_done_callback(lambda _: _flights.pop(key, None))
+    # Last-known-good data is shown while one shared background request refreshes.
+    if cached is not None:
+        return cached
+    return await asyncio.shield(task)
+
+
+async def _fetch_json(url, headers, cached):
+    loop = asyncio.get_running_loop()
+    gate = _gates.setdefault(loop, asyncio.Semaphore(4))
+    async with gate:
+        return await _fetch_json_bounded(url, headers, cached)
+
+
+async def _fetch_json_bounded(url, headers, cached):
+
     # A User-Agent is REQUIRED: The Blue Alliance sits behind Cloudflare, which
     # blocks requests with no UA (HTTP 403, error 1010).
     req_headers = {"User-Agent": "HazeHub/1.0 (FRC scouting platform)"}
     req_headers.update(headers or {})
+    if url in _etags:
+        req_headers["If-None-Match"] = _etags[url]
 
     try:
-        async with httpx.AsyncClient(timeout=12.0) as client:
+        async with httpx.AsyncClient(timeout=8.0) as client:
             resp = await client.get(url, headers=req_headers)
         if resp.status_code == 200:
             payload = resp.json()
             _cache_put(url, payload)
+            if resp.headers.get("ETag"):
+                _etags[url] = resp.headers["ETag"]
+            _failures.pop(url, None)
+            _retry_after.pop(url, None)
             return payload
-        if resp.status_code == 404:
-            return None
+        if resp.status_code == 304 and cached is not None:
+            _cache_put(url, cached)
+            return cached
+        if resp.status_code == 429:
+            try:
+                _retry_after[url] = time.monotonic() + min(604800, max(60, float(resp.headers.get("Retry-After", "60"))))
+            except ValueError:
+                _retry_after[url] = time.monotonic() + 60
     except Exception:  # noqa: BLE001: network down; fall through to stale cache
         pass
 
+    _failures[url] = min(6, _failures.get(url, 0) + 1)
+    _retry_after[url] = max(_retry_after.get(url, 0), time.monotonic() + min(1800, 15 * 2 ** _failures[url]))
+    if len(_failures) > MAX_CACHE_ENTRIES:
+        oldest = next(iter(_failures))
+        _failures.pop(oldest, None)
+        _retry_after.pop(oldest, None)
     return cached
 
 
 async def tba(path: str, ttl: Optional[int] = None) -> Optional[Any]:
+    if not settings.TBA_KEY:
+        return None
     return await _get_json(
         f"{settings.TBA_BASE}{path}",
         headers={"accept": "application/json", "X-TBA-Auth-Key": settings.TBA_KEY},

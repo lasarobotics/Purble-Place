@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, useRef } from "react";
 import { api } from "@/lib/api";
 import { useLiveRefetch } from "@/lib/bus";
 import { MetricLabel } from "./MetricLabel";
@@ -41,25 +41,38 @@ const columns: { key: keyof Row; label: string; format: (value: any) => string }
 export function DataAnalysisPanel() {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [sort, setSort] = useState<keyof Row>("xp");
-  const load = useCallback(() => Promise.all([
-    api<{ teams: Row[] }>("/api/admin/data-analysis"),
-    api<{ teams: Partial<Row>[] }>("/api/matches/event-ratings").catch(() => ({ teams: [] })),
-  ]).then(([analysis, external]) => {
-    const merged = new Map(analysis.teams.map(row => [row.team, row]));
-    for (const rating of external.teams) {
-      const team = Number(rating.team);
-      const row = merged.get(team);
-      if (row) Object.assign(row, rating);
-      else merged.set(team, { team, nickname: "", matches: 0, defense_capability: null,
-        consistency: 0, skew_distribution: null, failure_rate: 0, foul_match_rate: 0,
-        climb_success_rate: 0, ranking_point_prediction: null, ...rating });
-    }
-    setRows([...merged.values()]);
-  }).catch(() => setRows([])), []);
+  const [error, setError] = useState("");
+  const generation = useRef(0);
+  const load = useCallback(async () => {
+    const started = ++generation.current;
+    try {
+      const analysis = await api<{ teams: Row[] }>("/api/admin/data-analysis");
+      if (started !== generation.current) return;
+      setError("");
+      setRows(analysis.teams);
+      // External ratings enrich the already-visible table. A slow or missing
+      // Match 13 response must never hold scouting data behind a spinner.
+      void api<{ teams: Partial<Row>[] }>("/api/matches/event-ratings").then(external => {
+        if (started !== generation.current) return;
+        setRows(current => {
+          const merged = new Map((current || analysis.teams).map(row => [row.team, row]));
+          for (const rating of external.teams) {
+            const team = Number(rating.team); const row = merged.get(team);
+            if (row) merged.set(team, { ...row, ...rating });
+            else merged.set(team, { team, nickname: "", matches: 0, defense_capability: null,
+              consistency: 0, skew_distribution: null, failure_rate: 0, foul_match_rate: 0,
+              climb_success_rate: 0, ranking_point_prediction: null, ...rating });
+          }
+          return [...merged.values()];
+        });
+      }).catch(() => {});
+    } catch { if (started === generation.current) setError("Data Analysis could not refresh. Your session and saved scouting data are unchanged."); }
+  }, []);
   useLiveRefetch(load);
   const sorted = useMemo(() => [...(rows || [])].sort((a, b) => sort === "record"
     ? String(b.record || "").localeCompare(String(a.record || ""), undefined, { numeric: true })
     : Number(b[sort] ?? -Infinity) - Number(a[sort] ?? -Infinity)), [rows, sort]);
+  if (!rows && error) return <div className="card" role="alert">{error} <button className="btn ghost" onClick={load}>Retry</button></div>;
   if (!rows) return <Loading />;
   if (!rows.length) return <Empty title="No event data yet" />;
   return <div className="table-wrap analysis-panel-table"><table className="data"><thead><tr><th>Team</th><th>Matches</th>{columns.map(column => <th className="num" key={column.key}><button className="analysis-sort" onClick={() => setSort(column.key)}><MetricLabel metric={String(column.key)}>{column.label}</MetricLabel>{sort === column.key ? " ↓" : ""}</button></th>)}</tr></thead><tbody>{sorted.map(row => <tr key={row.team}><td><ClickableTeam team={{ team_number: row.team, nickname: row.nickname || "" }} /></td><td className="num">{row.matches}</td>{columns.map(column => { const value = row[column.key]; const present = (typeof value === "number" && Number.isFinite(value)) || typeof value === "string"; return <td className="num mono" key={column.key}>{present ? column.format(value) : "—"}</td>; })}</tr>)}</tbody></table></div>;

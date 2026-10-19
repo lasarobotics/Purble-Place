@@ -54,11 +54,14 @@ export interface PendingPit {
 }
 
 class HazeDB extends Dexie {
+  offlineCredentials!: Table<{ id: string; [key: string]: any }, string>;
   pendingScouts!: Table<PendingScout, string>;
   settings!: Table<Setting, string>;
   schedule!: Table<CachedMatch, string>;
-  responses!: Table<{ key: string; json: string; saved_at: number }, string>;
+  responses!: Table<{ key: string; json: string; saved_at: number; etag?: string }, string>;
   pendingPits!: Table<PendingPit, string>;
+  /** Revisioned page/API snapshots for offline-first screens (never holds unsynced scouts). */
+  snapshots!: Table<{ key: string; owner_id: string; json: string; etag?: string; revision?: string; saved_at: number }, string>;
 
   constructor() {
     super("hazehub");
@@ -102,6 +105,20 @@ class HazeDB extends Dexie {
       responses: "key, saved_at",
       pendingPits: "id, owner_id, event_key, team_number, sync_status, updated_at",
     });
+    this.version(6).stores({ offlineCredentials: "id" }).upgrade(async tx => {
+      const pits = tx.table("pendingPits");
+      for (const row of await pits.toArray()) {
+        const id = `${row.owner_id}:${row.event_key}:${row.team_number}`;
+        if (row.owner_id && row.id === `${row.event_key}:${row.team_number}` && !await pits.get(id)) {
+          await pits.put({ ...row, id });
+          await pits.delete(row.id);
+        }
+      }
+    });
+    // v7: revision/ETag page snapshots. Pending scouts and recovery rows are never stored here.
+    this.version(7).stores({
+      snapshots: "key, owner_id, saved_at, revision",
+    });
   }
 }
 
@@ -119,6 +136,7 @@ export function uuid(): string {
 const UNSYNCED: SyncStatus[] = ["queued", "sending", "retry_wait"];
 
 export async function queueScout(entry: PendingScout) {
+  if (!localOwner()) throw new Error("Sign in before saving scouting data.");
   await db().pendingScouts.put({
     sync_status: "queued",
     attempt_count: 0,
@@ -185,8 +203,9 @@ export async function pendingCount(): Promise<number> {
 }
 
 export async function queuePit(body: Record<string, any>): Promise<PendingPit> {
+  if (!localOwner()) throw new Error("Sign in before saving scouting data.");
   const row: PendingPit = {
-    id: `${body.event_key}:${Number(body.team_number)}`,
+    id: `${localOwner()}:${body.event_key}:${Number(body.team_number)}`,
     owner_id: localOwner(),
     event_key: String(body.event_key || ""),
     team_number: Number(body.team_number),

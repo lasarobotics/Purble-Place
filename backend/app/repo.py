@@ -16,6 +16,7 @@ import os
 import hashlib
 import threading
 import time
+from concurrent.futures import Future
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional, TypeVar
 
@@ -56,6 +57,9 @@ def _now() -> datetime:
 # --------------------------------------------------------------------------- #
 _memo_lock = threading.RLock()
 _memo: dict[str, tuple[tuple[int, ...], Any]] = {}
+_memo_flights: dict[tuple, Future] = {}
+_memo_epoch = 0
+MAX_MEMO_ENTRIES = 2048
 
 
 def memoized(key: str, collections: tuple[str, ...], build: Callable[[], T]) -> T:
@@ -70,14 +74,36 @@ def memoized(key: str, collections: tuple[str, ...], build: Callable[[], T]) -> 
         hit = _memo.get(key)
         if hit is not None and hit[0] == stamp:
             return hit[1]
-    value = build()
-    with _memo_lock:
-        _memo[key] = (stamp, value)
-    return value
+        epoch = _memo_epoch
+        flight_key = (key, stamp, epoch)
+        flight = _memo_flights.get(flight_key)
+        owner = flight is None
+        if owner:
+            flight = Future()
+            _memo_flights[flight_key] = flight
+    if not owner:
+        return flight.result()
+    try:
+        value = build()
+        with _memo_lock:
+            if epoch == _memo_epoch and stamp == store.revision(*collections):
+                if len(_memo) >= MAX_MEMO_ENTRIES and key not in _memo:
+                    _memo.pop(next(iter(_memo)))
+                _memo[key] = (stamp, value)
+        flight.set_result(value)
+        return value
+    except BaseException as exc:
+        flight.set_exception(exc)
+        raise
+    finally:
+        with _memo_lock:
+            _memo_flights.pop(flight_key, None)
 
 
 def invalidate_memo() -> None:
+    global _memo_epoch
     with _memo_lock:
+        _memo_epoch += 1
         _memo.clear()
 
 
@@ -511,7 +537,7 @@ def _scouting_index(event_key: str) -> dict[str, dict[Any, list[ScoutEntry]]]:
         return {"all": rows, "team": by_team, "match": by_match, "scout": by_scout}
 
     return memoized(f"scouting:{event_key}", (schema.MATCH_SCOUTING, schema.SCOUTING_AUDIT, schema.MATCHES,
-        schema.TEAM_CACHE, schema.SEASONS, schema.SEASON_REVISIONS), build)
+        schema.TEAM_CACHE, schema.SEASONS, schema.SEASON_REVISIONS, schema.APP_SETTINGS), build)
 
 
 def scouting_audits(event_key: str) -> list:

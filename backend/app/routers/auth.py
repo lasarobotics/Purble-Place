@@ -1,9 +1,10 @@
 """Sign-in + identity."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from threading import Lock
+import time
 
 from ..auth import (
     create_token,
@@ -22,6 +23,16 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 _setup_lock = Lock()
 
 
+def _session_cookie(response: Response, request: Request, token: str) -> None:
+    secure = request.url.scheme == "https"
+    origin = request.headers.get("origin", "")
+    cross_origin = origin and origin.rstrip("/") != str(request.base_url).rstrip("/")
+    response.set_cookie("hazehub_session", token, httponly=True, secure=secure,
+                        samesite="none" if secure and cross_origin else "lax",
+                        path="/api/auth", max_age=settings.TOKEN_TTL_HOURS * 3600)
+    response.headers["Cache-Control"] = "no-store"
+
+
 class LoginIn(BaseModel):
     scout_id: str
     team_password: str
@@ -35,6 +46,8 @@ class LoginOut(BaseModel):
     picklist_only: bool
     display_name: str
     bucks: int
+    s_number: int = 0
+    name_confirmed: bool = False
 
 
 def _scouter_out(s: Scouter, token: str) -> LoginOut:
@@ -46,6 +59,8 @@ def _scouter_out(s: Scouter, token: str) -> LoginOut:
         picklist_only=s.picklist_only,
         display_name=s.display_name or s.scout_id,
         bucks=s.bucks,
+        s_number=s.s_number,
+        name_confirmed=s.name_confirmed,
     )
 
 
@@ -61,7 +76,7 @@ class SetupIn(AccountIn):
 def _roster_account(scout_id: str) -> Scouter:
     canonical = canonical_account_id(scout_id)
     account = repo.scouter(canonical) if canonical else None
-    if account is None:
+    if account is None or not account.active or account.deleted:
         raise HTTPException(status_code=403, detail="This ID is not on the account roster. Ask an admin for help.")
     return account
 
@@ -73,7 +88,7 @@ def account_status(body: AccountIn) -> dict:
 
 
 @router.post("/setup", response_model=LoginOut)
-def setup(body: SetupIn) -> LoginOut:
+def setup(body: SetupIn, response: Response, request: Request) -> LoginOut:
     if not 8 <= len(body.password) <= 128:
         raise HTTPException(status_code=400, detail="Use a password between 8 and 128 characters.")
     if body.password != body.password_confirmation:
@@ -85,13 +100,16 @@ def setup(body: SetupIn) -> LoginOut:
         if account.scout_id == "Admin" or account.password_hash:
             raise HTTPException(status_code=409, detail="This account is already set up. Sign in instead.")
         account.password_hash = hash_password(body.password)
-        account.role = settings.ACCOUNTS[account.scout_id]
+        if account.scout_id == "Admin":
+            account.role = "admin"
         repo.save_scouter(account)
-    return _scouter_out(account, create_token(account.scout_id, account.is_admin))
+    token = create_token(account.scout_id, account.is_admin)
+    _session_cookie(response, request, token)
+    return _scouter_out(account, token)
 
 
 @router.post("/login", response_model=LoginOut)
-def login(body: LoginIn) -> LoginOut:
+def login(body: LoginIn, response: Response, request: Request) -> LoginOut:
     scout_id = body.scout_id.strip()
     if not scout_id:
         raise HTTPException(status_code=400, detail="Scouter ID required")
@@ -100,6 +118,7 @@ def login(body: LoginIn) -> LoginOut:
     # Refuses anything that is not on the team's roster (403).
     scouter = get_account(scout_id)
     token = create_token(scouter.scout_id, scouter.is_admin)
+    _session_cookie(response, request, token)
     return _scouter_out(scouter, token)
 
 
@@ -107,6 +126,25 @@ def login(body: LoginIn) -> LoginOut:
 def me(scouter: Scouter = Depends(current_scouter)) -> LoginOut:
     token = create_token(scouter.scout_id, scouter.is_admin)
     return _scouter_out(scouter, token)
+
+
+@router.post("/logout")
+def logout(response: Response) -> dict:
+    response.delete_cookie("hazehub_session", path="/api/auth")
+    return {"ok": True}
+
+
+@router.post("/offline-provision")
+def offline_provision(body: LoginIn, scouter: Scouter = Depends(current_scouter)) -> dict:
+    """Authorize only this account after fresh password proof; never export hashes."""
+    if (scouter.is_admin or scouter.picklist_only or not scouter.password_hash
+            or canonical_account_id(body.scout_id) != scouter.scout_id):
+        raise HTTPException(status_code=403, detail="Only personal scouting accounts can prepare offline sign-in.")
+    if not verify_login_password(scouter.scout_id, body.team_password):
+        raise HTTPException(status_code=401, detail="Sign in with your current password to prepare this device.")
+    return {"version": 1, "scout_id": scouter.scout_id, "s_number": scouter.s_number,
+            "display_name": scouter.display_name or scouter.scout_id,
+            "issued_at": int(time.time()) * 1000, "expires_at": (int(time.time()) + 86400) * 1000}
 
 
 @router.get("/config")

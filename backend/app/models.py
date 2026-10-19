@@ -162,6 +162,10 @@ class Scouter:
 
     scout_id: str
     password_hash: str = ""
+    active: bool = True
+    deleted: bool = False
+    name_confirmed: bool = False
+    auth_revision: int = 0
     s_number: Optional[int] = None
     display_name: str = ""
     role: str = ROLE_SCOUTER
@@ -193,6 +197,10 @@ class Scouter:
         return {
             "scouter_id": self.scout_id,
             "password_hash": self.password_hash,
+            "active": self.active,
+            "deleted": self.deleted,
+            "name_confirmed": self.name_confirmed,
+            "auth_revision": self.auth_revision,
             "s_number": self.s_number,
             "display_name": self.display_name,
             "role": self.role,
@@ -210,6 +218,10 @@ class Scouter:
         return cls(
             scout_id=d.get("scouter_id") or doc_id,
             password_hash=d.get("password_hash") or "",
+            active=d.get("active", True),
+            deleted=d.get("deleted", False),
+            name_confirmed=d.get("name_confirmed", False),
+            auth_revision=_int(d.get("auth_revision")),
             s_number=d.get("s_number"),
             display_name=d.get("display_name") or "",
             role=normalize_role(d.get("role"), is_admin=bool(d.get("is_admin"))),
@@ -1563,6 +1575,10 @@ class PicklistHistoryDocument(PicklistDocument):
     COLLECTION = schema.PICKLIST_HISTORY
 
 
+class AccountAuditDocument(PicklistDocument):
+    COLLECTION = schema.ACCOUNT_AUDIT
+
+
 @dataclass
 class ScoutingAuditDocument(PicklistDocument):
     """Immutable admin action applied over an original scouting submission."""
@@ -1578,6 +1594,7 @@ class ScoutingAuditDocument(PicklistDocument):
 
 
 MODEL_FOR_COLLECTION = {
+    schema.ACCOUNT_AUDIT: AccountAuditDocument,
     schema.SCOUTERS: Scouter,
     schema.EVENTS: Event,
     schema.MATCHES: MatchRecord,

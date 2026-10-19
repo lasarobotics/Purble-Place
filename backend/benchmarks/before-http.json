@@ -1,0 +1,30 @@
+[
+  {
+    "teams": 73,
+    "submissions": 147,
+    "concurrency": 10,
+    "batch_ms": 10002.43,
+    "max_health_scheduling_and_response_ms": 22631.84
+  },
+  {
+    "teams": 73,
+    "submissions": 147,
+    "concurrency": 30,
+    "batch_ms": 10203.66,
+    "max_health_scheduling_and_response_ms": 20934.85
+  },
+  {
+    "teams": 73,
+    "submissions": 147,
+    "concurrency": 60,
+    "batch_ms": 11194.26,
+    "max_health_scheduling_and_response_ms": 21646.3
+  },
+  {
+    "teams": 73,
+    "submissions": 147,
+    "concurrency": 100,
+    "batch_ms": 13503.86,
+    "max_health_scheduling_and_response_ms": 23741.4
+  }
+]

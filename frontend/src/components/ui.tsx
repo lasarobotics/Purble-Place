@@ -12,6 +12,8 @@ type AvatarTeam = Pick<Team, "team_number"> & Partial<Omit<Team, "team_number">>
 type TeamLike = AvatarTeam | ({ team: number } & Partial<Team>);
 const teamProfileCache = new Map<number, AvatarTeam>();
 const pendingProfiles = new Map<number, Promise<AvatarTeam | null>>();
+const batchWaiters = new Map<number, { resolve: (team: AvatarTeam | null) => void }[]>();
+let batchFlush: ReturnType<typeof setTimeout> | null = null;
 
 export function Loading({ label = "Loading..." }: { label?: string }) {
   return (
@@ -50,36 +52,64 @@ function normalizeTeam(team: TeamLike): AvatarTeam {
   };
 }
 
+function flushTeamProfileBatch() {
+  batchFlush = null;
+  const numbers = [...batchWaiters.keys()];
+  if (!numbers.length) return;
+  const waiters = new Map(batchWaiters);
+  batchWaiters.clear();
+  (async () => {
+    const byNumber = new Map<number, AvatarTeam>();
+    try {
+      for (let i = 0; i < numbers.length; i += 24) {
+        const slice = numbers.slice(i, i + 24);
+        const rows = await api<Team[]>("/api/teams/batch", { method: "POST", body: { teams: slice } });
+        for (const row of rows) byNumber.set(row.team_number, normalizeTeam(row));
+      }
+    } catch {
+      /* Individual waiters resolve null below. */
+    }
+    for (const [teamNumber, resolvers] of waiters) {
+      const profile = byNumber.get(teamNumber) || null;
+      if (profile) teamProfileCache.set(teamNumber, profile);
+      pendingProfiles.delete(teamNumber);
+      for (const { resolve } of resolvers) resolve(profile);
+    }
+  })();
+}
+
 function fetchTeamProfile(teamNumber: number): Promise<AvatarTeam | null> {
   if (teamProfileCache.has(teamNumber)) return Promise.resolve(teamProfileCache.get(teamNumber)!);
   const pending = pendingProfiles.get(teamNumber);
   if (pending) return pending;
-  const req = api<Team>(`/api/teams/${teamNumber}`)
-    .then((team) => {
-      const normalized = normalizeTeam(team);
-      teamProfileCache.set(teamNumber, normalized);
-      return normalized;
-    })
-    .catch(() => null)
-    .finally(() => pendingProfiles.delete(teamNumber));
+  const req = new Promise<AvatarTeam | null>((resolve) => {
+    const queue = batchWaiters.get(teamNumber) || [];
+    queue.push({ resolve });
+    batchWaiters.set(teamNumber, queue);
+    if (!batchFlush) batchFlush = setTimeout(flushTeamProfileBatch, 0);
+  });
   pendingProfiles.set(teamNumber, req);
   return req;
 }
 
 function useResolvedTeam(team: TeamLike): AvatarTeam {
+  // A batch/profile response deliberately includes these keys even when TBA
+  // has no photo. Treat that as resolved; otherwise every avatar in a list
+  // launches its own network request and can overwhelm a small event server.
+  const profileSupplied = "nickname" in team || "avatar" in team || "name" in team;
   const normalized = normalizeTeam(team);
   const teamNumber = normalized.team_number;
   const avatar = normalized.avatar || "";
   const nickname = normalized.nickname || "";
   const [resolved, setResolved] = useState<AvatarTeam>(() => {
-    if (avatar) teamProfileCache.set(teamNumber, normalized);
+    if (profileSupplied) teamProfileCache.set(teamNumber, normalized);
     return teamProfileCache.get(teamNumber) || normalized;
   });
 
   useEffect(() => {
     const base = normalized;
     if (!teamNumber) return;
-    if (avatar) {
+    if (profileSupplied) {
       teamProfileCache.set(teamNumber, base);
       setResolved(base);
       return;
@@ -95,7 +125,7 @@ function useResolvedTeam(team: TeamLike): AvatarTeam {
       if (alive && profile) setResolved({ ...base, ...profile });
     });
     return () => { alive = false; };
-  }, [teamNumber, avatar, nickname]);
+  }, [teamNumber, avatar, nickname, profileSupplied]);
 
   return resolved;
 }

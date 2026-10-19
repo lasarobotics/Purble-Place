@@ -9,7 +9,7 @@
 // Nothing is ever deleted because a sync failed.
 import { localOwner } from "./identity";
 import { emitBus } from "./bus";
-import { api, ApiError } from "./api";
+import { api, ApiError, getToken } from "./api";
 import { markAcknowledged, markRetry, markStatus, pendingCount, pendingScouts, type PendingScout } from "./db";
 
 let syncing = false;
@@ -74,6 +74,7 @@ export async function flushQueue(): Promise<{ synced: number; remaining: number 
   return flushOwnedQueue();
 }
 async function flushOwnedQueue(): Promise<{ synced: number; remaining: number }> {
+  if (!getToken()) return { synced: 0, remaining: await pendingCount() };
   if (syncing) return { synced: 0, remaining: await pendingCount() };
   if (typeof navigator !== "undefined" && !navigator.onLine) {
     return { synced: 0, remaining: await pendingCount() };
@@ -85,6 +86,9 @@ async function flushOwnedQueue(): Promise<{ synced: number; remaining: number }>
       (r) => !r.next_attempt_at || r.next_attempt_at <= now
     ).slice(0, 50);
     if (!due.length) return { synced: 0, remaining: await pendingCount() };
+    // Never trust an offline snapshot for credentials, roster membership or role.
+    try { await api("/api/auth/me"); }
+    catch { return { synced: 0, remaining: await pendingCount() }; }
 
     for (const r of due) await markStatus(r.client_uuid, "sending");
     const entries = due.map(({ owner_id, queued_at, sync_status, attempt_count, last_attempt_at, next_attempt_at, last_error, azure_received_at, ...rest }) => rest);

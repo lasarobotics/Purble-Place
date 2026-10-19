@@ -22,7 +22,7 @@
  * duplicates get invented.
  */
 
-const VERSION = "hazehub-v7";
+const VERSION = "hazehub-v10";
 const SHELL_CACHE = `${VERSION}-shell`;
 const ASSET_CACHE = `${VERSION}-assets`;
 const API_CACHE = `${VERSION}-api`;
@@ -30,7 +30,7 @@ const API_CACHE = `${VERSION}-api`;
 /* Pages a scout can land on with no connection. Everything else falls back to
  * whichever of these is cached. */
 const SHELL_ROUTES = [
-  "/", "/home", "/scout", "/pit", "/picklists", "/meeting", "/results", "/match-schedule", "/data-analysis", "/picklist-simulator", "/data", "/status", "/account", "/login",
+  "/rankings", "/admin/final-picklist", "/admin/accounts", "/", "/home", "/scout", "/pit", "/picklists", "/meeting", "/results", "/match-schedule", "/data-analysis", "/picklist-simulator", "/data", "/status", "/account", "/login",
   "/admin", "/admin/compare", "/admin/data-picklist", "/admin/forms", "/admin/picklists", "/admin/seasons",
   "/admin/system", "/admin/team-rank", "/admin/team-search",
 ];
@@ -47,7 +47,10 @@ const CACHEABLE_API = []; // API snapshots are partitioned by user in IndexedDB.
 self.addEventListener("install", (event) => {
   event.waitUntil(
     (async () => {
-      await warmRoutes(SHELL_ROUTES);
+      // Keep installation light so a deploy cannot compete with the page the
+      // user is trying to open. The app asks for the complete route set once
+      // the initial screen is idle.
+      await warmRoutes(["/", "/login"]);
       await self.skipWaiting();
     })()
   );
@@ -88,7 +91,7 @@ function discoverAssets(text) {
       const raw = (match[1] || "").replaceAll("&amp;", "&");
       try {
         const url = new URL(raw, self.location.origin);
-        if (url.origin === self.location.origin && (isAsset(url) || PUBLIC_ASSETS.includes(url.pathname))) {
+        if (url.origin === self.location.origin && !url.pathname.endsWith("/") && (isAsset(url) || PUBLIC_ASSETS.includes(url.pathname))) {
           found.add(`${url.pathname}${url.search}`);
         }
       } catch { /* Ignore malformed markup emitted by third-party code. */ }

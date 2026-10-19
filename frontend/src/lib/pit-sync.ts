@@ -1,16 +1,20 @@
-import { api, ApiError } from "./api";
+import { api, ApiError, getToken } from "./api";
 import { db, pendingPits } from "./db";
 
 let syncing = false;
 
 export async function flushPitQueue(): Promise<{ synced: number; remaining: number }> {
-  if (syncing || (typeof navigator !== "undefined" && !navigator.onLine)) {
+  if (!getToken() || syncing || (typeof navigator !== "undefined" && !navigator.onLine)) {
     return { synced: 0, remaining: (await pendingPits()).length };
   }
   syncing = true;
   let synced = 0;
   try {
-    for (const row of await pendingPits()) {
+    const pending = await pendingPits();
+    if (!pending.length) return { synced: 0, remaining: 0 };
+    try { await api("/api/auth/me"); }
+    catch { return { synced: 0, remaining: (await pendingPits()).length }; }
+    for (const row of pending.slice(0, 20)) {
       await db().pendingPits.update(row.id, { sync_status: "sending" });
       try {
         await api("/api/pit", { method: "POST", body: row.body });
@@ -19,7 +23,7 @@ export async function flushPitQueue(): Promise<{ synced: number; remaining: numb
         });
         synced++;
       } catch (error: any) {
-        const invalid = error instanceof ApiError && error.status >= 400 && error.status < 500;
+        const invalid = error instanceof ApiError && [400, 422].includes(error.status);
         await db().pendingPits.update(row.id, {
           sync_status: invalid ? "invalid" : "retry_wait",
           last_error: error?.message || "Could not sync pit report",

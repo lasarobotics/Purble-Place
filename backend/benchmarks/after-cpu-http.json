@@ -1,0 +1,74 @@
+[
+  {
+    "teams": 73,
+    "submissions": 147,
+    "concurrency": 10,
+    "firestore_probe_stubbed": true,
+    "peak_rss_mib": 57.54,
+    "batch_ms": 998.01,
+    "max_health_scheduling_and_response_ms": 398.42
+  },
+  {
+    "teams": 73,
+    "submissions": 147,
+    "concurrency": 30,
+    "firestore_probe_stubbed": true,
+    "peak_rss_mib": 64.42,
+    "batch_ms": 1295.19,
+    "max_health_scheduling_and_response_ms": 494.06
+  },
+  {
+    "teams": 73,
+    "submissions": 147,
+    "concurrency": 60,
+    "firestore_probe_stubbed": true,
+    "peak_rss_mib": 73.67,
+    "batch_ms": 2202.18,
+    "max_health_scheduling_and_response_ms": 1096.8
+  },
+  {
+    "teams": 73,
+    "submissions": 147,
+    "concurrency": 100,
+    "firestore_probe_stubbed": true,
+    "peak_rss_mib": 88.29,
+    "batch_ms": 2703.89,
+    "max_health_scheduling_and_response_ms": 808.03
+  },
+  {
+    "teams": 150,
+    "submissions": 1470,
+    "concurrency": 10,
+    "firestore_probe_stubbed": true,
+    "peak_rss_mib": 106.79,
+    "batch_ms": 5806.47,
+    "max_health_scheduling_and_response_ms": 408.7
+  },
+  {
+    "teams": 150,
+    "submissions": 1470,
+    "concurrency": 30,
+    "firestore_probe_stubbed": true,
+    "peak_rss_mib": 108.15,
+    "batch_ms": 6601.57,
+    "max_health_scheduling_and_response_ms": 702.07
+  },
+  {
+    "teams": 150,
+    "submissions": 1470,
+    "concurrency": 60,
+    "firestore_probe_stubbed": true,
+    "peak_rss_mib": 109.98,
+    "batch_ms": 8000.29,
+    "max_health_scheduling_and_response_ms": 1197.59
+  },
+  {
+    "teams": 150,
+    "submissions": 1470,
+    "concurrency": 100,
+    "firestore_probe_stubbed": true,
+    "peak_rss_mib": 114.65,
+    "batch_ms": 9094.48,
+    "max_health_scheduling_and_response_ms": 2396.27
+  }
+]

@@ -3,6 +3,7 @@ import { useCallback, useState } from "react";
 import { useLiveRefetch } from "@/lib/bus";
 import { MetricLabel } from "./MetricLabel";
 import { api } from "@/lib/api";
+import { useSnapshot } from "@/lib/snapshot";
 import { matchLabel, num, pct, timeAgo } from "@/lib/format";
 import type { HeatPoint, PitEntry, Team, TeamSummary } from "@/lib/types";
 import { Empty, Loading, Modal, Stat, TeamIdentity } from "@/components/ui";
@@ -46,17 +47,10 @@ interface TeamDetail {
 }
 
 export function TeamDetailModal({ teamNumber, onClose }: { teamNumber: number; onClose: () => void }) {
-  const [data, setData] = useState<TeamDetail | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  const load = useCallback(() => {
-    setLoading(true);
-    Promise.all([api<TeamDetail>(`/api/teams/${teamNumber}/scouting`), api<PitEntry | null>(`/api/pit/${teamNumber}`)])
-      .then(([result, pit]) => setData({ ...result, pit }))
-      .catch(() => setData(null))
-      .finally(() => setLoading(false));
-  }, [teamNumber]);
-  useLiveRefetch(load);
+  const scouting = useSnapshot<TeamDetail>(`/api/teams/${teamNumber}/scouting`);
+  const pit = useSnapshot<PitEntry | null>(`/api/pit/${teamNumber}`);
+  const data = scouting.data ? {...scouting.data, pit: pit.data} : null;
+  const loading = !data && !scouting.error;
 
   return (
     <Modal onClose={onClose}>

@@ -100,6 +100,7 @@ export default function TeamRankPage() {
   const [analysisRows, setAnalysisRows] = useState<DataAnalysisRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [analysisLoading, setAnalysisLoading] = useState(true);
+  const [analysisError, setAnalysisError] = useState("");
   const [analysisSort, setAnalysisSort] = useState<{ key: AnalysisKey; dir: SortDir }>({
     key: "skew_distribution",
     dir: "desc",
@@ -117,8 +118,8 @@ export default function TeamRankPage() {
 
   const loadAnalysis = useCallback(() => {
     api<{ teams: DataAnalysisRow[] }>("/api/admin/data-analysis")
-      .then((r) => setAnalysisRows(r.teams))
-      .catch(() => setAnalysisRows([]))
+      .then((r) => { setAnalysisRows(r.teams); setAnalysisError(""); })
+      .catch(() => setAnalysisError("Data Analysis could not refresh. Please retry."))
       .finally(() => setAnalysisLoading(false));
   }, []);
   useLiveRefetch(loadAnalysis);
@@ -190,7 +191,7 @@ export default function TeamRankPage() {
         </div>
       )}
       </>
-      ) : analysisLoading ? <Loading /> : sortedAnalysisRows.length === 0 ? <Empty icon="chart" title="No data yet" /> : (
+      ) : analysisLoading ? <Loading /> : analysisError && sortedAnalysisRows.length === 0 ? <div className="card" role="alert">{analysisError} <button className="btn ghost" onClick={loadAnalysis}>Retry</button></div> : sortedAnalysisRows.length === 0 ? <Empty icon="chart" title="No data yet" /> : (
         <div className="card">
           <div className="table-wrap">
             <table className="data">

@@ -352,7 +352,7 @@ def get_analysis(
 @router.get("/raw-data")
 def raw_data(
     event: str | None = None,
-    _: Scouter = Depends(current_scouter),
+    _: Scouter = Depends(require_admin),
 ) -> dict:
     """Raw event records from the in-process cache; this causes no Firestore read."""
     event_key = repo.resolve_event(event)
@@ -501,7 +501,7 @@ def list_event_teams(
 
 
 @router.get("/rank")
-async def rank(
+def rank(
     metric: str = "avg_points",
     event: str | None = None,
     _: Scouter = Depends(current_scouter),
@@ -511,36 +511,18 @@ async def rank(
 
 
 @router.get("/data-analysis")
-async def get_data_analysis(
+def get_data_analysis(
     event: str | None = None,
     _: Scouter = Depends(current_scouter),
 ) -> dict:
     event_key = repo.resolve_event(event)
-    rows = data_analysis(event_key)
-    # Match 13 is additive: if venue internet is unavailable, scouting analysis
-    # remains usable and the external columns simply display as unavailable.
-    from ..external import match13_event_ratings
-    ratings = await match13_event_ratings(event_key) if event_key else {}
-    for row in rows:
-        row.update(ratings.get(row["team"], {"opr": None, "match13_epa": None, "xp": None}))
-    existing = {row["team"] for row in rows}
-    for team, values in ratings.items():
-        if team in existing:
-            continue
-        cached = repo.team(team)
-        rows.append({
-            "team": team, "nickname": cached.nickname if cached else "", "avatar": cached.avatar if cached else "",
-            "matches": 0, "avg_points": None, "defense_capability": None, "l4m_defense_capability": None,
-            "consistency": 0.0, "l4m_consistency": 0.0, "skew_distribution": None,
-            "l4m_skew_distribution": None, "failure_rate": 0.0, "l4m_failure_rate": 0.0,
-            "foul_match_rate": 0.0, "climb_success_rate": 0.0, "l4m_climb_success_rate": 0.0,
-            "ranking_point_prediction": None, **values,
-        })
-    return {"event": event_key, "ratings_source": "match13", "teams": rows}
+    # Return cached scouting analysis immediately. Match 13 is loaded through
+    # /api/matches/event-ratings so an upstream slowdown never blocks this table.
+    return {"event": event_key, "teams": data_analysis(event_key)}
 
 
 @router.get("/data-picklist")
-async def get_data_picklist(
+def get_data_picklist(
     event: str | None = None,
     _: Scouter = Depends(current_scouter),
 ) -> dict:
@@ -558,7 +540,7 @@ def get_disagreements(
 
 
 @router.get("/compare")
-async def compare(
+def compare(
     teams: str,
     event: str | None = None,
     _: Scouter = Depends(current_scouter),
@@ -574,7 +556,7 @@ async def compare(
 
 
 @router.get("/team/{team}/summary")
-async def get_team_summary(
+def get_team_summary(
     team: int,
     event: str | None = None,
     _: Scouter = Depends(current_scouter),

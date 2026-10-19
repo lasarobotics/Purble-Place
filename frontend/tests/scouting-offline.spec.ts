@@ -221,8 +221,9 @@ test("opening HazeHub downloads the complete scouting shell and assets for offli
     navigator.serviceWorker.controller?.postMessage({ type: "WARM_ROUTES", routes: [] });
   }));
   await expect.poll(() => page.evaluate(async () => {
-    const shell = await caches.open("hazehub-v6-shell");
-    const assets = await caches.open("hazehub-v6-assets");
+    const names = await caches.keys();
+    const shell = await caches.open(names.find(name => name.endsWith("-shell")) || "missing-shell");
+    const assets = await caches.open(names.find(name => name.endsWith("-assets")) || "missing-assets");
     const keys = await assets.keys();
     return Boolean(await shell.match("/scout")) && Boolean(await shell.match("/pit")) &&
       Boolean(await assets.match("/field.png")) && Boolean(await assets.match("/pineapples/pineapple1.gif")) &&
@@ -256,7 +257,11 @@ test("raw match and pit data remain readable offline", async ({ page, context })
   await page.reload();
   await expect(page.getByRole("button", { name: "Beautiful", exact: true })).toHaveClass("on");
   await page.getByRole("button", { name: "Raw", exact: true }).click();
-  await page.waitForFunction(async () => !!navigator.serviceWorker.controller && !!await (await caches.open("hazehub-v6-shell")).match("/data"));
+  await page.waitForFunction(async () => {
+    if (!navigator.serviceWorker.controller) return false;
+    const shellName = (await caches.keys()).find(name => name.endsWith("-shell"));
+    return !!shellName && !!await (await caches.open(shellName)).match("/data");
+  });
   await page.evaluate(() => new Promise<void>((resolve, reject) => {
     const timeout = window.setTimeout(() => reject(new Error("Offline route warm-up timed out")), 5000);
     const ready = (event: MessageEvent) => {

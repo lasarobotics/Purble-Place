@@ -28,3 +28,9 @@ ui-debug.log
 .DS_Store
 *.log
 .claude/launch.json
+cloudflare/node_modules/
+cloudflare/dist/
+cloudflare/.wrangler/
+cloudflare/**/.dev.vars
+cloudflare/private/
+cloudflare/test-state/

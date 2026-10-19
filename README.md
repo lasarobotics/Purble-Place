@@ -16,6 +16,11 @@ laptop, which is what keeps the project off the paid plan and keeps the app fast
 venue wifi isn't. It's built to keep a 60-person, 12-hour competition day inside
 Firestore's free daily allowance. **Setup walkthrough: [instructions.txt](instructions.txt).**
 
+**Cloudflare Workers staging** (separate from production): an orchestrated Workers + D1 +
+Durable Objects + Queues foundation lives in [`cloudflare/`](cloudflare/). It does **not**
+replace the Render/Firestore backend until migration is validated. See
+[`cloudflare/ARCHITECTURE.md`](cloudflare/ARCHITECTURE.md).
+
 ---
 
 ## ✨ Features

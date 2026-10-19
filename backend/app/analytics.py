@@ -20,11 +20,19 @@ from . import repo, schema
 from . import seasons
 from .models import ScoutEntry
 from .scoring import attempt_value, compute_points, phase_counts
-from .expected_points import estimate_avg_points
+from .expected_points import estimate_avg_points, prepare_event
 
 #: Revision keys for the memoiser: any change to scouting or team data
 #: invalidates every derived aggregate below.
-_DEPS = (schema.MATCH_SCOUTING, schema.SCOUTING_AUDIT, schema.TEAM_CACHE, schema.MATCHES, schema.SEASONS, schema.SEASON_REVISIONS)
+_DEPS = (schema.MATCH_SCOUTING, schema.SCOUTING_AUDIT, schema.TEAM_CACHE, schema.MATCHES, schema.SEASONS, schema.SEASON_REVISIONS, schema.APP_SETTINGS)
+
+
+def expected_team_points(event_key: str, team: int) -> float | None:
+    def build():
+        context = repo.memoized(f"expected-priors:{event_key}", _DEPS,
+                                lambda: prepare_event(repo.scouting_for_event(event_key)))
+        return estimate_avg_points(team_entries(event_key, team), [], event_context=context)
+    return repo.memoized(f"expected-points:{event_key}:{team}", _DEPS, build)
 
 
 # --------------------------------------------------------------------------- #
@@ -79,7 +87,7 @@ def scoring_benchmark(event_key: str) -> dict[str, Any]:
             reports = team_entries(event_key, team)
             if not reports:
                 continue
-            score = estimate_avg_points(reports, repo.scouting_for_event(event_key))
+            score = expected_team_points(event_key, team)
             if score is not None and score > best_score:
                 best_team, best_score = team, score
         return {"team": best_team, "avg_points": best_score if best_team is not None else None}
@@ -263,7 +271,7 @@ def _build_team_summary(event_key: str, team: int) -> dict[str, Any]:
     entries = [e for e in all_entries if not e.no_show]
     no_shows = len(all_entries) - len(entries)
     pts = [e.points for e in entries]
-    expected_points = estimate_avg_points(all_entries, repo.scouting_for_event(event_key))
+    expected_points = expected_team_points(event_key, team)
     n = len(entries)
 
     per_match: dict[tuple[str, int], list[float]] = {}
@@ -449,7 +457,7 @@ def data_analysis(event_key: str) -> list[dict[str, Any]]:
                     "avatar": summary["avatar"],
                     "matches": summary["matches"],
                     "avg_points": summary["avg_points"],
-                    "defense_capability": _defense_capability(entries, benchmark["avg_points"]),
+                    "defense_capability": summary["defense_capability"],
                     "l4m_defense_capability": _defense_capability(l4m, benchmark["avg_points"]),
                     "scoring_benchmark": benchmark,
                     "consistency": summary["consistency"],

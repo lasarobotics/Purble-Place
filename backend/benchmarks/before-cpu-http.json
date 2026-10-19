@@ -1,0 +1,38 @@
+[
+  {
+    "teams": 73,
+    "submissions": 147,
+    "concurrency": 10,
+    "firestore_probe_stubbed": true,
+    "peak_rss_mib": 56.61,
+    "batch_ms": 9700.19,
+    "max_health_scheduling_and_response_ms": 9700.31
+  },
+  {
+    "teams": 73,
+    "submissions": 147,
+    "concurrency": 30,
+    "firestore_probe_stubbed": true,
+    "peak_rss_mib": 62.86,
+    "batch_ms": 10200.86,
+    "max_health_scheduling_and_response_ms": 10201.01
+  },
+  {
+    "teams": 73,
+    "submissions": 147,
+    "concurrency": 60,
+    "firestore_probe_stubbed": true,
+    "peak_rss_mib": 72.61,
+    "batch_ms": 11402.78,
+    "max_health_scheduling_and_response_ms": 11402.87
+  },
+  {
+    "teams": 73,
+    "submissions": 147,
+    "concurrency": 100,
+    "firestore_probe_stubbed": true,
+    "peak_rss_mib": 86.11,
+    "batch_ms": 11800.73,
+    "max_health_scheduling_and_response_ms": 11800.75
+  }
+]

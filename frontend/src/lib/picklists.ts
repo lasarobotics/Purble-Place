@@ -33,9 +33,14 @@ export function usePicklistLive(load: () => void, interval = 15000) {
   useEffect(() => {
     load();
     const off = onBus(e => { if (e === "picklist_changed" || e === "settings_changed") load(); });
-    const timer = setInterval(load, interval);
+    const tick = () => {
+      if (document.visibilityState === "visible" && navigator.onLine) load();
+    };
+    const timer = setInterval(tick, interval);
+    const visible = () => { if (document.visibilityState === "visible") tick(); };
     window.addEventListener("online", load);
-    return () => { off(); clearInterval(timer); window.removeEventListener("online", load); };
+    document.addEventListener("visibilitychange", visible);
+    return () => { off(); clearInterval(timer); window.removeEventListener("online", load); document.removeEventListener("visibilitychange", visible); };
   }, [load, interval]);
 }
 

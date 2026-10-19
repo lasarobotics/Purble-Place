@@ -50,6 +50,11 @@ test("compare overlays up to six colored team heatmaps and filters phase and sta
     const path = new URL(route.request().url()).pathname;
     if (path === "/api/auth/me") return route.fulfill({ json: session });
     if (path === "/api/admin/analysis") return route.fulfill({ json: bundle });
+    if (path === "/api/admin/event-teams") return route.fulfill({ json: teamNums });
+    if (path === "/api/teams/batch") return route.fulfill({ json: teams });
+    if (path === "/api/admin/compare") return route.fulfill({ json: { teams, metrics: [] } });
+    const heatTeam = path.match(/^\/api\/admin\/team\/(\d+)\/heatmap$/)?.[1];
+    if (heatTeam) return route.fulfill({ json: bundle.scouting[heatTeam].heatmap });
     if (path === "/api/events") return route.fulfill({ json: { events: [] } });
     if (path === "/api/matches") return route.fulfill({ json: { matches: [] } });
     if (path === "/api/betting/mine") return route.fulfill({ json: { bucks: 100, bets: [] } });

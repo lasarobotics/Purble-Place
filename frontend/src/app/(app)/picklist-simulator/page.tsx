@@ -12,20 +12,25 @@ const empty = { captain: 0, first: 0, second: 0 };
 export default function PicklistSimulatorPage() {
   const [rows, setRows] = useState<AnalysisRow[] | null>(null);
   const [picks, setPicks] = useState<Record<Slot, number>>(empty);
-  const load = useCallback(() => Promise.all([
-    api<{ teams: AnalysisRow[] }>("/api/admin/data-analysis"),
-    api<{ teams: Partial<AnalysisRow>[] }>("/api/matches/event-ratings").catch(() => ({ teams: [] })),
-  ]).then(([analysis, external]) => {
-    const merged = new Map(analysis.teams.map(row => [row.team, row]));
-    for (const rating of external.teams) {
-      const team = Number(rating.team); const current = merged.get(team);
-      if (current) Object.assign(current, rating);
-      else merged.set(team, { team, matches: 0, defense_capability: null, consistency: 0,
-        skew_distribution: null, failure_rate: 0, foul_match_rate: 0,
-        climb_success_rate: 0, ranking_point_prediction: null, ...rating });
-    }
-    setRows([...merged.values()]);
-  }).catch(() => setRows([])), []);
+  const load = useCallback(async () => {
+    try {
+      const analysis = await api<{ teams: AnalysisRow[] }>("/api/admin/data-analysis");
+      setRows(analysis.teams);
+      void api<{ teams: Partial<AnalysisRow>[] }>("/api/matches/event-ratings").then(external => {
+        setRows(current => {
+          const merged = new Map((current || analysis.teams).map(row => [row.team, row]));
+          for (const rating of external.teams) {
+            const team = Number(rating.team); const existing = merged.get(team);
+            if (existing) merged.set(team, { ...existing, ...rating });
+            else merged.set(team, { team, matches: 0, defense_capability: null, consistency: 0,
+              skew_distribution: null, failure_rate: 0, foul_match_rate: 0,
+              climb_success_rate: 0, ranking_point_prediction: null, ...rating });
+          }
+          return [...merged.values()];
+        });
+      }).catch(() => {});
+    } catch { setRows([]); }
+  }, []);
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { try { const saved = JSON.parse(localStorage.getItem("hazehub.picklist.simulator") || "null"); if (saved) setPicks(saved); } catch {} }, []);
   useEffect(() => { localStorage.setItem("hazehub.picklist.simulator", JSON.stringify(picks)); }, [picks]);

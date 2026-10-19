@@ -124,7 +124,7 @@ export function SubmittedPicklists({ event, teams, onImport, robotNumber, shared
           <strong>{list.name}</strong>
           <span>{list.owner_name} · made for Team {list.robot_number || 418} · {new Date(list.submitted_at || list.updated_at).toLocaleString()}</span>
         </button>
-        <ol className="submission-preview">{list.items.slice(0, 5).map((item, index) => <li key={item.team}><span className="rank-chip">{index + 1}</span><TeamIdentity team={teams[item.team] || { team_number: item.team }} /></li>)}</ol>
+        <ol className="submission-preview">{list.items.slice(0, 5).map((item, index) => <li key={item.team}><span className="rank-chip">{index + 1}</span><TeamIdentity team={teams[item.team] || { team_number: item.team, nickname: "" }} /></li>)}</ol>
         <p className="faint submission-count">{list.items.length} ranked team{list.items.length === 1 ? "" : "s"}{list.items.length > 5 ? ` · ${list.items.length - 5} more` : ""}</p>
         <div className="btn-row"><button className="btn sm" onClick={() => setOpen(list)}>View list</button>{onImport && <button className="btn sm primary" onClick={async () => { if (await confirm(`Copy ${list.name} into the ${round === 1 ? "First" : "Second"} Pick meeting board? This replaces its current working ranking; the submission stays unchanged.`)) onImport(list); }}>Import copy</button>}</div>
       </article>;
@@ -137,7 +137,7 @@ export function SubmittedPicklists({ event, teams, onImport, robotNumber, shared
         <div className="comparison-toolbar"><label>Order teams<select value={sort} onChange={e => setSort(e.target.value)}><option value="average">Consensus rank</option><option value="frequency">Most selected</option><option value="team">Team number</option><option value="metric:avg_points">Haze Power Rating</option><option value="metric:operational_rate">Operational rate</option></select></label>{comparing && <span className="badge muted">Updating…</span>}</div>
         <div className="table-wrap comparison-table-wrap"><table className="data comparison-table"><thead><tr><th>Team</th><th>Consensus</th>{compared.map(list => <th key={list.id}><span>{list.name}</span><small>{list.owner_name}</small></th>)}<th>Spread</th>{sort.startsWith("metric:") && <th>Metric</th>}</tr></thead><tbody>{comparison.teams.map(row => {
           const ranks = new Map(row.values.map(value => [value.id, value.rank]));
-          return <tr key={row.team}><td className="sticky-team-first"><TeamIdentity team={teams[row.team] || { team_number: row.team }} /></td><td><b>#{row.average.toFixed(1)}</b><small>{row.frequency}/{comparison.list_count || compared.length} lists</small></td>{compared.map(list => <td key={list.id}>{ranks.has(list.id) ? <span className="comparison-rank">#{ranks.get(list.id)}</span> : <span className="faint">Not listed</span>}</td>)}<td>{row.spread}</td>{sort.startsWith("metric:") && <td>{row.metric ?? "—"}</td>}</tr>;
+          return <tr key={row.team}><td className="sticky-team-first"><TeamIdentity team={teams[row.team] || { team_number: row.team, nickname: "" }} /></td><td><b>#{row.average.toFixed(1)}</b><small>{row.frequency}/{comparison.list_count || compared.length} lists</small></td>{compared.map(list => <td key={list.id}>{ranks.has(list.id) ? <span className="comparison-rank">#{ranks.get(list.id)}</span> : <span className="faint">Not listed</span>}</td>)}<td>{row.spread}</td>{sort.startsWith("metric:") && <td>{row.metric ?? "—"}</td>}</tr>;
         })}</tbody></table></div>
         <p className="faint">Consensus is the average rank among lists containing that team. Spread is the difference between its best and worst selected-list rank.</p>
       </>}
@@ -152,7 +152,7 @@ function PicklistReference({ list, teams, onClose, onImport }: { list: PicklistR
   return <div className="picklist-reference">
     <div className="modal-head"><div><span className="badge haze">For Team {list.robot_number || 418} · {list.pick_round === 1 ? "First Pick" : "Second Pick"}</span><h2>{list.name}</h2><p>{list.owner_name} · submission #{list.submission_number || 1} · {new Date(list.submitted_at || list.updated_at).toLocaleString()}</p></div><button className="btn" onClick={onClose}>Close</button></div>
     <div className="picklist-reference-summary"><b>{list.items.length}</b><span>ranked teams</span><i>Read-only submission</i></div>
-    <ol className="picklist-reference-list">{list.items.map((item, index) => <li key={item.team}><span className="rank-chip">{index + 1}</span><div><TeamIdentity team={teams[item.team] || { team_number: item.team }} />{reason(item) && <p>{reason(item)}</p>}</div></li>)}</ol>
+    <ol className="picklist-reference-list">{list.items.map((item, index) => <li key={item.team}><span className="rank-chip">{index + 1}</span><div><TeamIdentity team={teams[item.team] || { team_number: item.team, nickname: "" }} />{reason(item) && <p>{reason(item)}</p>}</div></li>)}</ol>
     <div className="btn-row" style={{ justifyContent: "flex-end" }}>{onImport && <button className="btn primary" onClick={onImport}>Import a copy into meeting</button>}<button className="btn" onClick={onClose}>Done</button></div>
   </div>;
 }
