@@ -1,7 +1,7 @@
 {
-  "name": "HazeHub Scouting",
-  "short_name": "HazeHub",
-  "description": "Purple Haze scouting, strategy and picklist hub for FRC.",
+  "name": "Purble Place Scouting",
+  "short_name": "Purble Place",
+  "description": "LASA Robotics scouting and competition operations for teams 418 and 436.",
   "start_url": "/home",
   "scope": "/",
   "display": "standalone",

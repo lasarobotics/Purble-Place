@@ -1,4 +1,4 @@
-/* HazeHub service worker: keep the app usable with no signal.
+/* Purble Place service worker: keep the app usable with no signal.
  *
  * Venue wifi is the single most reliable failure at an FRC event. A scout who
  * cannot load the page cannot scout, and reloading the tab between matches is
@@ -22,7 +22,7 @@
  * duplicates get invented.
  */
 
-const VERSION = "hazehub-v10";
+const VERSION = "purble-place-v11";
 const SHELL_CACHE = `${VERSION}-shell`;
 const ASSET_CACHE = `${VERSION}-assets`;
 const API_CACHE = `${VERSION}-api`;
@@ -30,12 +30,12 @@ const API_CACHE = `${VERSION}-api`;
 /* Pages a scout can land on with no connection. Everything else falls back to
  * whichever of these is cached. */
 const SHELL_ROUTES = [
-  "/rankings", "/admin/final-picklist", "/admin/accounts", "/", "/home", "/scout", "/pit", "/picklists", "/meeting", "/results", "/match-schedule", "/data-analysis", "/picklist-simulator", "/data", "/status", "/account", "/login",
+  "/rankings", "/admin/final-picklist", "/admin/accounts", "/", "/home", "/pits", "/scout", "/pit", "/picklists", "/meeting", "/results", "/match-schedule", "/data-analysis", "/picklist-simulator", "/data", "/status", "/account", "/login",
   "/admin", "/admin/compare", "/admin/data-picklist", "/admin/forms", "/admin/picklists", "/admin/seasons",
   "/admin/system", "/admin/team-rank", "/admin/team-search",
 ];
 const PUBLIC_ASSETS = [
-  "/field.png", "/icon.svg", "/manifest.webmanifest",
+  "/brand/lasa-robotics.png", "/brand/urple.png", "/fonts/noto-sans-black.ttf", "/field.png", "/icon.svg", "/manifest.webmanifest",
   "/pineapples/pineapple1.gif", "/pineapples/pineapple2.gif", "/pineapples/pineapple3.gif",
   "/pineapples/pineapple4.gif", "/pineapples/pineapple5.gif",
 ];
@@ -75,7 +75,7 @@ self.addEventListener("message", (event) => {
 function isAsset(url) {
   return (
     url.pathname.startsWith("/_next/static/") ||
-    /\.(?:js|css|woff2?|png|jpg|jpeg|svg|webp|gif|ico|webmanifest)$/.test(url.pathname)
+    /\.(?:js|css|woff2?|ttf|png|jpg|jpeg|svg|webp|gif|ico|webmanifest)$/.test(url.pathname)
   );
 }
 
@@ -213,11 +213,11 @@ self.addEventListener("fetch", (event) => {
             (await cache.match("/"));
           if (hit) return hit;
           return new Response(
-            "<!doctype html><meta charset=utf-8><title>HazeHub offline</title>" +
+            "<!doctype html><meta charset=utf-8><title>Purble Place offline</title>" +
               "<style>body{background:#0a0b0d;color:#e7e8ea;font:14px system-ui;" +
               "display:grid;place-items:center;height:100vh;margin:0;text-align:center}" +
               "p{color:#989aa1;max-width:34ch}</style>" +
-              "<div><h1>No connection</h1><p>Open HazeHub once while online and " +
+              "<div><h1>No connection</h1><p>Open Purble Place once while online and " +
               "it will keep working here without one.</p></div>",
             { headers: { "Content-Type": "text/html; charset=utf-8" }, status: 503 }
           );

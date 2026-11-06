@@ -9,8 +9,7 @@ import { MetricLabel } from "./MetricLabel";
 const FIELD_SRC = "/field.png";
 
 function colorFor(p: HeatPoint): string {
-  if (p.result === "missed") return "#f59e0b";
-  return p.phase === "auto" ? "#22d3ee" : "#a855f7";
+  return p.phase === "auto" ? "#f8efff" : "#A87fc9";
 }
 
 /** Interactive scoring map used on the scout form. Each tap logs an attempt. */
@@ -23,13 +22,22 @@ export function FieldInput({
   onChange: (pts: HeatPoint[]) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [phase, setPhase] = useState<"auto" | "teleop">("teleop");
+  const [phase, setPhase] = useState<"auto" | "teleop">("auto");
+
+  const latest = useRef({ points, onChange, active });
+  latest.current = { points, onChange, active };
+  const pending = useRef<{ point: HeatPoint; phase: "auto" | "teleop"; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const cancelPending = () => { if (pending.current) clearTimeout(pending.current.timer); pending.current = null; };
+  useEffect(() => () => cancelPending(), []);
+  useEffect(() => { if (!active) cancelPending(); }, [active]);
 
   function undo() {
+    cancelPending();
     onChange(points.slice(0, -1));
   }
 
   function clear() {
+    cancelPending();
     onChange([]);
   }
 
@@ -65,7 +73,7 @@ export function FieldInput({
 
   function add(e: React.MouseEvent) {
     const el = ref.current;
-    if (!el) return;
+    if (!el || !active) return;
     const r = el.getBoundingClientRect();
     const x = (e.clientX - r.left) / r.width;
     const y = (e.clientY - r.top) / r.height;
@@ -73,14 +81,34 @@ export function FieldInput({
     onChange([...points, { x, y, phase, result: "made" }]);
   }
 
-  function remove(index: number, e: React.MouseEvent<SVGCircleElement>) {
+  function dotClick(point: HeatPoint, e: React.MouseEvent<SVGCircleElement>) {
     e.stopPropagation();
-    onChange(points.filter((_, pointIndex) => pointIndex !== index));
+    if (!active) return;
+    if (pending.current?.point === point) {
+      cancelPending();
+      const index = latest.current.points.indexOf(point);
+      latest.current.onChange(latest.current.points.filter((_, i) => i !== index));
+      return;
+    }
+    // Flush a pending single click on a different dot before starting another.
+    if (pending.current) {
+      const previous = pending.current.point;
+      const previousPhase = pending.current.phase;
+      cancelPending();
+      const next = [...latest.current.points, { x: previous.x, y: previous.y, phase: previousPhase, result: "made" as const }];
+      latest.current = { ...latest.current, points: next };
+      onChange(next);
+    }
+    const selectedPhase = phase;
+    pending.current = { point, phase, timer: setTimeout(() => {
+      pending.current = null;
+      if (latest.current.active) latest.current.onChange([...latest.current.points, { x: point.x, y: point.y, phase: selectedPhase, result: "made" }]);
+    }, 300) };
   }
 
   const counts = {
-    autoMade: points.filter((p) => p.phase === "auto").length,
-    teleMade: points.filter((p) => p.phase === "teleop").length,
+    autoMade: points.filter((p) => p.phase === "auto" && p.result !== "missed").length,
+    teleMade: points.filter((p) => p.phase === "teleop" && p.result !== "missed").length,
   };
 
   return (
@@ -101,14 +129,14 @@ export function FieldInput({
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img className="field-bg" src={FIELD_SRC} alt="field" draggable={false} />
         <svg className="field-svg" viewBox="0 0 100 50" preserveAspectRatio="none">
-          {points.map((p, i) => (
+          {points.map((p, i) => p.result === "missed" ? null : (
             <g key={i}>
               <circle cx={p.x * 100} cy={p.y * 50} r={p.result === "made" ? 1.4 : 1.1}
                 fill={colorFor(p)} stroke="white" strokeWidth={0.25} opacity={0.92} pointerEvents="none" />
               <circle cx={p.x * 100} cy={p.y * 50} r={3.2} fill="transparent"
-                className="heatmap-remove-target" onClick={(event) => remove(i, event)}
+                className="heatmap-remove-target" onClick={(event) => dotClick(p, event)}
                 aria-label={`Remove ${p.phase} heatmap dot ${i + 1}`}>
-                <title>Click to remove this dot</title>
+                <title>Double-click to remove one dot; single-click to add a shot</title>
               </circle>
             </g>
           ))}
@@ -116,7 +144,7 @@ export function FieldInput({
       </div>
 
       <div className="heatmap-keybinds" aria-label="Heatmap keyboard shortcuts">
-        <span>Click a dot to remove it</span>
+        <span>Single-click to add · Double-click a dot to remove one</span>
         <span><kbd>{hotkeys.auto.toUpperCase()}</kbd> Auto</span>
         <span><kbd>{hotkeys.teleop.toUpperCase()}</kbd> Teleop</span>
         <span><kbd>{hotkeys.undo.toUpperCase()}</kbd> Undo</span>
@@ -202,7 +230,7 @@ export function OverlayHeatmap({
       color: colors.get(item.team)!,
       filtered: item.points.filter(
         (point) =>
-          (phase === "all" || point.phase === phase) &&
+          point.result !== "missed" && (phase === "all" || point.phase === phase) &&
           (station === "all" || stationKey(point) === station)
       ),
     }));
@@ -410,7 +438,7 @@ export function FieldHeatmap({
 
   const filtered = points.filter(
     (p) =>
-      (phase === "all" || p.phase === phase) &&
+      p.result !== "missed" && (phase === "all" || p.phase === phase) &&
       (station === "all" || stationKey(p) === station)
   );
   const selectedStats = cloudStats?.filters?.[`${phase}|${station}`] || (phase === "all" && station === "all" ? cloudStats : undefined);

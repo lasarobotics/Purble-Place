@@ -1,4 +1,5 @@
 "use client";
+import { PitsSettings } from "@/components/PitsSettings";
 import { DeletePicklists } from "@/components/DeletePicklists";
 import { useEffect, useState, useCallback } from "react";
 import { api } from "@/lib/api";
@@ -228,6 +229,7 @@ export default function AdminDashboard() {
       </div>
 
 
+      <PitsSettings />
       <div className="grid cols-4" style={{ marginBottom: 18 }}>
         <Stat label="Event" value={s.current_event || "-"} />
         <Stat label="Current Match" value={s.current_match || "-"} accent />

@@ -1,0 +1,81 @@
+import { test, expect } from '@playwright/test';
+import { FALLBACK_GAME } from '../src/lib/game';
+import { defaultPitsConfig } from '../src/lib/pits';
+
+test.use({ serviceWorkers: 'block' });
+test('startup, homepage, responsive Pits, configurable imports, and heatmap double-click', async ({ page, context }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => { errors.push(error.message); console.error(error.message); });
+  await page.routeWebSocket('**/ws*', () => {});
+  let saved: any;
+  let board: any = { rotations: [], matches: [], updated_at: null };
+  const token = Buffer.from(JSON.stringify({ sub: 'Admin', admin: true, auth_version: 2, exp: 9999999999 })).toString('base64url') + '.test';
+  await context.route('**/api/**', async route => {
+    const path = new URL(route.request().url()).pathname;
+    let response: any = {};
+    if (path === '/api/auth/me') response = { token, scout_id: 'Admin', role: 'admin', is_admin: true, display_name: 'Admin', bucks: 100 };
+    else if (path === '/api/game') response = FALLBACK_GAME;
+    else if (path === '/api/pits') response = board;
+    else if (path === '/api/admin/pits-sheet') {
+      if (route.request().method() === 'POST') {
+        saved = route.request().postDataJSON();
+        board = { rotations: [{ team: 436, time: '08:00–09:00', driver: 'Alex', lead: 'Sam' }], matches: [{ team: 418, match: 'Q12', queue: '09:35', field: '09:50', station: 'Red 2', partners: '2468 / 624' }], updated_at: new Date().toISOString() };
+        response = board;
+      } else response = defaultPitsConfig;
+    }
+    else if (path === '/api/admin/settings') response = { current_event: 'test', current_match: 1, season: 2026, environment: 'local', betting_enabled: false };
+    else if (['/api/admin/scouters', '/api/admin/bets', '/api/admin/archives'].includes(path)) response = [];
+    else if (path === '/api/matches') response = { event: 'test', matches: [{ event_key: 'test', match_key: 'test_qm1', comp_level: 'qm', match_number: 1, red: [418,2,3], blue: [436,5,6] }] };
+    else if (path === '/api/events') response = { now: new Date().toISOString(), events: [] };
+    else if (path === '/api/scout/last-assignment') response = { alliance: 'red', station: 1 };
+    else if (path === '/api/betting/mine') response = { bucks: 100, bets: [] };
+    else if (path === '/api/betting/odds') { await route.fulfill({ status: 503, json: { detail: 'Unavailable in test' } }); return; }
+    await route.fulfill({ json: response });
+  });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/');
+  await expect(page.getByRole('status', { name: 'Starting Purble Place' })).toBeVisible();
+  await page.screenshot({ path: 'test-results/purble-startup.png' });
+  await expect(page).toHaveURL(/\/home$/);
+  await expect(page.getByRole('status', { name: 'Starting Purble Place' })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Purble Place', exact: true })).toBeVisible();
+  await expect(page.locator('body')).toHaveCSS('background-color', 'rgb(34, 34, 34)');
+  await page.screenshot({ path: 'test-results/purble-home.png', fullPage: true });
+  await page.locator('.home-destination').filter({ hasText: 'Pits' }).click();
+  await expect(page.locator('.operations-table')).toHaveCount(4);
+  await expect(page.getByRole('columnheader', { name: 'DRIVER', exact: true })).toBeVisible();
+  await page.screenshot({ path: 'test-results/purble-pits.png', fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: 'test-results/purble-mobile.png', fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.locator('.sidebar').getByRole('link', { name: 'Admin', exact: true }).click();
+  await page.getByLabel('Google Sheet link').fill('https://docs.google.com/spreadsheets/d/new-event/edit');
+  await page.getByLabel('Pit rotations tab', { exact: true }).fill('Houston pits');
+  await page.getByRole('button', { name: 'Save & import' }).click();
+  await expect(page.getByRole('status')).toContainText('Published 1 rotations and 1 matches');
+  expect(saved.rotations_tab).toBe('Houston pits');
+  await page.locator('.sidebar').getByRole('link', { name: 'Pits', exact: true }).click();
+  await expect(page.getByRole('cell', { name: 'Alex', exact: true })).toBeVisible();
+  await expect(page.getByRole('cell', { name: '09:35', exact: true })).toBeVisible();
+  await page.locator('.sidebar').getByRole('link', { name: 'Scouting', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Auto', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('group', { name: 'Auto missed shots' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Start match', exact: true }).click();
+  const field = page.locator('.field-wrap');
+  await field.click({ position: { x: 140, y: 100 } });
+  await expect(page.locator('.heatmap-remove-target')).toHaveCount(1);
+  await page.locator('.heatmap-remove-target').last().click();
+  await expect(page.locator('.heatmap-remove-target')).toHaveCount(2);
+  await page.locator('.heatmap-remove-target').last().dblclick({ delay: 80 });
+  await expect(page.locator('.heatmap-remove-target')).toHaveCount(1);
+  await page.waitForTimeout(400);
+  await expect(page.locator('.heatmap-remove-target')).toHaveCount(1);
+  await page.reload();
+  await expect(page).toHaveURL(/\/home$/);
+  await expect(page.getByRole('status', { name: 'Starting Purble Place' })).toHaveCount(0);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: 'test-results/purble-home-mobile.png', fullPage: true });
+  expect(errors).toEqual([]);
+});

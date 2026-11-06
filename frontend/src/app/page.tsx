@@ -11,5 +11,5 @@ export default function Index() {
     if (loading) return;
     router.replace(session ? "/home" : "/login");
   }, [loading, session, router]);
-  return <Loading label="Starting HazeHub..." />;
+  return <Loading label="Starting Purble Place..." />;
 }

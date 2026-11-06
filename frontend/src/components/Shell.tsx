@@ -23,6 +23,7 @@ interface NavItem { href: string; label: string; icon: string }
 
 const MAIN_NAV: NavItem[] = [
   { href: "/home", label: "Home", icon: "home" },
+  { href: "/pits", label: "Pits", icon: "wrench" },
   { href: "/match-schedule", label: "Match Schedule", icon: "list" },
   { href: "/rankings", label: "Rankings", icon: "chart" },
   { href: "/data-analysis", label: "Data Analysis", icon: "chart" },
@@ -31,7 +32,7 @@ const MAIN_NAV: NavItem[] = [
   { href: "/picklists", label: "Picklists", icon: "list" },
   { href: "/account", label: "Account", icon: "user" },
 ];
-const PICKLIST_NAV = MAIN_NAV.filter(n => !["/home", "/scout", "/pit"].includes(n.href));
+const PICKLIST_NAV = MAIN_NAV.filter(n => !["/scout", "/pit"].includes(n.href));
 const ADMIN_GROUPS = [{ title: "Admin", items: [
   { href: "/admin", label: "Admin", icon: "sliders" },
   { href: "/admin/final-picklist", label: "Final Picklist", icon: "list" },
@@ -44,13 +45,13 @@ const ADMIN_GROUPS = [{ title: "Admin", items: [
 const MOBILE_NAV = [
   { href: "/home", label: "Home", icon: "home" },
   { href: "/scout", label: "Scout", icon: "clipboard" },
-  { href: "/pit", label: "Pit", icon: "wrench" },
+  { href: "/pits", label: "Pits", icon: "wrench" },
   { href: "/picklists", label: "Picks", icon: "list" },
   { href: "/status", label: "Devices", icon: "refresh" },
 ];
 
 const OFFLINE_ROUTES = [
-  "/rankings", "/admin/final-picklist", "/admin/accounts", "/", "/home", "/scout", "/pit", "/picklists", "/meeting", "/results", "/match-schedule", "/data-analysis", "/picklist-simulator", "/data", "/status", "/account", "/login",
+  "/rankings", "/admin/final-picklist", "/admin/accounts", "/", "/home", "/pits", "/scout", "/pit", "/picklists", "/meeting", "/results", "/match-schedule", "/data-analysis", "/picklist-simulator", "/data", "/status", "/account", "/login",
   "/admin", "/admin/compare", "/admin/data-picklist", "/admin/forms", "/admin/picklists", "/admin/seasons",
   "/admin/system", "/admin/team-rank", "/admin/team-search",
 ];
@@ -75,7 +76,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   // page of permission errors.
   useEffect(() => {
     if (!session?.picklist_only) return;
-    const allowed = ["/picklists", "/rankings", "/match-schedule", "/data-analysis", "/account"];
+    const allowed = ["/home", "/pits", "/picklists", "/rankings", "/match-schedule", "/data-analysis", "/account"];
     if (!allowed.some((prefix) => pathname.startsWith(prefix))) router.replace("/picklists");
   }, [session, pathname, router]);
 
@@ -165,14 +166,14 @@ export function Shell({ children }: { children: React.ReactNode }) {
     };
   }, [online]);
 
-  if (loading) return <Loading label="Connecting to HazeHub..." />;
+  if (loading) return <Loading label="Connecting to Purble Place..." />;
   if (!session) return <Loading label="Redirecting..." />;
 
   if (!session.is_admin && restrictedPage) return <Loading label="Redirecting..." />;
   const visibleGroups = session.is_admin ? ADMIN_GROUPS : [];
 
   const isActive = (href: string) =>
-    href === "/admin" ? pathname === "/admin" : pathname.startsWith(href);
+    href === "/admin" ? pathname === "/admin" : pathname === href || pathname.startsWith(`${href}/`);
   const picklistOnly = session.picklist_only;
   const mainNav = picklistOnly ? PICKLIST_NAV : MAIN_NAV;
   // The sheet shows everything the account can actually reach, so it is built
@@ -190,9 +191,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
     <div className="shell">
       <aside className="sidebar">
         <Link href="/home" className="brand" prefetch={false}>
-          <span className="name">Haze<b>Hub</b></span>
+          <span className="name">Purble <b>Place</b></span>
         </Link>
-        <div className="nav-section">{picklistOnly ? "Picklists" : "HazeHub"}</div>
+        <div className="nav-section">{picklistOnly ? "Picklists" : "Purble Place"}</div>
         {mainNav.map((n) => (
           <Link key={n.href} href={n.href} prefetch={false} className={"nav-link" + (isActive(n.href) ? " active" : "")}>
             <span className="ico"><Icon name={n.icon} /></span> {n.label}
@@ -231,7 +232,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
       <div className="main">
         <header className="topbar">
           <div className="brand topbar-brand" style={{ fontSize: "1rem" }}>
-            <span className="name" style={{ fontSize: "1rem" }}>Haze<b>Hub</b></span>
+            <span className="name" style={{ fontSize: "1rem" }}>Purble <b>Place</b></span>
           </div>
           <details className="mobile-menu">
             <summary>Menu</summary>

@@ -52,7 +52,7 @@ export default function LoginPage() {
       }
       const s = await login(scoutId.trim(), password);
       toast(`Welcome, ${s.display_name}!`, "ok");
-      router.replace(s.is_admin ? "/admin" : "/home");
+      router.replace("/home");
     } catch (err: any) {
       toast(err?.message || "Sign in failed", "err");
     } finally {
@@ -80,7 +80,7 @@ export default function LoginPage() {
         <div style={{ textAlign: "center", marginBottom: 22 }}>
           <div className="brand" style={{ justifyContent: "center" }}>
             <span className="name" style={{ fontSize: "1.9rem", fontWeight: 800 }}>
-              Haze<b>Hub</b>
+              Purble <b>Place</b>
             </span>
           </div>
         </div>
@@ -121,7 +121,7 @@ export default function LoginPage() {
           <h2 id="setup-title">Create your account</h2>
           <p>Scouter ID: {setupId}</p>
           <p><strong>THIS SHOULD NOT BE A PASSWORD YOU USE NORMALLY AS WE CAN ACCESS THIS.</strong></p>
-          <p>Use a unique password for HazeHub. Administrators manage this system and its account data. Passwords are stored as secure hashes, not readable text.</p>
+          <p>Use a unique password for Purble Place. Administrators manage this system and its account data. Passwords are stored as secure hashes, not readable text.</p>
           <label className="field"><span>Create password</span>
             <input autoFocus type="password" autoComplete="new-password" minLength={8} maxLength={128} required value={newPassword} onChange={e => setNewPassword(e.target.value)} />
           </label>

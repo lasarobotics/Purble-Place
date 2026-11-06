@@ -24,7 +24,7 @@ from .cache import StoreUnavailable
 from .config import settings
 from .database import close_db, init_db
 from .realtime import hub
-from .routers import pages, accounts
+from .routers import pages, accounts, pits
 from .routers import (
     admin, auth, betting, events, forms, matches, picklists, scouting, seasons,
     sync, system, teams,
@@ -187,6 +187,7 @@ async def request_duration(request: Request, call_next):
 
 for r in (
     pages.router,
+    pits.router,
     accounts.router,
     auth.router,
     auth.game_router,

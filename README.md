@@ -1,4 +1,4 @@
-# 🟣 HazeHub
+# 🟣 Purble Place
 
 UI simplification and repository cleanup notes: [UI audit](UI_AUDIT.md).
 
@@ -29,8 +29,9 @@ replace the Render/Firestore backend until migration is validated. See
 - **Sign in** with one of the 65 IDs imported from `Untitled spreadsheet (1).xlsx`.
   On first use, enter the ID, then create and confirm a unique password in the popup.
   Later sign-ins use that personal password. Unknown IDs cannot create accounts.
-- **Home** — live Top-Bettors leaderboard, the match on the field, and your open bets.
-- **Match Scouting** — tap-the-field map for missed shots (auto/teleop), endgame
+- **Home** — quick instructions and links to Scouting, Pits and the event schedule.
+- **Pits** — rotations and match schedules for 418/436, imported from an admin-configurable Google Sheet. See [Pits setup](PITS.md).
+- **Match Scouting** — tap-the-field map for made shots (auto/teleop), endgame
   climb, defense, driver/speed ratings, fouls, failures, and notes.
   - **Station memory:** alliance and station are remembered between matches.
   - **Pull from schedule:** auto-fills the team you're watching from the TBA schedule.

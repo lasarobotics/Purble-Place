@@ -3,10 +3,10 @@ import type { Metadata, Viewport } from "next";
 import { Providers } from "./providers";
 
 export const metadata: Metadata = {
-  title: "HazeHub. FRC Scouting",
-  description: "Purple Haze scouting, strategy and picklist hub for FRC.",
+  title: "Purble Place. FRC Scouting",
+  description: "LASA Robotics scouting and competition operations for teams 418 and 436.",
   manifest: "/manifest.webmanifest",
-  appleWebApp: { capable: true, title: "HazeHub", statusBarStyle: "black-translucent" },
+  appleWebApp: { capable: true, title: "Purble Place", statusBarStyle: "black-translucent" },
   other: { "mobile-web-app-capable": "yes" },
 };
 

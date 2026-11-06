@@ -76,7 +76,7 @@ class Settings:
     """Runtime settings, resolved once at import."""
 
     # Identity / branding
-    APP_NAME: str = "HazeHub"
+    APP_NAME: str = "Purble Place"
     BRAND_COLOR: str = "#663399"  # Purple Haze
     # A fallback only. The real season lives in the datastore (app/seasons.py);
     # this is what a brand new install bootstraps with before one exists.

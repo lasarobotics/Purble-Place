@@ -326,11 +326,7 @@ export default function ScoutPage() {
           ) : (
             /* 2, score the match */
             <Step title="Scoring">
-              <FieldInput hotkeys={hotkeys} active={started && !editingKeys && !busy} points={f.heatmap} onChange={(pts: HeatPoint[]) => set("heatmap", pts)} />
-              <div className="row" style={{ gap: 16, marginTop: 14, flexWrap: "wrap" }}>
-                <div role="group" aria-label="Auto missed shots"><span>Auto missed shots</span><Stepper value={f.auto_missed || 0} onChange={v => set("auto_missed", v)} /></div>
-                <div role="group" aria-label="Teleop missed shots"><span>Teleop missed shots</span><Stepper value={f.teleop_missed || 0} onChange={v => set("teleop_missed", v)} /></div>
-              </div>
+              <FieldInput key={`${f.comp_level}-${f.match_number}`} hotkeys={hotkeys} active={started && !editingKeys && !busy} points={f.heatmap} onChange={(pts: HeatPoint[]) => set("heatmap", pts)} />
               <div className="row" style={{ gap: 10, marginTop: 14 }}>
                 <label className={"pill-check" + (f.auto_leave ? " on" : "")}>
                   <input type="checkbox" checked={f.auto_leave} onChange={(e) => set("auto_leave", e.target.checked)} /> Auto leave

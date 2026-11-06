@@ -1,5 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <!-- Flat, no gradient: same rule as the rest of the design system. -->
-  <rect width="64" height="64" rx="12" fill="#7c6cf5"/>
-  <path d="M20 16v32M44 16v32M20 32h24" stroke="#fff" stroke-width="7" stroke-linecap="round"/>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="12" fill="#663399"/><path d="M23 48V16h13a10 10 0 0 1 0 20H23" fill="none" stroke="#fff" stroke-width="7" stroke-linejoin="round"/></svg>
