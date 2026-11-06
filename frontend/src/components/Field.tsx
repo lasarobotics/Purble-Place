@@ -24,20 +24,13 @@ export function FieldInput({
   const ref = useRef<HTMLDivElement>(null);
   const [phase, setPhase] = useState<"auto" | "teleop">("auto");
 
-  const latest = useRef({ points, onChange, active });
-  latest.current = { points, onChange, active };
-  const pending = useRef<{ point: HeatPoint; phase: "auto" | "teleop"; timer: ReturnType<typeof setTimeout> } | null>(null);
-  const cancelPending = () => { if (pending.current) clearTimeout(pending.current.timer); pending.current = null; };
-  useEffect(() => () => cancelPending(), []);
-  useEffect(() => { if (!active) cancelPending(); }, [active]);
+  const [removeMode, setRemoveMode] = useState(false);
 
   function undo() {
-    cancelPending();
     onChange(points.slice(0, -1));
   }
 
   function clear() {
-    cancelPending();
     onChange([]);
   }
 
@@ -73,7 +66,7 @@ export function FieldInput({
 
   function add(e: React.MouseEvent) {
     const el = ref.current;
-    if (!el || !active) return;
+    if (!el || !active || removeMode) return;
     const r = el.getBoundingClientRect();
     const x = (e.clientX - r.left) / r.width;
     const y = (e.clientY - r.top) / r.height;
@@ -82,28 +75,11 @@ export function FieldInput({
   }
 
   function dotClick(point: HeatPoint, e: React.MouseEvent<SVGCircleElement>) {
+    if (!removeMode) return; // Bubble to the field: every click adds another shot.
     e.stopPropagation();
     if (!active) return;
-    if (pending.current?.point === point) {
-      cancelPending();
-      const index = latest.current.points.indexOf(point);
-      latest.current.onChange(latest.current.points.filter((_, i) => i !== index));
-      return;
-    }
-    // Flush a pending single click on a different dot before starting another.
-    if (pending.current) {
-      const previous = pending.current.point;
-      const previousPhase = pending.current.phase;
-      cancelPending();
-      const next = [...latest.current.points, { x: previous.x, y: previous.y, phase: previousPhase, result: "made" as const }];
-      latest.current = { ...latest.current, points: next };
-      onChange(next);
-    }
-    const selectedPhase = phase;
-    pending.current = { point, phase, timer: setTimeout(() => {
-      pending.current = null;
-      if (latest.current.active) latest.current.onChange([...latest.current.points, { x: point.x, y: point.y, phase: selectedPhase, result: "made" }]);
-    }, 300) };
+    const index = points.indexOf(point);
+    onChange(points.filter((_, i) => i !== index));
   }
 
   const counts = {
@@ -122,10 +98,10 @@ export function FieldInput({
             Teleop
           </button>
         </div>
-        <span className="badge green">Count made shots</span>
+        <button type="button" className={`btn sm ${removeMode ? "primary" : "ghost"}`} aria-pressed={removeMode} onClick={() => setRemoveMode(v => !v)}>Remove dots</button>
       </div>
 
-      <div className="field-wrap" ref={ref} onClick={add} style={{ cursor: "crosshair" }}>
+      <div className="field-wrap" ref={ref} onClick={add} style={{ cursor: removeMode ? "pointer" : "crosshair", touchAction: "manipulation" }}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img className="field-bg" src={FIELD_SRC} alt="field" draggable={false} />
         <svg className="field-svg" viewBox="0 0 100 50" preserveAspectRatio="none">
@@ -136,7 +112,7 @@ export function FieldInput({
               <circle cx={p.x * 100} cy={p.y * 50} r={3.2} fill="transparent"
                 className="heatmap-remove-target" onClick={(event) => dotClick(p, event)}
                 aria-label={`Remove ${p.phase} heatmap dot ${i + 1}`}>
-                <title>Double-click to remove one dot; single-click to add a shot</title>
+                <title>{removeMode ? "Click to remove this dot" : "Click to add another shot"}</title>
               </circle>
             </g>
           ))}
@@ -144,7 +120,7 @@ export function FieldInput({
       </div>
 
       <div className="heatmap-keybinds" aria-label="Heatmap keyboard shortcuts">
-        <span>Single-click to add · Double-click a dot to remove one</span>
+        <span>{removeMode ? "Remove mode: click a dot to delete it" : "Click to add shots · Enable Remove dots to delete"}</span>
         <span><kbd>{hotkeys.auto.toUpperCase()}</kbd> Auto</span>
         <span><kbd>{hotkeys.teleop.toUpperCase()}</kbd> Teleop</span>
         <span><kbd>{hotkeys.undo.toUpperCase()}</kbd> Undo</span>

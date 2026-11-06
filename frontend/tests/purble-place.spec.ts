@@ -3,7 +3,7 @@ import { FALLBACK_GAME } from '../src/lib/game';
 import { defaultPitsConfig } from '../src/lib/pits';
 
 test.use({ serviceWorkers: 'block' });
-test('startup, homepage, responsive Pits, configurable imports, and heatmap double-click', async ({ page, context }) => {
+test('startup, homepage, responsive Pits, configurable imports, and heatmap remove toggle', async ({ page, context }) => {
   const errors: string[] = [];
   page.on('pageerror', error => { errors.push(error.message); console.error(error.message); });
   await page.routeWebSocket('**/ws*', () => {});
@@ -19,7 +19,7 @@ test('startup, homepage, responsive Pits, configurable imports, and heatmap doub
     else if (path === '/api/admin/pits-sheet') {
       if (route.request().method() === 'POST') {
         saved = route.request().postDataJSON();
-        board = { rotations: [{ team: 436, time: '08:00–09:00', driver: 'Alex', lead: 'Sam' }], matches: [{ team: 418, match: 'Q12', queue: '09:35', field: '09:50', station: 'Red 2', partners: '2468 / 624' }], updated_at: new Date().toISOString() };
+        board = { rotations: [{ team: 436, time: '08:00–09:00', slot1: 'Alex', lead: 'Sam' }], matches: [{ team: 418, match: 'Q12', queue: '09:35', field: '09:50', station: 'Red 2', partners: '2468 / 624' }], updated_at: new Date().toISOString() };
         response = board;
       } else response = defaultPitsConfig;
     }
@@ -43,7 +43,8 @@ test('startup, homepage, responsive Pits, configurable imports, and heatmap doub
   await page.screenshot({ path: 'test-results/purble-home.png', fullPage: true });
   await page.locator('.home-destination').filter({ hasText: 'Pits' }).click();
   await expect(page.locator('.operations-table')).toHaveCount(4);
-  await expect(page.getByRole('columnheader', { name: 'DRIVER', exact: true })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: 'LEAD', exact: true })).toHaveCount(2);
+  await expect(page.getByRole('columnheader', { name: '5', exact: true })).toHaveCount(2);
   await page.screenshot({ path: 'test-results/purble-pits.png', fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -67,7 +68,8 @@ test('startup, homepage, responsive Pits, configurable imports, and heatmap doub
   await expect(page.locator('.heatmap-remove-target')).toHaveCount(1);
   await page.locator('.heatmap-remove-target').last().click();
   await expect(page.locator('.heatmap-remove-target')).toHaveCount(2);
-  await page.locator('.heatmap-remove-target').last().dblclick({ delay: 80 });
+  await page.getByRole('button', { name: 'Remove dots', exact: true }).click();
+  await page.locator('.heatmap-remove-target').last().click();
   await expect(page.locator('.heatmap-remove-target')).toHaveCount(1);
   await page.waitForTimeout(400);
   await expect(page.locator('.heatmap-remove-target')).toHaveCount(1);

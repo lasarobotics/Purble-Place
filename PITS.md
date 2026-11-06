@@ -1,37 +1,35 @@
-# Pits event sheet
+# Pits sheet format
 
-Open **Admin → Pits · event sheet**. Paste a Google Sheets link, choose the two
-tab names, adjust column mappings if necessary, then choose **Save & import**.
-The saved link can be replaced for every event. The sheet must be readable by
-anyone with its link. Private sheets requiring Google sign-in are not supported.
+In Admin → Pits · event sheet, paste a Google Sheets link and enter the pit tab name. Allow anyone with the link to view. Save & import publishes a snapshot; repeat after editing the sheet.
 
-Both tabs use one header row and one row per team/shift or team/match. Rows for
-other teams are ignored. Rows stay in sheet order. Use event-local, 24-hour
-times and include a date in the time window when the event spans several days.
+## Your wide roster is supported
 
-Default rotation headers:
-`Team, Time window, Pit lead, Mechanical, Electrical, Runner, Driver, Focus / handoff`
+Use Matches (or Time), 418 Pit Lead, 418 Pit, 436 Pit Lead, and 436 Pit headers. They can follow blank rows. Duplicate Mentor columns and unrelated columns are allowed.
 
-Default match headers:
-`Team, Match, Queue by, On field, Station, Partners`
+- Pit Lead maps to LEAD.
+- Names in each Pit cell fill slots 1–5, in order. Separate them with commas, slashes, semicolons, or line breaks. Missing slots show a dash.
+- Alternatively, use columns 418 Pit 1 through 418 Pit 5, and equivalent columns for 436.
+- Blank rows, repeated headers, and day dividers such as Sunday are supported. Day labels appear alongside each match range.
+- Mentor, Strategy, Scouting, and 9999 columns are ignored; their names are not assigned to pit slots.
+- More than five names in one Pit cell produces an error rather than silently dropping people.
 
-Team values must be `418` or `436`. Rotation rows require Team and Time window.
-Match rows require Team, Match, Queue by and On field. All other columns are
-optional. Driver is displayed in the 436 rotation table. Column mappings allow
-different header names; arbitrary merged-cell calendars must first be organized
-into this row-based structure.
+Example: Akhil under 418 Pit Lead and Miles under 418 Pit produces LEAD = Akhil, 1 = Miles, with 2–5 empty. Put Miles / Sam / Tai in the Pit cell to populate slots 1–3.
 
-Each import publishes a shared snapshot; it does not continuously read Google.
-Press Save & import again after sheet edits. Pits refreshes the shared snapshot
-every minute and offers a Refresh button. Failed imports preserve the last
-successful snapshot. The published timestamp remains visible, including when
-the app serves an offline cached response.
+## Optional individual match schedule
 
-The same importer can run independently from `backend/`:
+The rotation ranges do not specify individual match times or alliances. Leave Match schedule tab blank for rotations only, or supply a separate tab with:
 
-```sh
-python -m app.pits 'https://docs.google.com/spreadsheets/d/YOUR_ID/edit' --rotations-tab 'Pit rotations' --matches-tab 'Match schedule'
-```
+Team, Match, Queue by, On field, Station, Partners
 
-This prints JSON without changing the published app schedule. Publishing is
-admin-only through `POST /api/admin/pits-sheet`; signed-in users read `/api/pits`.
+Team is 418 or 436. Team, Match, Queue by and On field are required. Times remain as provided. Header mappings are editable in Admin.
+
+The alternative row-per-team rotation format remains supported:
+Team, Time window, LEAD, 1, 2, 3, 4, 5
+
+Failed imports preserve the previous snapshot. A blank match-tab setting publishes an empty match schedule. Pits refreshes the snapshot every minute and offers a Refresh button.
+
+Standalone importer, from backend/:
+
+    python -m app.pits SHEET_URL --rotations-tab "Pit rotations"
+
+Add --matches-tab "Match schedule" when needed. This prints JSON; publishing remains admin-only in the app.
