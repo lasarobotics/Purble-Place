@@ -15,13 +15,13 @@ function colorFor(p: HeatPoint): string {
 /** Interactive scoring map used on the scout form. Each tap logs an attempt. */
 export function FieldInput({
   points,
-  onChange, hotkeys = DEFAULT_HOTKEYS, active = true,
+  onChange, hotkeys = DEFAULT_HOTKEYS, active = true, hotkeysEnabled = true,
 }: {
-  hotkeys?: Hotkeys; active?: boolean;
+  hotkeys?: Hotkeys; active?: boolean; hotkeysEnabled?: boolean;
   points: HeatPoint[];
   onChange: (pts: HeatPoint[]) => void;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
+  const ref = useRef<SVGSVGElement>(null);
   const [phase, setPhase] = useState<"auto" | "teleop">("auto");
 
   const [removeMode, setRemoveMode] = useState(false);
@@ -36,7 +36,7 @@ export function FieldInput({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!active || ignoreHotkey(e)) return;
+      if (!active || !hotkeysEnabled || ignoreHotkey(e)) return;
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName?.toLowerCase();
       if (target?.isContentEditable || tag === "input" || tag === "textarea" || tag === "select") return;
@@ -62,7 +62,7 @@ export function FieldInput({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [points, onChange, hotkeys, active]);
+  }, [points, onChange, hotkeys, active, hotkeysEnabled]);
 
   function add(e: React.MouseEvent) {
     const el = ref.current;
@@ -101,23 +101,22 @@ export function FieldInput({
         <button type="button" className={`btn sm ${removeMode ? "primary" : "ghost"}`} aria-pressed={removeMode} onClick={() => setRemoveMode(v => !v)}>Remove dots</button>
       </div>
 
-      <div className="field-wrap" ref={ref} onClick={add} style={{ cursor: removeMode ? "pointer" : "crosshair", touchAction: "manipulation" }}>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img className="field-bg" src={FIELD_SRC} alt="field" draggable={false} />
-        <svg className="field-svg" viewBox="0 0 100 50" preserveAspectRatio="none">
-          {points.map((p, i) => p.result === "missed" ? null : (
-            <g key={i}>
-              <circle cx={p.x * 100} cy={p.y * 50} r={p.result === "made" ? 1.4 : 1.1}
-                fill={colorFor(p)} stroke="white" strokeWidth={0.25} opacity={0.92} pointerEvents="none" />
-              <circle cx={p.x * 100} cy={p.y * 50} r={3.2} fill="transparent"
-                className="heatmap-remove-target" onClick={(event) => dotClick(p, event)}
-                aria-label={`Remove ${p.phase} heatmap dot ${i + 1}`}>
-                <title>{removeMode ? "Click to remove this dot" : "Click to add another shot"}</title>
-              </circle>
-            </g>
-          ))}
-        </svg>
-      </div>
+      <svg className="field-wrap field-input-map" ref={ref} onClick={add}
+        viewBox="0 0 100 50" preserveAspectRatio="none" aria-label="Scoring field"
+        style={{ cursor: removeMode ? "pointer" : "crosshair" }}>
+        <image href={FIELD_SRC} width="100" height="50" preserveAspectRatio="none" pointerEvents="none" />
+        {points.map((p, i) => p.result === "missed" ? null : (
+          <g key={i}>
+            <circle cx={p.x * 100} cy={p.y * 50} r={p.result === "made" ? 1.4 : 1.1}
+              fill={colorFor(p)} stroke="white" strokeWidth={0.25} opacity={0.92} pointerEvents="none" />
+            <circle cx={p.x * 100} cy={p.y * 50} r={3.2} fill="transparent"
+              className="heatmap-remove-target" onClick={(event) => dotClick(p, event)}
+              aria-label={`Remove ${p.phase} heatmap dot ${i + 1}`}>
+              <title>{removeMode ? "Click to remove this dot" : "Click to add another shot"}</title>
+            </circle>
+          </g>
+        ))}
+      </svg>
 
       <div className="heatmap-keybinds" aria-label="Heatmap keyboard shortcuts">
         <span>{removeMode ? "Remove mode: click a dot to delete it" : "Click to add shots · Enable Remove dots to delete"}</span>

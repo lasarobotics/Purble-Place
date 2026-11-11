@@ -855,6 +855,7 @@ kbd {
 .missing-slot b { font-family: var(--font-num); }
 .missing-slot .mono { color: var(--muted); }
 .field-wrap { position: relative; border-radius: var(--radius-sm); overflow: hidden; background: var(--bg-2); }
+.field-input-map { display: block; width: 100%; aspect-ratio: 600 / 315; touch-action: manipulation; -webkit-user-select: none; user-select: none; }
 .field-bg { display: block; width: 100%; }
 .field-svg { position: absolute; inset: 0; width: 100%; height: 100%; }
 .heatmap-controls { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
