@@ -1,5 +1,4 @@
 "use client";
-import { Startup } from "@/components/Startup";
 import { AuthProvider } from "@/lib/auth";
 import { ToastProvider } from "@/lib/toast";
 import { useOffline } from "@/lib/offline";
@@ -12,7 +11,7 @@ function OfflineBootstrap() {
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <AuthProvider>
-      <ToastProvider><OfflineBootstrap /><Startup />{children}</ToastProvider>
+      <ToastProvider><OfflineBootstrap />{children}</ToastProvider>
     </AuthProvider>
   );
 }

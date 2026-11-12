@@ -59,7 +59,8 @@ test('startup, homepage, responsive Pits, configurable imports, and heatmap remo
   await page.locator('.sidebar').getByRole('link', { name: 'Pits', exact: true }).click();
   await expect(page.getByRole('cell', { name: 'Alex', exact: true })).toBeVisible();
   await expect(page.getByRole('cell', { name: '09:35', exact: true })).toBeVisible();
-  await page.locator('.sidebar').getByRole('link', { name: 'Scouting', exact: true }).click();
+  await page.locator('.sidebar').getByRole('link', { name: 'Home', exact: true }).click();
+  await page.locator('.home-destination').filter({ hasText: 'Scouting' }).click();
   await expect(page.getByRole('button', { name: 'Auto', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('group', { name: 'Auto missed shots' })).toHaveCount(0);
   await page.getByRole('button', { name: 'Start match', exact: true }).click();
@@ -74,10 +75,12 @@ test('startup, homepage, responsive Pits, configurable imports, and heatmap remo
   await page.waitForTimeout(400);
   await expect(page.locator('.heatmap-remove-target')).toHaveCount(1);
   await page.reload();
-  await expect(page).toHaveURL(/\/home$/);
+  await expect(page).toHaveURL(/\/scout$/);
+  await expect(page.locator('.field-wrap')).toBeVisible();
   await expect(page.getByRole('status', { name: 'Starting Purble Place' })).toHaveCount(0);
   await page.setViewportSize({ width: 390, height: 844 });
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.goto('/home');
   await page.screenshot({ path: 'test-results/purble-home-mobile.png', fullPage: true });
   expect(errors).toEqual([]);
 });
